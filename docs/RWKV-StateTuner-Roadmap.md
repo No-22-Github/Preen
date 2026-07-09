@@ -51,7 +51,7 @@
 - [x] **端到端验证**(Mac 侧闭环):挂载等价性——pth 注入 MLX generate 输出 == 训练 state 直接注入(逐字符一致);Runner 真实挂载验收由 Windows 环境完成(见 [Runner挂载验收.md](Runner挂载验收.md))
 - [x] CLI 收口:`statetuner train/eval/export/preview` 四子命令(`src/statetuner/`)
 - [x] 回归测试固化:一条命令(`pytest`)跑完快测(~17s),`--slow` 含训练(~4min)
-- [ ] 1.5B 内存边界实测;爆了就上 `mx.checkpoint`(逐层重计算),记录两种模式的内存/速度数据,后面 UI 直接用
+- [x] 1.5B 内存边界实测:峰值 4.00GB(M5 16GB 舒适运行,无需 checkpointing);详见下方内存表
 
 **产出:** `statetuner` CLI 工具(`pip install -e .` 后可用),可发布给社区尝鲜。
 
@@ -127,12 +127,16 @@
 | mlx-lm 上游改动破坏 patch | 低 | 锁定依赖版本;长期可把 rwkv7.py 复制进项目自己维护训练版 |
 | torch 依赖体积大(~2GB),拖累打包 | 中 | P1 用 torch.save 导出(成熟可靠);未来切割 torch 改手搓零依赖 pickle 导出器(legacy tar 格式),减少打包体积 |
 
-## 内存参考(ctx 512, bsz 1, bf16)
+## 内存参考(ctx 512, bsz 1, bf16)— P1 实测
 
-| 模型 | 权重 | 训练峰值(估) | 16GB M5 |
-|---|---|---|---|
-| 191M / 0.4B | <1GB | 2~4GB | ✅ 舒适 |
-| 1.5B | ~3GB | 8~11GB | ⚠️ 边缘,开 checkpointing |
-| 2.9B | ~6GB | >14GB | ❌ 不支持 |
+| 模型 | 权重 | 训练峰值(实测) | 每步耗时 | 16GB M5 |
+|---|---|---|---|---|
+| 0.4B | ~0.9GB | **1.39GB** | 0.18s | ✅ 舒适 |
+| 1.5B | ~3.0GB | **4.00GB** | 0.29s | ✅ 舒适(无需 checkpointing) |
+| 2.9B | ~6GB | >10GB(估) | - | ⚠️ 需实测;16GB 边缘,24GB 安全 |
 
-*(Phase 0/1 实测后用真实数据替换本表)*
+**P1 实测结论(M5 / 16GB):**
+- 0.4B 和 1.5B 都在 16GB 上**舒适运行**,无需 gradient checkpointing
+- 1.5B 峰值仅 4GB,远低于 P0 预估的 8~11GB(预估偏保守)
+- **v1 支持档位:0.4B + 1.5B 都官方支持**;2.9B 标注"建议 24GB+"
+- 每步耗时:1.5B 比 0.4B 慢约 60%(0.29s vs 0.18s),可接受
