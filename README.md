@@ -8,7 +8,7 @@
 **当前阶段:P1 已完成**(CLI 工具就绪,`.pth` 导出 + RWKV Runner 挂载验证通过)。
 
 - P0(技术验证):梯度穿透、收敛、泛化、ops/kernel 等价——[实验报告](experiments/p0_translate/实验报告.md)
-- P1(产品化):CLI(train/eval/export/preview)、`.pth` 导出器、训练循环产品化、回归测试
+- P1(产品化):CLI(train/eval/export/preview)、`.pth` 导出器、训练循环产品化、回归测试——[实验报告](docs/P1-实验报告.md)
 
 ---
 
@@ -69,6 +69,8 @@ tests/                          回归测试
 docs/                           理论文档 (必读)
 ├── RWKV-StateTuner-Roadmap.md    落地路线图
 ├── P0-理论指南.md                 state tuning 原理
+├── P1-实验报告.md                 P1 产品化落地记录 (导出器/训练/对比)
+├── Runner挂载验收.md              Windows RWKV Runner 挂载步骤
 └── 参考仓库实现.md                依赖与参考来源
 
 tools/                          模型转换工具
