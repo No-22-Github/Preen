@@ -116,7 +116,7 @@ def test_smoke_gradient(model_tokenizer):
     import mlx.core as mx
     import mlx.nn as nn
 
-    from statetuner.core import compute_loss, forward_with_state, make_state_params
+    from statetuner.core import forward_with_state, make_state_params
     from statetuner.data import load_dataset
 
     model, tok = model_tokenizer
@@ -127,11 +127,16 @@ def test_smoke_gradient(model_tokenizer):
     lab = mx.array([s.labels])
     msk = mx.array([[float(x) for x in s.mask]], dtype=mx.float32)
 
-    loss_fn = compute_loss(model, (inp, lab, msk), sp)
-    loss, grads = mx.value_and_grad(loss_fn)(*[sp[i] for i in range(len(sp))])
+    def loss_fn(sd):
+        logits = forward_with_state(model, inp, sd, 1)
+        lp = nn.log_softmax(logits, -1)
+        g = mx.take_along_axis(lp, lab[..., None], -1).squeeze(-1)
+        return (-g * msk).sum() / mx.maximum(msk.sum(), 1.0)
+
+    loss, grads = mx.value_and_grad(loss_fn)(sp)
     mx.eval(loss, grads)
 
-    for i, g in enumerate(grads):
+    for i, g in grads.items():
         assert not bool(mx.any(mx.isnan(g))), f"layer {i} NaN"
         assert float(mx.abs(g).sum()) > 1e-12, f"layer {i} 零梯度 (patch 未生效?)"
 
@@ -140,9 +145,10 @@ def test_smoke_gradient(model_tokenizer):
 def test_overfit(model_tokenizer):
     """第二级:10条样本过拟合(lr=1.0, 200步),loss 应 < 0.5。"""
     import mlx.core as mx
+    import mlx.nn as nn
     import mlx.optimizers as optim
 
-    from statetuner.core import compute_loss, make_state_params
+    from statetuner.core import forward_with_state, make_state_params
     from statetuner.data import load_dataset
 
     model, tok = model_tokenizer
@@ -162,8 +168,14 @@ def test_overfit(model_tokenizer):
             prog = (step - 10) / max(1, 200 - 10)
             lr = 0.01 + (1.0 - 0.01) * 0.5 * (1 + math.cos(math.pi * prog))
         opt.learning_rate = lr
-        loss_fn = compute_loss(model, (inp, lab, msk), sp)
-        loss, grads = mx.value_and_grad(loss_fn)(*[sp[i] for i in range(len(sp))])
+
+        def loss_fn(sd):
+            logits = forward_with_state(model, inp, sd, 1)
+            lp = nn.log_softmax(logits, -1)
+            g = mx.take_along_axis(lp, lab[..., None], -1).squeeze(-1)
+            return (-g * msk).sum() / mx.maximum(msk.sum(), 1.0)
+
+        loss, grads = mx.value_and_grad(loss_fn)(sp)
         grads = {k: mx.clip(g, -1.0, 1.0) for k, g in grads.items()}
         sp = opt.apply_gradients(grads, sp)
         mx.eval(sp, loss)

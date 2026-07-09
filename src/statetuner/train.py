@@ -30,7 +30,6 @@ import numpy as np
 
 from . import events
 from .core import (
-    compute_loss,
     forward_with_state,
     make_state_params,
     patch_rwkv7_for_train,
