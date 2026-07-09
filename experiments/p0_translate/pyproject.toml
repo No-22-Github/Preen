@@ -1,0 +1,24 @@
+[project]
+name = "p0-translate"
+version = "0.1.0"
+description = "P0 验证: RWKV-7 state tuning, 让 0.4B 模型自主翻译中→英"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "mlx>=0.22",
+    "mlx-lm @ git+https://github.com/ml-explore/mlx-lm.git",
+    "transformers>=4.46",
+    "tokenizers",
+    "safetensors",
+    "numpy",
+]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+# 让测试能 import 同目录的 state_tuner / data_v2 / evaluate_v2 等模块
+pythonpath = ["."]
+# slow marker: 训练测试(~5min),默认不跑, --slow 显式开启
+# (过滤逻辑在 conftest.pytest_collection_modifyitems 里, 不用 addopts -m)
+markers = ["slow: 训练测试,慢(~5min),需 pytest --slow 开启"]
+testpaths = ["tests"]

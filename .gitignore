@@ -1,0 +1,154 @@
+# ============================================================
+# RWKV StateTuner — .gitignore
+# 结构：SwiftUI 壳（macOS 原生）+ Python sidecar（mlx-lm 训练/推理）
+# ============================================================
+
+
+# ── 模型权重与下载资源（大文件，绝不进版本库）──────────────
+# .pth = RWKV 原生权重 / state 导出产物
+# .gguf = llama.cpp 量化/FP16 权重
+# .safetensors = HF/MLX 转换产物
+# .bin = 通用二进制权重
+*.pth
+*.gguf
+*.safetensors
+*.bin
+*.pt
+# state 训练产物 (可重训生成,不进库)
+*.npz
+# tokenizer 之外的大文件兜底
+*.weights
+
+
+# ── llama.cpp 编译产物（可重新下载，整体忽略）─────────────
+# 目录里是可执行文件 + dylib，均为第三方二进制
+models/llama-b9939/
+
+
+# ── 转换 / 训练输出（本地产物，不提交）────────────────────
+# 转换后的 HF 模型目录、训练 checkpoint、state 导出
+models/converted/
+models/output/
+out/
+outputs/
+checkpoints/
+runs/
+wandb/
+mlruns/
+
+
+# ── Python ────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# 虚拟环境（项目内 venv / uv 环境）
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# uv
+.uv-cache/
+# uv.lock 提交进库: 本项目依赖 mlx-lm 的 git main, 锁定版本保证复现
+
+# 打包 / 构建
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+develop-eggs/
+
+# 测试 / 类型 / lint 缓存
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyre/
+.pytype/
+.dmypy.json
+dmypy.json
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+
+
+# ── Jupyter ───────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+
+# ── Swift / Xcode / SwiftUI（macOS 原生壳）────────────────
+# Xcode 工作区与工程用户态数据
+xcuserdata/
+*.xcuserstate
+*.xcuserdatad
+*.xccheckout
+*.moved-aside
+
+# Swift Package Manager
+.swiftpm/
+.build/
+.swiftpm/xcode/package.xcworkspace/xcuserdata/
+Package.resolved
+
+# CocoaPods（万一用）
+Pods/
+
+# Carthage
+Carthage/Build/
+Carthage/Checkouts/
+
+# fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+
+# Xcode build 产物
+DerivedData/
+build/
+*.xcscmblueprint
+*.xcarchive
+
+
+# ── macOS 系统文件 ────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+
+
+# ── 编辑器 / IDE ──────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.fleet/
+
+
+# ── 环境变量与密钥 ────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+
+# ── 实验日志与临时文件 ────────────────────────────────────
+*.log
+logs/
+tmp/
+temp/
+experiments/p0_translate/checkpoints_*/
+.zcode/
