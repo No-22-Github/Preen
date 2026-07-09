@@ -41,17 +41,24 @@
 
 ---
 
-## Phase 1 — 训练管线完整化(1 周)
+## Phase 1 — 训练管线完整化(1 周)✅
 
 **目标:从「能跑」到「训出真正可用的 state 文件」。**
 
-- [ ] 数据管线:jsonl(`{"text": "User: ...\n\nAssistant: ..."}`)→ World tokenizer → padding + loss mask(只对 Assistant 部分算 loss)
-- [ ] 训练循环产品化:epoch / step 控制、loss 曲线记录、checkpoint 保存、中断恢复
-- [ ] **State 导出器**:MLX array → PyTorch `.pth`,键名和形状严格对照 RWKV-PEFT 源码(`blocks.{i}.att.time_state` 类,写之前去源码确认精确键名)
-- [ ] **端到端验证**:训一个特征明显的 state(如 emoji 说话风格),导出后在 RWKV Runner 挂载,确认行为变化符合预期 ← **这是 Phase 1 的验收标准**
+- [x] 数据管线:jsonl(`{"text": "User: ...\n\nAssistant: ..."}` 或裸格式)→ World tokenizer → padding + loss mask(只对 Assistant 段算 loss)
+- [x] 训练循环产品化:epoch / step 控制、loss 曲线记录、checkpoint 保存、中断恢复、state std 监控(>1.0 预警)、held-out 早停、结构化事件输出(为 IPC 铺路)
+- [x] **State 导出器**:MLX array → PyTorch `.pth`,键名 `blocks.{i}.att.time_state`、shape `(H,D,D)`、fp32,转置方向已验证(round-trip max diff 0.0)
+- [x] **端到端验证**(Mac 侧闭环):挂载等价性——pth 注入 MLX generate 输出 == 训练 state 直接注入(逐字符一致);Runner 真实挂载验收由 Windows 环境完成(见 [Runner挂载验收.md](Runner挂载验收.md))
+- [x] CLI 收口:`statetuner train/eval/export/preview` 四子命令(`src/statetuner/`)
+- [x] 回归测试固化:一条命令(`pytest`)跑完快测(~17s),`--slow` 含训练(~4min)
 - [ ] 1.5B 内存边界实测;爆了就上 `mx.checkpoint`(逐层重计算),记录两种模式的内存/速度数据,后面 UI 直接用
 
-**产出:** 一个 CLI 工具(`statetuner train --model ... --data ... --out ...`),本身就可发布给社区尝鲜,收集反馈。
+**产出:** `statetuner` CLI 工具(`pip install -e .` 后可用),可发布给社区尝鲜。
+
+**关键技术结论(P1 新增):**
+- **lr 默认 0.01 而非 1.0**(P0 实测修正):1.0 导致 state 爆炸(std 7~13),0.01 温和生长(std 0.1~0.2)
+- **转置暗坑**:MLX state 与 BlinkDL CUDA kernel 同向,Runner 加载统一 `.transpose(1,2)`,故导出前必须 transpose(数值已验证)
+- **torch 是必选依赖**(导出器用 `torch.save`);未来切割 torch 减少打包体积作为优化项(手搓零依赖 pickle 导出器)
 
 ---
 
@@ -118,6 +125,7 @@
 | ops 循环太慢(逐 token 串行) | 中 | ctx512 场景可接受;后续可写 chunked 并行版或给 Metal kernel 补 custom VJP(v2 优化项) |
 | 16GB 上 1.5B 训不动 | 中 | `mx.checkpoint` + `iogpu.wired_limit_mb` 放宽;实在不行 v1 只支持到 0.4B,1.5B 标注"需 24GB+" |
 | mlx-lm 上游改动破坏 patch | 低 | 锁定依赖版本;长期可把 rwkv7.py 复制进项目自己维护训练版 |
+| torch 依赖体积大(~2GB),拖累打包 | 中 | P1 用 torch.save 导出(成熟可靠);未来切割 torch 改手搓零依赖 pickle 导出器(legacy tar 格式),减少打包体积 |
 
 ## 内存参考(ctx 512, bsz 1, bf16)
 
