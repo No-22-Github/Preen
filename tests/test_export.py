@@ -2,10 +2,10 @@
 
 验证 .pth 导出器的正确性——P1 任务1的核心。
 覆盖:
-  - round-trip:导出 pth → load + transpose → allclose 原始 state
+  - round-trip:导出 pth → load(原样) → allclose 原始 state (x070: Runner不转置)
   - 键名:全是 blocks.{i}.att.time_state
   - 形状/dtype:(H,D,D) fp32
-  - 转置正确性:文件里的 = transpose(S_mlx)(模拟 Runner 加载逻辑)
+  - 方向正确性:x070 文件里存的是训练方向原样(不做swapaxes)
   - npz 读写
 """
 import numpy as np
@@ -96,33 +96,35 @@ def test_shapes_and_dtype(real_states, tmp_pth):
         assert v.dtype == torch.float32, f"{k} dtype {v.dtype}"
 
 
-# ── 转置方向正确性(暗坑验证)──────────────────────────────
+# ── 方向正确性(x070: Runner 不转置, 文件存原样)──────────────
 
-def test_transpose_direction(sample_states, tmp_pth):
-    """验证转置暗坑:文件里存的是 swapaxes(S,-2,-1),不是 S 本身。
+def test_x070_no_swapaxes(sample_states, tmp_pth):
+    """x070 (RWKV-7, 默认): 文件里存的是训练方向原样, 不做 swapaxes。
 
-    这确保 Runner 的 transpose(1,2) 恰好还原成 MLX 训练方向。
+    RWKV-Runner rwkv.py:843 version>=7 分支加载时不 transpose,
+    所以导出器必须存原样 S, 而非 swapaxes(S)。
     """
-    export_pth(sample_states, tmp_pth)
+    export_pth(sample_states, tmp_pth)  # 默认 x070=True
     import torch
 
     raw = torch.load(tmp_pth, map_location="cpu", weights_only=True)
-    # 取 layer 0
     stored = raw["blocks.0.att.time_state"].numpy()
     original = sample_states[0]
-    # 文件里应该 == swapaxes(原始, -2, -1), 而不是原始本身
+    # 文件里应该 == 原始训练方向 (x070 不转置)
+    np.testing.assert_allclose(stored, original, atol=1e-7)
+
+
+def test_v56_legacy_swapaxes(sample_states, tmp_pth):
+    """v5/v6 兼容 (x070=False): 文件里存 swapaxes(S), Runner 转(1,2) 还原。"""
+    export_pth(sample_states, tmp_pth, x070=False)
+    import torch
+
+    raw = torch.load(tmp_pth, map_location="cpu", weights_only=True)
+    stored = raw["blocks.0.att.time_state"].numpy()
+    original = sample_states[0]
     expected = np.swapaxes(original, -2, -1)
     np.testing.assert_allclose(stored, expected, atol=1e-7)
-    # 且不等于原始(证明转置确实发生了;除非原始恰好对称)
-    assert not np.allclose(stored, original), "导出未做转置!"
-
-
-def test_load_reverse_transpose_restores_original(sample_states, tmp_pth):
-    """load_pth(reverse_transpose=True) 应还原成 MLX 原始方向。"""
-    export_pth(sample_states, tmp_pth)
-    loaded = load_pth_as_numpy(tmp_pth, reverse_transpose=True)
-    for i in sample_states:
-        np.testing.assert_allclose(loaded[i], sample_states[i], atol=1e-7)
+    assert not np.allclose(stored, original), "v5/v6 导出应做转置!"
 
 
 # ── npz 读写 ──────────────────────────────────────────────

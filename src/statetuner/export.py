@@ -1,24 +1,23 @@
 """训练 state → RWKV Runner 可挂载的 .pth 导出器。
 
-这是 P1 的核心任务(也是最后剩下的"暗坑")。格式约定对照源码确认:
+格式约定(对照 RWKV-Runner backend-python/utils/rwkv.py 的 load_rwkv_state):
 
-键名与形状(对照 RWKV-PEFT rwkvt/rwkv7/att.py 的 RWKV_Tmix_x070_State):
+键名与形状:
   - 每层一个 key: blocks.{i}.att.time_state
   - tensor shape: (n_head, head_dim, head_dim) = (H, D, D)
   - dtype: fp32(RWKV Runner 加载时会 .to(torch.float),所以存 fp32 最稳)
 
-转置方向(暗坑,经数值验证):
-  MLX _wkv7_step_ops 的 state 与 BlinkDL CUDA kernel(wkv7.cu)同向:
-    S[i,j] += v[i]·k[j] ;  y = S @ r  (r 缩并最后一维/列)
-  而 RWKV Runner 加载 .pth 时,对每个 time_state 统一做 .transpose(1,2) 再喂给
-  kernel(model.py ~line 2836):
-    state[i*3+1] = w[f"blocks.{i}.att.time_state"].transpose(1,2).to(float)
-  所以:若我们直接存 MLX 的 S_mlx,Runner 转(1,2)后得到 S_mlx.T(错向)。
-  正确做法:存 S_mlx.transpose(1,2),Runner 再转一次恰好还原 S_mlx。
+转置方向(RWKV-Runner rwkv.py:836-857 的真实分支,2026-07 验证):
+  Runner 按 model.version 分两条加载路径:
+    version >= 7 (x070):  state[i*3+1] = time_state.to(float)        # 原样,不转置
+    version <  7 (v5/v6): state[i*3+1] = time_state.transpose(1,2)   # 转置
 
-  验证链(verify_roundtrip):
-    导出 pth → load_pth → transpose(1,2) → numpy allclose 原始 S_mlx
-  等价证明:导出的文件被 Runner 正确加载后,注入 kernel 的 = S_mlx = 训练时的 state。
+  我们的模型是 RWKV-7 (x070),Runner 走 version>=7 分支,不转置。
+  因此导出器默认 x070=True: 直接存训练方向 S_mlx 原样,不做 swapaxes。
+  Runner 加载后注入 kernel 的 == S_mlx == 训练时的 state。
+
+  早期版本误按 v5/v6 路径设计(预先 swapaxes),导致 x070 模型在 Runner 上注入了
+  转置方向的 state,输出碎渣。已修正(见 docs/P1-任务①收尾报告.md 修正记录)。
 
 容器:torch.save(dict)。RWKV Runner 的 torch.load(map_location="cpu") 自动检测
 格式(tar 与 zip 都能加载),直接用 torch.save 即可,无需手写 pickle。
@@ -43,17 +42,25 @@ def _normalize_states(states) -> StateDict:
     return out
 
 
-def export_pth(states: StateDict, out_path: PathLike, *, num_layers: Optional[int] = None) -> Path:
+def export_pth(
+    states: StateDict,
+    out_path: PathLike,
+    *,
+    num_layers: Optional[int] = None,
+    x070: bool = True,
+) -> Path:
     """训练 state → RWKV Runner 可挂载的 .pth。
 
     步骤:
-      1. 每层 state 做 transpose(-2,-1) → ascontiguous → fp32
-         (转置暗坑:见模块 docstring)
+      1. (v5/v6 only) 每层 state 做 transpose(-2,-1) → ascontiguous → fp32
+         x070 (RWKV-7) 模型: Runner 加载不转置, 直接存原样
       2. 组 OrderedDict, key = blocks.{i}.att.time_state
       3. torch.save
 
     states: {layer_idx: ndarray(H,D,D)} (MLX 训练方向)
     num_layers: 显式层数(默认取 max key + 1);用于层数与模型不一致时补齐
+    x070: True(RWKV-7/x070,默认) 存原样; False(v5/v6) 存 swapaxes 后的。
+          依据 RWKV-Runner rwkv.py:843 version>=7 分支不 transpose。
     返回写入的路径。
     """
     import torch
@@ -65,10 +72,13 @@ def export_pth(states: StateDict, out_path: PathLike, *, num_layers: Optional[in
     for i in range(n):
         if i not in states_np:
             raise KeyError(f"缺少 layer {i} 的 state(要求 {n} 层)")
-        # 暗坑: 存 transpose 后的, Runner 加载转回来 = MLX 方向
-        arr = states_np[i]
-        arr_t = np.ascontiguousarray(np.swapaxes(arr, -2, -1)).astype(np.float32)
-        sd[f"blocks.{i}.att.time_state"] = torch.from_numpy(arr_t)
+        arr = states_np[i].astype(np.float32)
+        if not x070:
+            # v5/v6: Runner 会 transpose(1,2), 预先转置让它转回来
+            arr = np.ascontiguousarray(np.swapaxes(arr, -2, -1))
+        else:
+            arr = np.ascontiguousarray(arr)
+        sd[f"blocks.{i}.att.time_state"] = torch.from_numpy(arr)
 
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -79,10 +89,11 @@ def export_pth(states: StateDict, out_path: PathLike, *, num_layers: Optional[in
 def load_pth_as_numpy(path: PathLike, *, reverse_transpose: bool = False) -> StateDict:
     """读回 .pth → {layer_idx: ndarray(H,D,D)}。
 
-    reverse_transpose=False(默认): 返回文件中存储的原始形态(即 transpose 后的)。
+    reverse_transpose=False(默认): 返回文件中存储的原始形态。
         这模拟"raw torch.load"——用于检查文件内容。
     reverse_transpose=True: 再 transpose(-2,-1) 还原成 MLX 训练方向。
-        这模拟"RWKV Runner 加载后注入 kernel 的实际 state"——用于验证等价性。
+        仅对 v5/v6 导出(export_pth x070=False)有意义。
+        x070 导出的文件本身就是训练方向(Runner 不转置),reverse_transpose 应为 False。
 
     依赖 torch.load 读取。
     """
@@ -112,16 +123,20 @@ def verify_roundtrip(
     pth_path: PathLike,
     *,
     atol: float = 1e-6,
+    x070: bool = True,
 ) -> Tuple[bool, str]:
-    """验证导出的 pth 被正确消费后 == 原始 state。
+    """验证导出的 pth 被 Runner 正确消费后 == 原始训练 state。
 
-    模拟 RWKV Runner 的加载逻辑: load_pth → transpose(1,2) → 注入 kernel。
-    断言:load_pth(reverse_transpose=True) 与原始 state allclose。
+    x070=True(RWKV-7,默认): Runner 不 transpose, 直接比对文件内容 == 原始 state。
+    x070=False(v5/v6): Runner transpose(1,2), 比对 load_pth(reverse) == 原始。
 
     返回 (ok, message)。
     """
     states_np = _normalize_states(states)
-    loaded = load_pth_as_numpy(pth_path, reverse_transpose=True)
+    if x070:
+        loaded = load_pth_as_numpy(pth_path)  # 原样读, 不 reverse
+    else:
+        loaded = load_pth_as_numpy(pth_path, reverse_transpose=True)
 
     if set(loaded) != set(states_np):
         return False, f"层数不匹配: pth 有 {sorted(loaded)}, 原始 {sorted(states_np)}"

@@ -47,7 +47,7 @@
 
 - [x] 数据管线:jsonl(`{"text": "User: ...\n\nAssistant: ..."}` 或裸格式)→ World tokenizer → padding + loss mask(只对 Assistant 段算 loss)
 - [x] 训练循环产品化:epoch / step 控制、loss 曲线记录、checkpoint 保存、中断恢复、state std 监控(>1.0 预警)、held-out 早停、结构化事件输出(为 IPC 铺路)
-- [x] **State 导出器**:MLX array → PyTorch `.pth`,键名 `blocks.{i}.att.time_state`、shape `(H,D,D)`、fp32,转置方向已验证(round-trip max diff 0.0)
+- [x] **State 导出器**:MLX array → PyTorch `.pth`,键名 `blocks.{i}.att.time_state`、shape `(H,D,D)`、fp32,**x070 导出存原样不 swapaxes**(经 Windows 真机+RWKV-Runner 源码确认,见 [P1-任务①收尾报告.md](P1-任务①收尾报告.md))
 - [x] **端到端验证**(Mac 侧闭环):挂载等价性——pth 注入 MLX generate 输出 == 训练 state 直接注入(逐字符一致);Runner 真实挂载验收由 Windows 环境完成(见 [Runner挂载验收.md](Runner挂载验收.md))
 - [x] CLI 收口:`statetuner train/eval/export/preview` 四子命令(`src/statetuner/`)
 - [x] 回归测试固化:一条命令(`pytest`)跑完快测(~17s),`--slow` 含训练(~4min)
@@ -57,7 +57,7 @@
 
 **关键技术结论(P1 新增):**
 - **lr 默认 0.01 而非 1.0**(P0 实测修正):1.0 导致 state 爆炸(std 7~13),0.01 温和生长(std 0.1~0.2)
-- **转置暗坑**:MLX state 与 BlinkDL CUDA kernel 同向,Runner 加载统一 `.transpose(1,2)`,故导出前必须 transpose(数值已验证)
+- **x070 导出方向**:RWKV-Runner 对 x070(version>=7)加载 state **不 transpose**(rwkv.py:843),导出器存原样训练方向。v5/v6 才做 `transpose(1,2)`。初版误按 v5/v6 假设 swapaxes,经 Windows 真机验收推翻后修正
 - **torch 是必选依赖**(导出器用 `torch.save`);未来切割 torch 减少打包体积作为优化项(手搓零依赖 pickle 导出器)
 
 ---

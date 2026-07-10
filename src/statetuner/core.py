@@ -9,9 +9,9 @@ state 语义(导出 .pth 时的关键依据):
   _wkv7_step_ops 里 state 是 (B,H,D,D),递归为
     state = state * w + v ⊗ k + sab ;   y = state @ r
   即 v 在行、k 在列、r 缩并最后一维(列)。
-  这与 BlinkDL CUDA kernel(wkv7.cu)同向,是 fla chunk_rwkv7 的转置。
-  RWKV Runner 加载 .pth 时统一对张量做 transpose(1,2) 再喂给 kernel,
-  所以导出时要先 transpose(1,2)(详见 export.py)。
+  这与 BlinkDL CUDA kernel(rwkv7.cu)同向,也是 rwkv pip RWKV_x070 同向(实验A验证)。
+  RWKV-Runner 对 x070(version>=7) 加载 .pth 时**不** transpose(rwkv.py:843),
+  所以导出器直接存训练方向原样(详见 export.py)。
 
 本模块三件事:
   1. patch_rwkv7_for_train: monkeypatch Rwkv7TimeMixing._wkv7 强制走 ops 循环。
@@ -168,15 +168,12 @@ def _load_state_dict(state: StateInput) -> Optional[Dict[int, "mx.array"]]:
         return {i: mx.array(data[f"layer_{i}"]) for i in range(len(data.files))}
 
     if path.suffix == ".pth":
-        # RWKV-PEFT/Runner 格式: blocks.{i}.att.time_state
-        # 文件里存的是 transpose(S)(见 export.py),读回要 transpose 还原
+        # RWKV-7 (x070) 格式: blocks.{i}.att.time_state, 原样存训练方向(Runner 不转置)
+        # 见 export.py docstring: x070 导出不 swapaxes, 直接读回即训练方向
         from .export import load_pth_as_numpy
 
-        raw = load_pth_as_numpy(path)  # {layer: ndarray}, 已是文件中的(transpose后)形态
-        return {
-            i: mx.array(np.ascontiguousarray(np.swapaxes(arr, -2, -1)))
-            for i, arr in raw.items()
-        }
+        raw = load_pth_as_numpy(path)  # {layer: ndarray}, 原样 = 训练方向
+        return {i: mx.array(arr) for i, arr in raw.items()}
 
     raise ValueError(f"不支持的 state 文件格式: {path.suffix} (支持 .npz / .pth)")
 
