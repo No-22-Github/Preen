@@ -16,6 +16,8 @@
 *.pt
 # state 训练产物 (可重训生成,不进库)
 *.npz
+# 训练事件日志 (临时产物,可重训生成)
+*_events.jsonl
 # tokenizer 之外的大文件兜底
 *.weights
 

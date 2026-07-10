@@ -17,6 +17,7 @@ import numpy as np
 import pytest
 
 from conftest import DATA_PATH, MODEL_PATH
+from statetuner.templates import P0_BARE
 
 pytestmark_for_slow = pytest.mark.slow
 
@@ -40,12 +41,102 @@ def test_data_extract_cn_en():
     assert (cn, en) == ("你好", "Hello")
 
 
+class _DummyTokenizer:
+    """字符级 dummy tokenizer(测试 encode_sample 结构,不依赖模型)。
+
+    encode: 每个 char → ord(char);decode: ids → ''.join(chr(i))。
+    足以验证 mask/边界/stop_token 的位置逻辑。
+    """
+
+    @staticmethod
+    def encode(text):
+        return [ord(c) for c in text]
+
+    @staticmethod
+    def decode(ids):
+        return "".join(chr(i) for i in ids)
+
+
+def test_encode_sample_stop_and_mask():
+    """验收 b:任一样本 full_ids[-1]==stop_token 且对应 mask==1。
+
+    full = prefix_ids + target_ids + [stop_token];
+    input_ids = full[:-1], labels = full[1:], mask 与 labels 等长。
+    终止符落在 full 末位 → 它是最后一个 label,对应 mask 位必须为 1(算 loss,
+    让模型学会预测 stop)。
+
+    mask 语义:mask[i]=1 当 labels[i](= full[i+1])落在 [prefix_len, len(full)) 区间。
+    即从 input[prefix_len-1](=prefix 末位 \\n)预测第一个 target token 开始算 loss,
+    最后一位预测 stop_token 也算 loss。验证见下:
+      full=[你,好,\\n,H,i,stop], prefix_len=3
+      input=full[:-1]=[你,好,\\n,H,i]
+      label=full[1:] =[好,\\n,H,i,stop]
+      mask = [1 if (i+1)>=3 ...] = [0,0,1,1,1]  (i=2 起预测 target)
+    """
+    from statetuner.data import encode_sample
+    from statetuner.templates import TaskTemplate
+
+    tok = _DummyTokenizer()
+    tmpl = TaskTemplate("{cn}\n", "{en}", stop_token=0)
+    s = encode_sample("你好", "Hi", tok, template=tmpl)
+
+    # 终止符
+    assert s.full_ids[-1] == 0, f"full 末位应为 stop_token(0), 实际 {s.full_ids[-1]}"
+    # full == prefix + target + [stop]
+    assert s.full_ids == [ord(c) for c in "你好\n"] + [ord("H"), ord("i")] + [0]
+    # 最后一个 label 是终止符,其 mask 位 == 1(★ 验收 b 核心断言)
+    assert s.labels[-1] == 0, f"末位 label 应为 stop(0), 实际 {s.labels[-1]}"
+    assert s.mask[-1] == 1, f"末位 mask 应为 1(终止符算 loss), 实际 {s.mask[-1]}"
+    # mask 精确形状:prefix 前(prefix_len-1)位全 0,之后全 1
+    assert s.prefix_len == 3
+    assert s.mask == [0, 0, 1, 1, 1], f"mask 形状错: {s.mask}"
+    # 纯 prefix 条件区(预测仍是 prefix 内 token)全 0
+    assert all(m == 0 for m in s.mask[: s.prefix_len - 1]), "prefix 条件区 mask 应全 0"
+    # target+stop 预测区全 1
+    assert all(m == 1 for m in s.mask[s.prefix_len - 1 :]), "target+stop 预测区 mask 应全 1"
+
+
+def test_encode_template_prefix_isomorphism():
+    """验收 c:对每个内置模板,encode(prefix字符串) == encode_sample 的 prefix_ids。
+
+    即 train(encode_template_sample) 与 inference(encode(prompt)) 的 prefix 段逐 token
+    相等——拆分编码而非联合编码的保证。用 dummy tokenizer 验结构,真实 tokenizer
+    在 test_inference / 慢测里由 golden 逐字断言兜底。
+
+    用通用 encode_template_sample(支持任意占位符,如 NEKO_QA 的 {q}/{a})。
+    """
+    from statetuner.data import encode_template_sample
+    from statetuner.templates import NEKO_QA, P0_BARE
+
+    tok = _DummyTokenizer()
+
+    for tmpl, fields in [
+        (P0_BARE, {"cn": "你好", "en": "Hi"}),
+        (NEKO_QA, {"q": "你好", "a": "Hi"}),
+    ]:
+        prefix_text = tmpl.format_prefix(**fields)
+        s = encode_template_sample(tok, tmpl, **fields)
+        assert tok.encode(prefix_text) == s.full_ids[: s.prefix_len], (
+            f"{tmpl.prefix_template!r}: encode(prefix) != encode_template_sample prefix_ids"
+        )
+        # target 段同样同构
+        target_text = tmpl.format_target(**fields)
+        target_ids = tok.encode(target_text)
+        assert s.full_ids[s.prefix_len : -1] == target_ids, (
+            f"{tmpl.target_template!r}: encode(target) != encode_template_sample target_ids"
+        )
+
+
 def test_train_test_split_reproducible():
     """train_test_split 相同 seed 产出相同划分。"""
     from statetuner.data import Sample, train_test_split
 
     samples = [
-        Sample([1, 2], [2, 3], [0, 1], f"cn{i}", f"en{i}", 1) for i in range(20)
+        Sample(
+            full_ids=[1, 2, 3], input_ids=[1, 2], labels=[2, 3],
+            mask=[0, 1], cn=f"cn{i}", en=f"en{i}", prefix_len=1,
+        )
+        for i in range(20)
     ]
     tr1, te1 = train_test_split(samples, test_ratio=0.2, seed=42)
     tr2, te2 = train_test_split(samples, test_ratio=0.2, seed=42)
@@ -76,6 +167,78 @@ def test_event_serialization():
     assert em.events[0]["config"]["lr"] == 0.01
     assert em.events[2]["type"] == "std_warning"
     assert em.events[3]["type"] == "early_stop"
+
+
+def test_events_file_overwrites_not_appends(tmp_path):
+    """events 文件应覆盖写(非追加):重跑训练时清空旧事件,避免混淆。
+
+    回归:旧实现用 open(file, "a"),导致同一文件混入多次训练的 epoch 事件,
+    读出来像是 epoch 重复。应为 "w" —— 每次 EventEmitter 是独立事件流。
+    """
+    import json
+
+    from statetuner import events
+
+    f = tmp_path / "ev.jsonl"
+    # 第一次"训练"
+    em1 = events.EventEmitter(file=f, quiet=True)
+    em1.emit(events.epoch_end(0, loss=1.0, state_std=0.1, lr=0.01))
+    em1.close()
+    n1 = sum(1 for _ in f.open(encoding="utf-8"))
+    assert n1 == 1
+
+    # 第二次"训练"(同文件)——应覆盖,不是追加
+    em2 = events.EventEmitter(file=f, quiet=True)
+    em2.emit(events.epoch_end(0, loss=0.5, state_std=0.2, lr=0.01))
+    em2.close()
+    lines = [json.loads(l) for l in f.open(encoding="utf-8")]
+    assert len(lines) == 1, f"覆盖写后应只有 1 行, 实际 {len(lines)}(追加模式 bug?)"
+    assert lines[0]["loss"] == 0.5, "应是第二次的内容, 不是第一次的残留"
+
+
+def test_generate_strips_eos_from_output():
+    """generate 遇 eos(token 0)应停下,且不把 eos 解码进输出。
+
+    回归:旧实现先 append 再判 eos,导致输出末尾出现
+    <|rwkv_tokenizer_end_of_text|> 字面量。用 mock model 验,不依赖真模型。
+    """
+    import mlx.core as mx
+
+    from statetuner.core import generate
+
+    # mock model: 前两步吐 token 72/73('H'/'i'),第三步吐 token 0(eos)
+    # logits 形状 (B=1, L, vocab);argmax 取末位最后一维
+    class _MockModel:
+        def __init__(self):
+            self._calls = 0
+            self.vocab = 100
+
+        def __call__(self, input_ids, caches=None):
+            self._calls += 1
+            L = input_ids.shape[1]
+            tok = [72, 73, 0][self._calls - 1] if self._calls <= 3 else 0
+            # 用 numpy 构造:末位在 tok 位置最大,其余 0
+            import numpy as np
+            arr = np.zeros((1, L, self.vocab), dtype=np.float32)
+            arr[0, L - 1, tok] = 1.0
+            return mx.array(arr)
+
+        def make_cache(self):
+            return None
+
+    # dummy tokenizer: id → chr(id); 0 应是不可见/特殊
+    class _DummyTok:
+        def encode(self, text):
+            return [ord(c) for c in text]
+
+        def decode(self, ids):
+            return "".join(chr(i) for i in ids)
+
+    out = generate(_MockModel(), _DummyTok(), "x", state=None, max_tokens=10)
+    # 应输出 chr(72)+chr(73)="HI"(eos=0 被 break 掉不进结果)
+    assert out == "HI", f"应输出 'HI'(eos 已剥离), 实际 {out!r}"
+    # 不应含 eos 的 decode 结果(chr(0) = '\x00')
+    assert "\x00" not in out
 
 
 def test_cosine_lr_schedule():
@@ -220,7 +383,7 @@ def test_full_train_translates(model_tokenizer):
         tmp_npz = f.name
     try:
         save_state_npz(result.states, tmp_npz)
-        out = generate(model, tok, f"{cn}\n", state=tmp_npz, max_tokens=50)
+        out = generate(model, tok, P0_BARE.format_prefix(cn=cn), state=tmp_npz, max_tokens=50)
     finally:
         Path(tmp_npz).unlink(missing_ok=True)
     out = out.split("\n")[0].strip() if "\n" in out else out.strip()

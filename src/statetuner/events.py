@@ -81,7 +81,9 @@ class EventEmitter:
         self._owns_file = False
         self._file: Optional[IO] = None
         if file is not None:
-            self._file = open(file, "a", encoding="utf-8")
+            # 覆盖写(非追加):每次训练是一个独立事件流,重跑应清空旧事件,
+            # 否则不同训练的 epoch/step 会混在同一文件里造成误读。
+            self._file = open(file, "w", encoding="utf-8")
             self._owns_file = True
         self._stream = None if quiet else (stream if stream is not None else sys.stdout)
         self._callbacks: List[Callable[[Event], None]] = (

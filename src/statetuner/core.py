@@ -191,7 +191,8 @@ def generate(
       None              → 模型默认零 state(基线)
       dict / npz 路径   → 直接注入
       pth 路径          → 读回并 transpose 还原后注入
-    贪心解码(argmax),遇 eos(token 0)停止。
+    贪心解码(argmax),遇 eos(token 0)停止。eos 本身不解码进输出
+    (旧实现把 eos append 进结果,导致输出末尾出现 <|...end_of_text|> 字面量)。
     """
     state_dict = _load_state_dict(state)
 
@@ -206,9 +207,9 @@ def generate(
     for _ in range(max_tokens):
         logits = model(input_ids, caches)
         next_token = int(mx.argmax(logits[0, -1], axis=-1))
-        generated.append(next_token)
-        if next_token == 0:  # eos
+        if next_token == 0:  # eos:停下,且不把 eos 解码进输出
             break
+        generated.append(next_token)
         input_ids = mx.array([[next_token]])
     return tokenizer.decode(generated)
 

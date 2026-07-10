@@ -8,11 +8,13 @@ import json
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / "src"))
 
 import mlx.core as mx
 from mlx_lm import load
 from data_v2 import extract_cn_en
 from state_tuner import generate
+from statetuner.templates import P0_BARE
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 MODEL = REPO_ROOT / "models" / "converted" / "rwkv7-g1d-0.4b"
@@ -46,7 +48,7 @@ def main():
     test_pairs = load_pairs(TEST_DATA, pick=[0, 2, 4, 6, 8])
 
     def gen(cn, state_npz=STATE, max_tokens=70):
-        out = generate(model, tok, f"{cn}\n", state_npz=str(state_npz), max_tokens=max_tokens)
+        out = generate(model, tok, P0_BARE.format_prefix(cn=cn), state_npz=str(state_npz), max_tokens=max_tokens)
         return out.split("\n")[0].strip() if "\n" in out else out.strip()
 
     # translate_train.json
@@ -87,7 +89,7 @@ def main():
     baseline_cns = [p[0] for p in test_pairs[:3]]
     baseline_golden = {}
     for cn in baseline_cns:
-        out = generate(model, tok, f"{cn}\n", state_npz=None, max_tokens=50)
+        out = generate(model, tok, P0_BARE.format_prefix(cn=cn), state_npz=None, max_tokens=50)
         baseline_golden[cn] = out.split("\n")[0].strip() if "\n" in out else out.strip()
     (GOLDEN / "baseline_no_state.json").write_text(
         json.dumps(baseline_golden, ensure_ascii=False, indent=2), encoding="utf-8")

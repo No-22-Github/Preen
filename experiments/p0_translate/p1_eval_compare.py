@@ -17,6 +17,7 @@ sys.path.insert(0, "src")
 
 import mlx.core as mx
 from statetuner.core import load_model, generate
+from statetuner.templates import P0_BARE
 
 # ── P0 报告 §四 的句子和原始输出(逐字摘自实验报告.md)──────────
 TRAIN_SET = [  # 训练集内 T1-T5
@@ -77,7 +78,7 @@ def run_eval(model, tok, state, dataset, label, max_tokens=70):
     print(f"{'='*70}")
     results = []
     for tid, cn, ref in dataset:
-        out = generate(model, tok, f"{cn}\n", state=state, max_tokens=max_tokens)
+        out = generate(model, tok, P0_BARE.format_prefix(cn=cn), state=state, max_tokens=max_tokens)
         out = first_line(out)
         er = english_ratio(out)
         is_en = er > 0.5
