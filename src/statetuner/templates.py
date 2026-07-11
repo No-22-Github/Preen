@@ -1,18 +1,13 @@
 """训练/推理样本格式模板。
 
-问题根源(本单要修的三件事之一):
-  训练样本无终止符 → 模型学不会"停";格式字面量("\n" 拼接的前缀构造)散落在
-  data.py / cli.py / tests / experiments 多处,改一处漏一处,训练-推理编码路径
-  容易不同构 → mask 错位。
-
 本模块是全仓**唯一**允许持有 "\n"-拼接前缀构造的位置(验收 d)。
 其余代码一律从 TaskTemplate 实例派生 prefix/target 字符串,禁止手写格式字面量。
 
 约定:
   - prefix_template / target_template 是 str.format 模板,占位符由调用方传入。
-  - encode_sample 分别独立 encode(prefix) 和 encode(target),再拼 + stop_token。
-    禁止整段联合 encode(见 data.encode_sample)。
-  - stop_token: token id,追加到 full_ids 末尾。默认 0 = World tokenizer 的
+  - encode_template_sample 分别独立 encode(prefix) 和 encode(target),再拼 + stop_token。
+    禁止整段联合 encode(见 data.encode_template_sample)。
+  - stop_token: token id,追加到编码末尾。默认 0 = World tokenizer 的
     eos(\x00),与 core.generate 的 `next_token == 0: break` 分支对齐。
 """
 from __future__ import annotations
@@ -30,9 +25,9 @@ class TaskTemplate:
     stop_token: 追加到编码末尾的终止 token id。0 = World tokenizer eos。
 
     用法:
-        t = P0_BARE
-        prefix_text = t.format_prefix(cn="你好")      # "你好\\n"
-        target_text = t.format_target(en="Hello")     # "Hello"
+        t = NEKO_QA
+        prefix_text = t.format_prefix(q="你好")        # "User: 你好\\n\\nAssistant:"
+        target_text = t.format_target(a="喵~")         # " 喵~"
     """
 
     prefix_template: str
@@ -50,24 +45,13 @@ class TaskTemplate:
 
 # ── 内置模板 ────────────────────────────────────────────────
 
-P0_BARE = TaskTemplate(
-    prefix_template="{cn}\n",
-    target_template="{en}",
-    stop_token=0,
-)
-"""P0 翻译任务裸格式: prefix="{中文}\\n", target="{英文}"。
-
-训练/推理都用它:推理 prompt = format_prefix(cn=...) == "{中文}\\n",
-与 ep04.npz 这个 P0 state 训练时一致。
-"""
-
 NEKO_QA = TaskTemplate(
     prefix_template="User: {q}\n\nAssistant:",
     target_template=" {a}",
     stop_token=0,
 )
-"""NekoQA 问答格式(预置,当前不接入任何管线)。
+"""NekoQA 问答格式(角色扮演 / QA 任务)。
 
 prefix 以 "Assistant:" 结尾(无尾随空白),target 以一个前导空格开始,
-拼接后是 "Assistant: {回答}"。stop_token 同 P0。
+拼接后是 "Assistant: {回答}"。stop_token = 0(World tokenizer eos)。
 """

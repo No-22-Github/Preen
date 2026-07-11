@@ -14,9 +14,9 @@
 用法:
   PYTHONPATH=src .venv/bin/python tools/mem_probe.py \
     --model models/converted/rwkv7-g1d-0.4b \
-    --data train_data/translate/data_100.jsonl \
-    --template p0_bare --ctx-len 512 --max-steps 50 \
-    --label A_translate100_ctx512
+    --data train_data/NekoQA_10k/nekoqa_smoke_200.json \
+    --ctx-len 512 --max-steps 50 \
+    --label A_nekoqa200_ctx512
 """
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ from statetuner.core import (
     patch_rwkv7_for_train,
     state_std,
 )
-from statetuner.data import load_dataset, load_qa_dataset
+from statetuner.data import load_qa_dataset
 from statetuner.train import TrainConfig, _to_mx_batch, cosine_lr
 
 
@@ -67,7 +67,6 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
     ap.add_argument("--data", required=True)
-    ap.add_argument("--template", default="p0_bare", choices=["p0_bare", "nekoqa"])
     ap.add_argument("--ctx-len", type=int, default=512)
     ap.add_argument("--max-steps", type=int, default=50)
     ap.add_argument("--lr", type=float, default=0.01)
@@ -120,8 +119,7 @@ def main():
     mark("post_load_model")
 
     # 2. load data
-    loader = load_qa_dataset if args.template == "nekoqa" else load_dataset
-    samples = loader(args.data, tok, max_len=args.ctx_len)
+    samples = load_qa_dataset(args.data, tok, max_len=args.ctx_len)
     lens = sorted(s.length for s in samples)
     n = len(lens)
     dlen = {

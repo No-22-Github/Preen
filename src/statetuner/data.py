@@ -1,16 +1,10 @@
-"""数据管线: jsonl → World tokenizer → 编码 + loss mask。
+"""数据管线: QA 数据集 → World tokenizer → 编码 + loss mask。
 
-P0 复核结论(实验报告 §2.2):训练与评估的分布必须对齐,否则 state 只学到
-模板偏置。本模块默认用「裸格式」P0_BARE(prefix="{中文}\\n", target="{英文}"),
-从 templates.py 派生——禁止在此手写 "\\n"-拼接的格式字面量(验收 d)。
-
-格式解析(extract_cn_en)兼容两种输入:
-  ① User/Assistant 模板: "User: {中}\\n\\nAssistant: {英}"
-  ② 裸格式: "{中}\\n{英}"
+核心是 encode_template_sample: 对 prefix/target 拆分独立编码(不联合 encode),
+再拼 + stop_token,让模型学会"停"。禁止在此手写 "\\n"-拼接的格式字面量(验收 d),
+格式一律从 templates.TaskTemplate 派生。
 
 loss mask 只算 target 段(prefix 是条件,不是学习目标)。
-encode_sample 对 prefix/target 拆分独立编码(不联合 encode),并追加 stop_token,
-让模型学会"停"。见 templates.TaskTemplate。
 """
 from __future__ import annotations
 
@@ -20,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Tuple, Union
 
-from .templates import NEKO_QA, P0_BARE
+from .templates import NEKO_QA
 
 PathLike = Union[str, Path]
 
@@ -52,7 +46,7 @@ class Sample:
 
 
 def load_jsonl(path: PathLike) -> List[dict]:
-    """读取 jsonl,每行一个 {"text": ...} 或 {"cn":..., "en":...}。"""
+    """读取 jsonl,每行一个 json 对象。"""
     items = []
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -60,31 +54,6 @@ def load_jsonl(path: PathLike) -> List[dict]:
             if line:
                 items.append(json.loads(line))
     return items
-
-
-def extract_cn_en(item: dict) -> Tuple[str, str]:
-    """从一条记录提取 (中文, 英文)。
-
-    兼容三种子格式:
-      ① {"text": "User: {中}\\n\\nAssistant: {英}"}
-      ② {"text": "{中}\\n{英}"}(已是裸格式)
-      ③ {"cn": "{中}", "en": "{英}"}
-    """
-    if "cn" in item and "en" in item:
-        return item["cn"].strip(), item["en"].strip()
-
-    text = item.get("text", "")
-    if "Assistant:" in text and "User:" in text:
-        # 标准格式
-        user_part = text.split("Assistant:")[0]
-        cn = user_part.replace("User:", "").strip().rstrip("\n")
-        en = text.split("Assistant:", 1)[1].strip()
-        return cn, en
-    if "\n" in text:
-        # 已是 {中}\n{英} 裸格式
-        cn, en = text.split("\n", 1)
-        return cn.strip(), en.strip()
-    return text, ""
 
 
 def encode_template_sample(
@@ -133,33 +102,6 @@ def encode_template_sample(
     return Sample(full_ids, input_ids, labels, mask, cn, en, prefix_len)
 
 
-def encode_sample(
-    cn: str, en: str, tokenizer, max_len: int = 128, template=P0_BARE
-) -> Sample:
-    """P0 便捷封装: 翻译 (cn, en) → encode_template_sample(template, cn=cn, en=en)。
-
-    保留旧签名 (cn, en, tokenizer, max_len, template) 供 load_dataset 调用,
-    内部转调通用 encode_template_sample。P0_BARE 默认占位符是 {cn}/{en}。
-    """
-    return encode_template_sample(
-        tokenizer, template, max_len=max_len, cn=cn, en=en
-    )
-
-
-def load_dataset(
-    path: PathLike, tokenizer, max_len: int = 128
-) -> List[Sample]:
-    """加载 jsonl → 编码为 Sample 列表。"""
-    items = load_jsonl(path)
-    samples = []
-    for item in items:
-        cn, en = extract_cn_en(item)
-        if not en:
-            continue  # 跳过无英文目标的记录
-        samples.append(encode_sample(cn, en, tokenizer, max_len))
-    return samples
-
-
 def load_qa_dataset(
     path: PathLike,
     tokenizer,
@@ -171,14 +113,13 @@ def load_qa_dataset(
 ) -> List[Sample]:
     """加载 QA 格式数据集 → 编码为 Sample 列表。
 
-    与 load_dataset(翻译路径)平行的 QA 路径,用于角色扮演/问答任务。
-    数据格式兼容两种:
+    用于角色扮演/问答任务。数据格式兼容两种:
       - .jsonl:每行一个 {question_key, answer_key}
       - .json:一个数组 [{...}, {...}](如 NekoQA-10K.json)
 
     每条 → encode_template_sample(template, q=..., a=..., max_len)。
     默认模板 NEKO_QA(prefix="User: {q}\\n\\nAssistant:", target=" {a}")。
-    跳过 answer 为空的条目;超长样本按 max_len 截断(不丢弃,与翻译路径一致)。
+    跳过 answer 为空的条目;超长样本按 max_len 截断(不丢弃)。
 
     question_key / answer_key 默认对齐 NekoQA 的 instruction/output 字段;
     其他 QA 数据集可显式传 question_key="..." / answer_key="..."。
@@ -212,7 +153,7 @@ def train_test_split(
 ) -> Tuple[List[Sample], List[Sample]]:
     """划分训练/held-out(为 early stop 服务)。
 
-    若调用方已提供独立 test 文件,应直接用 load_dataset 加载而非用此函数。
+    若调用方已提供独立 test 文件,应直接用 load_qa_dataset 加载而非用此函数。
     返回 (train, held_out)。
     """
     rng = random.Random(seed)

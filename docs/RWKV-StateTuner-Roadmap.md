@@ -38,7 +38,7 @@
 - [x] State 导出器:键名 `blocks.{i}.att.time_state`、(H,D,D)、fp32,**x070 原样方向不 swapaxes**(Windows 真机 + Runner 源码 rwkv.py:843 确认)
 - [x] 端到端验证:pth 注入 == 训练 state 直注,逐字符一致;Windows Runner 真机挂载行为一致
 - [x] CLI:`statetuner train/eval/export/preview`;回归 pytest 快测/--slow 全测
-- [x] **管线对齐补丁**:终止符(token 0 进样本进 loss,修复循环输出根因)+ templates.py 模板单一事实源(P0_BARE/ZH_EN_LABELED/NEKO_QA)+ 训推同源分段编码 + L1 断言
+- [x] **管线对齐补丁**:终止符(token 0 进样本进 loss,修复循环输出根因)+ templates.py 模板单一事实源(NEKO_QA;P0_BARE/ZH_EN_LABELED 为 P0 翻译实验遗留,已废弃)+ 训推同源分段编码 + L1 断言
 - [x] NekoQA 冒烟:1.5B + 200 条,风格迁移完整成立,A/B 悬殊,自发终止正常
 
 **关键技术结论:**

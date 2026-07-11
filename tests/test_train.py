@@ -3,7 +3,7 @@
 不做 bit-golden(MLX GPU ULP 不确定),改为断言行为指标:
   - 梯度冒烟:24层 grad 全非零(patch 生效、state 进了计算图)
   - 过拟合:10条 loss < 0.5(管线正确)
-  - 全量收敛:loss < 1.0 + state std 合理 + 能翻译
+  - 全量收敛:loss < 1.0 + state std 合理 + 产出非空回答
 
 默认不跑(--slow 开启)。
 
@@ -17,32 +17,15 @@ import numpy as np
 import pytest
 
 from conftest import DATA_PATH, MODEL_PATH
-from statetuner.templates import P0_BARE
 
 pytestmark_for_slow = pytest.mark.slow
 
 
 # ── 不依赖模型的快测试 ─────────────────────────────────────
 
-def test_data_extract_cn_en():
-    """extract_cn_en 兼容 User/Assistant 模板和裸格式。"""
-    from statetuner.data import extract_cn_en
-
-    # 模板格式
-    cn, en = extract_cn_en({"text": "User: 你好\n\nAssistant: Hello"})
-    assert cn == "你好"
-    assert en == "Hello"
-    # 裸格式
-    cn, en = extract_cn_en({"text": "你好\nHello"})
-    assert cn == "你好"
-    assert en == "Hello"
-    # cn/en 字段
-    cn, en = extract_cn_en({"cn": "你好", "en": "Hello"})
-    assert (cn, en) == ("你好", "Hello")
-
 
 class _DummyTokenizer:
-    """字符级 dummy tokenizer(测试 encode_sample 结构,不依赖模型)。
+    """字符级 dummy tokenizer(测试 encode_template_sample 结构,不依赖模型)。
 
     encode: 每个 char → ord(char);decode: ids → ''.join(chr(i))。
     足以验证 mask/边界/stop_token 的位置逻辑。
@@ -57,7 +40,7 @@ class _DummyTokenizer:
         return "".join(chr(i) for i in ids)
 
 
-def test_encode_sample_stop_and_mask():
+def test_encode_template_stop_and_mask():
     """验收 b:任一样本 full_ids[-1]==stop_token 且对应 mask==1。
 
     full = prefix_ids + target_ids + [stop_token];
@@ -65,31 +48,24 @@ def test_encode_sample_stop_and_mask():
     终止符落在 full 末位 → 它是最后一个 label,对应 mask 位必须为 1(算 loss,
     让模型学会预测 stop)。
 
-    mask 语义:mask[i]=1 当 labels[i](= full[i+1])落在 [prefix_len, len(full)) 区间。
-    即从 input[prefix_len-1](=prefix 末位 \\n)预测第一个 target token 开始算 loss,
-    最后一位预测 stop_token 也算 loss。验证见下:
-      full=[你,好,\\n,H,i,stop], prefix_len=3
-      input=full[:-1]=[你,好,\\n,H,i]
-      label=full[1:] =[好,\\n,H,i,stop]
-      mask = [1 if (i+1)>=3 ...] = [0,0,1,1,1]  (i=2 起预测 target)
+    用 NEKO_QA 模板(dummy tokenizer):prefix="User: 你好\\n\\nAssistant:",
+    target=" Hi",stop=0。
     """
-    from statetuner.data import encode_sample
-    from statetuner.templates import TaskTemplate
+    from statetuner.data import encode_template_sample
+    from statetuner.templates import NEKO_QA
 
     tok = _DummyTokenizer()
-    tmpl = TaskTemplate("{cn}\n", "{en}", stop_token=0)
-    s = encode_sample("你好", "Hi", tok, template=tmpl)
+    s = encode_template_sample(tok, NEKO_QA, q="你好", a="Hi")
 
     # 终止符
     assert s.full_ids[-1] == 0, f"full 末位应为 stop_token(0), 实际 {s.full_ids[-1]}"
     # full == prefix + target + [stop]
-    assert s.full_ids == [ord(c) for c in "你好\n"] + [ord("H"), ord("i")] + [0]
+    prefix_text = NEKO_QA.format_prefix(q="你好")
+    target_text = NEKO_QA.format_target(a="Hi")
+    assert s.full_ids == tok.encode(prefix_text) + tok.encode(target_text) + [0]
     # 最后一个 label 是终止符,其 mask 位 == 1(★ 验收 b 核心断言)
     assert s.labels[-1] == 0, f"末位 label 应为 stop(0), 实际 {s.labels[-1]}"
     assert s.mask[-1] == 1, f"末位 mask 应为 1(终止符算 loss), 实际 {s.mask[-1]}"
-    # mask 精确形状:prefix 前(prefix_len-1)位全 0,之后全 1
-    assert s.prefix_len == 3
-    assert s.mask == [0, 0, 1, 1, 1], f"mask 形状错: {s.mask}"
     # 纯 prefix 条件区(预测仍是 prefix 内 token)全 0
     assert all(m == 0 for m in s.mask[: s.prefix_len - 1]), "prefix 条件区 mask 应全 0"
     # target+stop 预测区全 1
@@ -97,34 +73,30 @@ def test_encode_sample_stop_and_mask():
 
 
 def test_encode_template_prefix_isomorphism():
-    """验收 c:对每个内置模板,encode(prefix字符串) == encode_sample 的 prefix_ids。
+    """验收 c:encode(prefix字符串) == encode_template_sample 的 prefix_ids。
 
     即 train(encode_template_sample) 与 inference(encode(prompt)) 的 prefix 段逐 token
     相等——拆分编码而非联合编码的保证。用 dummy tokenizer 验结构,真实 tokenizer
     在 test_inference / 慢测里由 golden 逐字断言兜底。
-
-    用通用 encode_template_sample(支持任意占位符,如 NEKO_QA 的 {q}/{a})。
     """
     from statetuner.data import encode_template_sample
-    from statetuner.templates import NEKO_QA, P0_BARE
+    from statetuner.templates import NEKO_QA
 
     tok = _DummyTokenizer()
 
-    for tmpl, fields in [
-        (P0_BARE, {"cn": "你好", "en": "Hi"}),
-        (NEKO_QA, {"q": "你好", "a": "Hi"}),
-    ]:
-        prefix_text = tmpl.format_prefix(**fields)
-        s = encode_template_sample(tok, tmpl, **fields)
-        assert tok.encode(prefix_text) == s.full_ids[: s.prefix_len], (
-            f"{tmpl.prefix_template!r}: encode(prefix) != encode_template_sample prefix_ids"
-        )
-        # target 段同样同构
-        target_text = tmpl.format_target(**fields)
-        target_ids = tok.encode(target_text)
-        assert s.full_ids[s.prefix_len : -1] == target_ids, (
-            f"{tmpl.target_template!r}: encode(target) != encode_template_sample target_ids"
-        )
+    tmpl = NEKO_QA
+    fields = {"q": "你好", "a": "Hi"}
+    prefix_text = tmpl.format_prefix(**fields)
+    s = encode_template_sample(tok, tmpl, **fields)
+    assert tok.encode(prefix_text) == s.full_ids[: s.prefix_len], (
+        f"{tmpl.prefix_template!r}: encode(prefix) != encode_template_sample prefix_ids"
+    )
+    # target 段同样同构
+    target_text = tmpl.format_target(**fields)
+    target_ids = tok.encode(target_text)
+    assert s.full_ids[s.prefix_len : -1] == target_ids, (
+        f"{tmpl.target_template!r}: encode(target) != encode_template_sample target_ids"
+    )
 
 
 def test_train_test_split_reproducible():
@@ -280,10 +252,10 @@ def test_smoke_gradient(model_tokenizer):
     import mlx.nn as nn
 
     from statetuner.core import forward_with_state, make_state_params
-    from statetuner.data import load_dataset
+    from statetuner.data import load_qa_dataset
 
     model, tok = model_tokenizer
-    samples = load_dataset(str(DATA_PATH / "data_100.jsonl"), tok, max_len=64)
+    samples = load_qa_dataset(str(DATA_PATH), tok, max_len=64)
     s = samples[0]
     sp = make_state_params(model, dtype=mx.float32)
     inp = mx.array([s.input_ids])
@@ -312,10 +284,10 @@ def test_overfit(model_tokenizer):
     import mlx.optimizers as optim
 
     from statetuner.core import forward_with_state, make_state_params
-    from statetuner.data import load_dataset
+    from statetuner.data import load_qa_dataset
 
     model, tok = model_tokenizer
-    samples = load_dataset(str(DATA_PATH / "data_100.jsonl"), tok, max_len=64)[:10]
+    samples = load_qa_dataset(str(DATA_PATH), tok, max_len=64)[:10]
     sp = make_state_params(model, dtype=mx.float32)
     opt = optim.Adam(learning_rate=1.0, betas=[0.9, 0.99], eps=1e-8)
     random.seed(42)
@@ -347,49 +319,48 @@ def test_overfit(model_tokenizer):
 
 
 @pytest.mark.slow
-def test_full_train_translates(model_tokenizer):
-    """全量训练(lr=0.01, 6 epoch)+ 翻译验证。
+def test_full_train_nekoqa(model_tokenizer):
+    """全量训练(lr=0.01, 3 epoch)+ NekoQA 验证。
 
-    三项断言:loss 收敛 / state std 合理 / 产出英文翻译。
+    四项断言:loss 收敛 / state std 合理 / 产出非空回答 / 训练事件序列完整。
     用产品化的 Trainer 跑(验证 train.py 本身)。
     """
     import mlx.core as mx
 
     from statetuner import events
-    from statetuner.data import load_dataset
+    from statetuner.data import load_qa_dataset
     from statetuner.train import Trainer, TrainConfig
 
     model, tok = model_tokenizer
-    samples = load_dataset(str(DATA_PATH / "data_100.jsonl"), tok, max_len=128)
+    samples = load_qa_dataset(str(DATA_PATH), tok, max_len=512)
 
-    cfg = TrainConfig(lr=0.01, lr_floor=0.0001, warmup=10, epochs=6, early_stop=False)
+    cfg = TrainConfig(lr=0.01, lr_floor=0.0001, warmup=10, epochs=3, early_stop=False)
     em = events.EventEmitter(quiet=True)
     result = Trainer(model, cfg, em).train(samples)
 
-    # 1. loss 收敛
-    assert result.final_loss < 1.0, f"loss 未收敛: {result.final_loss:.4f}"
+    # 1. loss 收敛(NekoQA smoke_200 × 3epoch 终点 ~2.3,放宽到 < 3.0)
+    assert result.final_loss < 3.0, f"loss 未收敛: {result.final_loss:.4f}"
     # 2. state std 合理(不爆炸)
     assert 0.05 < result.final_state_std < 1.0, (
         f"state std 异常: {result.final_state_std:.4f} (合理 0.05~1.0)"
     )
-    # 3. 产出英文翻译
+    # 3. 产出非空回答(state 注入后应能生成内容)
     from statetuner.core import generate
+    from statetuner.templates import NEKO_QA
     from statetuner.train import save_state_npz
 
-    cn = samples[0].cn
+    q = samples[0].cn  # Sample.cn 存的是 question
     import tempfile
 
     with tempfile.NamedTemporaryFile(suffix=".npz", delete=False) as f:
         tmp_npz = f.name
     try:
         save_state_npz(result.states, tmp_npz)
-        out = generate(model, tok, P0_BARE.format_prefix(cn=cn), state=tmp_npz, max_tokens=50)
+        out = generate(model, tok, NEKO_QA.format_prefix(q=q), state=tmp_npz, max_tokens=50)
     finally:
         Path(tmp_npz).unlink(missing_ok=True)
-    out = out.split("\n")[0].strip() if "\n" in out else out.strip()
-    letters = [c for c in out if c.isalpha()]
-    en_ratio = sum(1 for c in letters if ord(c) < 128) / max(1, len(letters))
-    assert en_ratio > 0.5, f"未产出英文翻译 (en_ratio={en_ratio:.2f}): {out!r}"
+    out = out.strip()
+    assert len(out) > 5, f"输出过短,疑似退化: {out!r}"
 
     # 4. 训练事件序列完整
     types = [e["type"] for e in em.events]

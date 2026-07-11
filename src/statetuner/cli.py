@@ -6,10 +6,10 @@
 供人类阅读、管道处理,以及未来的 SwiftUI 进度面板消费。
 
 用法:
-  statetuner train --model MODELS --data DATA.jsonl --out state.npz --export-pth
-  statetuner eval --model MODELS --state state.pth --data test.jsonl
+  statetuner train --model MODELS --data DATA.json --out state.npz --export-pth
+  statetuner eval --model MODELS --state state.npz --data test.json
   statetuner export --state state.npz --out state.pth
-  statetuner preview --model MODELS --state state.pth --prompt "你好" --ab
+  statetuner preview --model MODELS --state state.npz --prompt "你好" --ab
 """
 from __future__ import annotations
 
@@ -57,8 +57,8 @@ def train(
     export_pth: bool = typer.Option(False, "--export-pth", help="训完顺手导出 .pth"),
     pth_out: Optional[Path] = typer.Option(None, "--pth-out", help="导出 pth 路径(默认 out 同名 .pth)"),
     template: str = typer.Option(
-        "p0_bare", "--template",
-        help="任务模板: p0_bare(中→英翻译,默认) | nekoqa(角色扮演 QA)",
+        "nekoqa", "--template",
+        help="任务模板: nekoqa(角色扮演 QA,默认)",
     ),
     seed: int = typer.Option(42, "--seed"),
 ):
@@ -67,12 +67,12 @@ def train(
 
     from . import events
     from .core import load_model
-    from .data import load_dataset, load_qa_dataset, train_test_split
+    from .data import load_qa_dataset, train_test_split
     from .train import Trainer, TrainConfig, save_state_npz
 
-    if template not in ("p0_bare", "nekoqa"):
+    if template != "nekoqa":
         raise typer.BadParameter(
-            f"--template 只支持 p0_bare / nekoqa, 收到 {template!r}"
+            f"--template 当前只支持 nekoqa, 收到 {template!r}"
         )
 
     # 加载模型(patch ops 路径,训练用)
@@ -81,15 +81,13 @@ def train(
     mdl, tok = load_model(model_path, patch=True)
     mdl.freeze()
 
-    # 按 template 选 loader:p0_bare=翻译路径, nekoqa=QA 路径
-    loader = load_qa_dataset if template == "nekoqa" else load_dataset
-    samples = loader(data, tok, max_len=ctx_len)
+    samples = load_qa_dataset(data, tok, max_len=ctx_len)
     typer.echo(f"# 训练样本: {len(samples)} 条 (template={template})", err=True)
 
     held_out = None
     if early_stop:
         if test_data is not None:
-            held_out = loader(test_data, tok, max_len=ctx_len)
+            held_out = load_qa_dataset(test_data, tok, max_len=ctx_len)
             typer.echo(f"# held-out: {len(held_out)} 条 (来自 {test_data})", err=True)
         else:
             samples, held_out = train_test_split(samples, test_ratio=test_ratio, seed=seed)
@@ -138,69 +136,52 @@ def eval(
     ),
     max_tokens: int = typer.Option(70, "--max-tokens"),
     template: str = typer.Option(
-        "p0_bare", "--template",
-        help="任务模板: p0_bare(中→英翻译,默认) | nekoqa(角色扮演 QA)",
+        "nekoqa", "--template",
+        help="任务模板: nekoqa(角色扮演 QA,默认)",
     ),
     limit: int = typer.Option(5, "--limit", help="最多输出条数(默认 5)"),
 ):
     """评估:对数据集逐条生成(state 注入),输出结果。
 
-    prompt 从 templates 派生(与训练 encode_*_dataset 同源,保证编码同构)。
-    template=p0_bare 走翻译路径(nekoqa 走 QA 路径)。
+    prompt 从 templates 派生(与训练 encode 路径同源,保证编码同构)。
     """
     import json
 
     from .core import generate, load_model
-    from .data import extract_cn_en, load_jsonl
-    from .templates import NEKO_QA, P0_BARE
+    from .data import load_jsonl
 
-    if template not in ("p0_bare", "nekoqa"):
+    if template != "nekoqa":
         raise typer.BadParameter(
-            f"--template 只支持 p0_bare / nekoqa, 收到 {template!r}"
+            f"--template 当前只支持 nekoqa, 收到 {template!r}"
         )
 
     typer.echo(f"# 加载模型 {model} (kernel 路径, template={template})", err=True)
     mdl, tok = load_model(model, patch=False)
 
-    # 构造 (输入文本, 参考) 对列表
-    if template == "nekoqa":
-        if data is not None:
-            dpath = Path(data)
-            if dpath.suffix == ".json":
-                with open(dpath, encoding="utf-8") as f:
-                    items = json.load(f)
-                items = items if isinstance(items, list) else [items]
-            else:
-                items = load_jsonl(dpath)
-            pairs = [(it.get("instruction", ""), it.get("output", "")) for it in items]
+    # 构造 (问题, 参考) 对列表
+    if data is not None:
+        dpath = Path(data)
+        if dpath.suffix == ".json":
+            with open(dpath, encoding="utf-8") as f:
+                items = json.load(f)
+            items = items if isinstance(items, list) else [items]
         else:
-            pairs = [
-                ("你好呀，宝宝！今天想做什么？", ""),
-                ("主人要出门了，你会怎么做？", ""),
-                ("能教我用尾巴写字吗？", ""),
-            ]
-    else:  # p0_bare
-        if data is not None:
-            items = load_jsonl(data)
-            pairs = [extract_cn_en(it) for it in items]
-        else:
-            pairs = [
-                ("今天下午三点开会，别忘了带上项目文档。", ""),
-                ("由于连续降雨，部分地区出现了轻微内涝。", ""),
-                ("人工智能技术正在深刻改变各行各业的生产方式。", ""),
-            ]
+            items = load_jsonl(dpath)
+        pairs = [(it.get("instruction", ""), it.get("output", "")) for it in items]
+    else:
+        pairs = [
+            ("你好呀，宝宝！今天想做什么？", ""),
+            ("主人要出门了，你会怎么做？", ""),
+            ("能教我用尾巴写字吗？", ""),
+        ]
 
-    tmpl = NEKO_QA if template == "nekoqa" else P0_BARE
-    for i, (q_or_cn, ref) in enumerate(pairs[:limit]):
-        # 渲染 prompt:NEKO_QA 用 q=, P0_BARE 用 cn=(占位符名不同)
-        prompt = tmpl.format_prefix(q=q_or_cn) if template == "nekoqa" else tmpl.format_prefix(cn=q_or_cn)
+    from .templates import NEKO_QA
+
+    for i, (q, ref) in enumerate(pairs[:limit]):
+        prompt = NEKO_QA.format_prefix(q=q)
         out = generate(mdl, tok, prompt, state=str(state), max_tokens=max_tokens)
-        # 翻译任务取首行;QA 任务不截断(回答可能含 \n\n 分段)
-        if template == "p0_bare":
-            out = out.split("\n")[0].strip() if "\n" in out else out.strip()
-        else:
-            out = out.strip()
-        typer.echo(f"[{i+1}] {q_or_cn}")
+        out = out.strip()
+        typer.echo(f"[{i+1}] {q}")
         if ref:
             typer.echo(f"    REF: {ref[:100]}")
         typer.echo(f"    OUT: {out[:300]}")
@@ -240,27 +221,25 @@ def preview(
     ab: bool = typer.Option(False, "--ab", help="A/B 对比:有 state vs 无 state 双输出"),
     template: str = typer.Option(
         "raw", "--template",
-        help="包装 prompt 的模板: raw(原样,默认) | p0_bare | nekoqa",
+        help="包装 prompt 的模板: raw(原样,默认) | nekoqa",
     ),
 ):
     """预览:注入 state 贪心生成。--ab 做 A/B 对比。
 
     --template nekoqa 会把 --prompt 包成 "User: {prompt}\\n\\nAssistant:";
-    p0_bare 包成 "{prompt}\\n"; raw 原样传入。
+    raw 原样传入。
     """
     from .core import generate, load_model
-    from .templates import NEKO_QA, P0_BARE
+    from .templates import NEKO_QA
 
-    if template not in ("raw", "p0_bare", "nekoqa"):
+    if template not in ("raw", "nekoqa"):
         raise typer.BadParameter(
-            f"--template 只支持 raw / p0_bare / nekoqa, 收到 {template!r}"
+            f"--template 只支持 raw / nekoqa, 收到 {template!r}"
         )
 
     # 按模板包装 prompt(与训练/eval 同源)
     if template == "nekoqa":
         wrapped = NEKO_QA.format_prefix(q=prompt)
-    elif template == "p0_bare":
-        wrapped = P0_BARE.format_prefix(cn=prompt)
     else:
         wrapped = prompt
 

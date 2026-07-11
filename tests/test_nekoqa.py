@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from statetuner.data import load_qa_dataset, train_test_split
-from statetuner.templates import NEKO_QA, P0_BARE
+from statetuner.templates import NEKO_QA
 
 
 class _DummyTokenizer:
@@ -110,7 +110,7 @@ def test_load_qa_dataset_jsonl_format(tmp_path):
 # ── prefix/target 同构(验收 c 同款精神,用真实模板)──────────
 
 def test_nekoqa_prefix_target_isomorphism(tmp_path):
-    """encode(prefix)+encode(target) == encode_sample 的 prefix/target 段。
+    """encode(prefix)+encode(target) == encode_template_sample 的 prefix/target 段。
 
     NEKO_QA 在 dummy tokenizer 上验结构(真实 tokenizer 在 smoke 训练里验)。
     """

@@ -13,13 +13,14 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MODEL_PATH = REPO_ROOT / "models" / "converted" / "rwkv7-g1d-0.4b"
-DATA_PATH = REPO_ROOT / "train_data" / "translate"
+DATA_PATH = REPO_ROOT / "train_data" / "NekoQA_10k" / "nekoqa_smoke_200.json"
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 GOLDEN_DIR = Path(__file__).resolve().parent / "golden"
 
-# P0 归档里的标准 state(epoch4, lr=0.01, std≈0.17, 验收通过的翻译 state)
-# 作为推理 golden 测试的基准 state。见 experiments/p0_translate/checkpoints_v3/ep04.npz
-STATE_PATH = REPO_ROOT / "experiments" / "p0_translate" / "checkpoints_v3" / "ep04.npz"
+# NekoQA 基准 state: 0.4B + smoke_200 × 3epoch + seed 42(产品 CLI 训练)
+# loss 3.97→3.12→2.36, std 0.11→0.12, 16-head 匹配 0.4B 模型。
+# 训练命令见 tests/fixtures/README.md(若存在)或 AGENTS.md。
+STATE_PATH = FIXTURES / "nekoqa_04b_s42.npz"
 
 
 def pytest_addoption(parser):

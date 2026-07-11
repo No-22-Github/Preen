@@ -79,10 +79,9 @@ tools/                          模型转换工具
 
 experiments/p0_translate/        P0 实验 (历史归档, 保留不动)
 ├── 实验报告.md                    完整实验记录
-└── checkpoints_v3/ep04.npz       P0 验收通过的翻译 state (测试基准)
 
 models/fla-hub-rwkv7-0.1B-g1/   World tokenizer (转换依赖, 提交进库)
-train_data/translate/           训练数据 (中英翻译对)
+train_data/NekoQA_10k/          NekoQA 数据集 (Apache-2.0, 见目录内 NOTICE.md)
 ```
 
 ---
@@ -131,10 +130,10 @@ uv run statetuner --help   # 四个子命令: train / eval / export / preview
 # 训练 state tuning, 训完直接导出 RWKV Runner 可挂载的 .pth
 uv run statetuner train \
     --model models/converted/rwkv7-g1d-0.4b \
-    --data train_data/translate/data_100.jsonl \
-    --test-data train_data/translate/test_10.jsonl \
+    --data train_data/NekoQA_10k/nekoqa_smoke_200.json \
+    --template nekoqa \
     --out state.npz \
-    --lr 0.01 --epochs 20 \
+    --lr 0.01 --epochs 3 --ctx-len 512 --no-early-stop --seed 42 \
     --export-pth --pth-out state.pth
 
 # 训练事件以 JSON lines 输出到 stdout (loss/std/lr/epoch),
@@ -147,8 +146,8 @@ uv run statetuner train \
 # A/B 预览: 有 state vs 无 state
 uv run statetuner preview \
     --model models/converted/rwkv7-g1d-0.4b \
-    --state state.pth \
-    --prompt "由于连续降雨，部分地区出现了内涝" --ab
+    --state state.npz \
+    --prompt "你好呀，今天想做什么？" --template nekoqa --ab
 
 # 单独导出 npz → pth (也可在 train 时 --export-pth 一步完成)
 uv run statetuner export --state state.npz --out state.pth
@@ -168,7 +167,7 @@ uv run pytest --slow -q              # 全测 (含训练行为断言, ~4min)
 ```
 
 - 快测:导出器 round-trip / 键名形状 / 转置方向 / 推理 golden / 数据与事件单元测试
-- 慢测:梯度冒烟(24层 grad 非零)/ 过拟合(loss<0.5)/ 全量收敛 + 翻译
+- 慢测:梯度冒烟(24层 grad 非零)/ 过拟合(loss<0.5)/ 全量收敛 + NekoQA 风格注入
 
 模型或 state 缺失时相关测试自动 skip 并提示获取方式。
 
