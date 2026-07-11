@@ -160,3 +160,9 @@ tmp/
 temp/
 experiments/p0_translate/checkpoints_*/
 .zcode/
+
+# ── 精度实验:裁决报告不进 git(内部留档,decision-precision.md 是对外结论)
+experiments/mixed_precision/report_*.md
+
+# ── 临时打包/产物 ─────────────────────────────────────────
+*.zip

@@ -90,18 +90,47 @@ PYTHONPATH=src .venv/bin/python -m statetuner.cli preview \
 
 ---
 
-## ⚠️ 内存事实(排查中,勿下结论)
+## ⚠️ 内存事实(已归因,精度方案已锁定)
 
-**这是当前最大的未解问题。** 若排查出具体归因(哪个组件占了多少、能否优化),**记得回填更新本节**,并同步 Roadmap 的内存表与「插队任务」。关键事实:
+精度实验(`exp/precision` 分支)已完成内存归因 + 红线标定 + 多 seed 矩阵验证。**结论已固化,方案已锁定。** 关键事实:
 
-- **0.4B 训练实测 RSS ≈ 11~12GB**(活动监视器),不是 Roadmap 旧表写的 1.39GB。
-- `mx.get_peak_memory()` **严重漏报**——只算 MLX allocator 分配,不含 Metal wired memory。它报 3.35GB,实际 RSS 12GB。**永远以活动监视器 RSS 为准,别信 mx peak。**
-- **ctx_len 不是大头**:ctx 从 512→192(砍 62%),RSS 几乎不变(还是 ~12G)。说明大头在某个不随 ctx 变化的常数项,尚未定位。
-- 内存行为:启动 ~2-3G → 每 ~10 步增长 → 约 50 步达到**第一个高峰**(11~12G)→ 50 步后增长速度明显放缓,但**是否会持续上涨尚未观察确认**(没跑到足够长)。16GB 机器内存压力大、有 swap,但没 OOM。
+### 精度方案(已锁定)
+- **权重 bf16 + state fp32 训练**——即 main 现有实现(`make_state_params(dtype=mx.float32)`),不改。
+- D 方案(state cast bf16、循环全程 bf16)**未采纳**:配对判据 4 红 1 绿,15b_s42 有确凿退化单例(Q8 连续"啊"121 字)。详见 `docs/decision-precision.md` 和 `experiments/mixed_precision/report_matrix.md`。
+- 官方惯例是 bf16 权重 + kernel 内 fp32 state 累加;MLX 无可定制 kernel,state 保持 fp32 是我们能做到的最接近官方精神的方案。
+
+### 内存口径(三口径)
+- `mx.get_peak_memory()` **严重漏报**——只算 MLX allocator 分配,不含 Metal wired memory。**永远以 RSS(activity monitor / `ps`)为准。**
+- **全仓内存单位统一 GB(÷10⁹)**,禁止 GiB(/1024³)混用(见下方「内存单位」节)。
+
+### 红线标定(16GB 机器,bf16+c4G)
+- **安全档 L600**(均 591 token / max 644):step_peak ~11.7G,削顶线 12.07G(working_set 95%)。
+- **断点 L650**(均 636 token):step_peak 12.22G 顶到削顶线。
+- fp32 比 bf16 step_peak 高 ~1.7G,fp32 红线更紧。
+- 完整数据见 `experiments/mixed_precision/report_matrix.md`(本地留档,不进 git)。
+
+### 历史观察(已解释)
+- 0.4B 训练实测 RSS ≈ 11~12GB:大头是 fp32 state 在 bf16 权重的 wkv 循环里把整个循环提升成 fp32(MLX 类型提升规则 bf16+fp32=fp32)。这是机制事实,非 bug。
+- ctx_len 不是大头:ctx 512→192 RSS 几乎不变,因大头在不随 ctx 变化的 state 张量提升。
 - 0.4B 和 1.5B 层数都是 24,state 参数量接近;内存问题两者同源。
-- **Roadmap 旧内存表已挂起**,排查结论出来前不引用它做容量结论。详见 Roadmap「⚠️ 插队任务」。
 
 排查技巧:`PYTHONPATH=src .venv/bin/python -c "..."` 里逐组件 `load_model` / `make_state_params` / `value_and_grad`,每个之后用 `resource.getrusage(RUSAGE_SELF).ru_maxrss` 读真实 RSS。
+
+---
+
+## ⚠️ 内存单位:全仓统一 GB(÷10⁹),禁止混用 GiB
+
+踩坑:`bytes/1024³`(GiB)和 `bytes/1e9`(GB)混用,会让同一块内存看起来不一致——例如 `12713115648 bytes` 算出来 `11.84`(GiB)vs `12.71`(GB),一旦两套口径同表对比,就出现"active+cache 12.06 超过 working_set 11.84"的假象(其实同口径没超)。
+
+**统一规矩:**
+- **一律 GB(÷10⁹)**。换算统一写 `x / 1e9`,不要 `/1024³`。
+- 字段命名带单位:`_gb` 后缀 = GB 口径。**禁止**把 GiB 值放进叫 `_gb` 的字段。
+- `mx.metal.device_info()` 返回的是 bytes,字段名里若加 `_gb` 必须 `/1e9`。
+- `vm_stat` compressor 的 `×16384/1024³` 是历史遗留(接近 GiB),新代码改 `×16384/1e9` 对齐 GB。
+- 报告/表头里数字统一标 "G"(意指 GB),不要写 "GiB"。
+- **对比 working_set 上限时,active/cache/sum 和 working_set 必须同口径**(都用 GB),否则削顶判定失效。
+
+历史代码里 GiB 口径的(`tools/mem_probe_v2.py` 的 compressor、device_info 字段)暂不回头改(数据已留档),但**新写的内存汇报脚本一律 GB**。
 
 ---
 
@@ -118,6 +147,20 @@ PYTHONPATH=src .venv/bin/python -m statetuner.cli preview \
   - **≥1000 条 或 1.5B 全量**:耗时超 10 分钟 → **输出命令让用户手动跑**,不要自己后台跑后 sleep 等。
 
 **安全做法**:训练命令 + events-file 交给用户跑;用户贴回 stdout / events.jsonl / loss 曲线,你再分析。
+
+---
+
+## 🔒 判据纪律(实验裁决类工作)
+
+**判决判据跑完实验后不许新增或修改。** 需求单里的判据是契约,实验是为了填判据,不是反过来用数据倒推判据。
+
+实验中发现判据有盲点(数据显示某现象,但判据不敏感/测不到):
+1. **停下来,不要自行新增判据**。不要把"我觉得应该是 X"包装成正式判据写进分析脚本和报告。
+2. **报告盲点**:把"判据说 A,但数据还显示 B,B 可能影响结论"如实写出来,标"提请裁决"。
+3. **由用户裁决**是否改判据后重判。裁决通过才能改,裁决前报告结论严格按原判据给。
+4. 用户裁决改判据后,新判据写进需求单/报告,注明"经 X 裁决修订",留可追溯链。
+
+**案例存档(max_buffer 事件,2026-07-11):** c4G 对照实验(`exp/precision`,report_c4g.md)中,需求单判决矩阵只看"是否崩",Task2 两版都没崩 → 按判据应判"封存"。agent 自行新增了"step_peak 越 max_buffer_length"判据,并基于 max_buffer 机制叙事把结论改成"红线可抬"——但 max_buffer 机制叙事是错误的(真正机制是 step_peak + 池子残留顶穿削顶线 → 换页,与 max_buffer 无关),且违反了"判据跑完不许改"的纪律。经用户裁决:删 max_buffer 叙事,红线判据改为削顶线反推 + ms/step 拐点法,重算红线绝对值(fp32≈485/bf16≈697);"+50%"相对结论因判据更换前后都成立而保留。教训:**发现盲点先报,判据等裁决。**
 
 ---
 
