@@ -16,6 +16,8 @@
 *.pt
 # state 训练产物 (可重训生成,不进库)
 *.npz
+# 例外:测试基准 state(产品 CLI 训练,供 pytest 推理 golden 用,需进库)
+!tests/fixtures/*.npz
 # 训练事件日志 (临时产物,可重训生成)
 *_events.jsonl
 # tokenizer 之外的大文件兜底
@@ -26,6 +28,10 @@
 # 目录里是可执行文件 + dylib，均为第三方二进制
 models/llama-b9939/
 
+
+# ── 数据集实体（Apache-2.0，开源，体积大不进库；下载见 train_data/NekoQA_10k/NOTICE.md）──
+train_data/NekoQA_10k/NekoQA-10K.json
+train_data/NekoQA_30k/
 
 # ── 转换 / 训练输出（本地产物，不提交）────────────────────
 # 转换后的 HF 模型目录、训练 checkpoint、state 导出
