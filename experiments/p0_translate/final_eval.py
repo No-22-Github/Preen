@@ -8,12 +8,15 @@ import json
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+# 仓库根,用于 import statetuner.templates
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import mlx.core as mx
 import numpy as np
 from mlx_lm import load
 from data_v2 import extract_cn_en
 from state_tuner import generate
+from statetuner.templates import P0_BARE
 
 MODEL = str(Path(__file__).parent.parent.parent / "models" / "converted" / "rwkv7-g1d-0.4b")
 CKPT = str(Path(__file__).parent / "checkpoints_v3" / "ep04.npz")
@@ -35,7 +38,7 @@ def main():
             pairs.append((cn, en))
 
     for i, (cn, ref) in enumerate(pairs):
-        out = generate(model, tok, f"{cn}\n", state_npz=CKPT, max_tokens=55)
+        out = generate(model, tok, P0_BARE.format_prefix(cn=cn), state_npz=CKPT, max_tokens=55)
         oc = out.split("\n")[0].strip() if "\n" in out else out.strip()
         print(f"[{i+1}] {cn}")
         print(f"    REF: {ref}")
@@ -47,7 +50,7 @@ def main():
            "Artificial intelligence is changing the world.",
            "Please bring me a cup of coffee.", "The meeting starts at three."]
     for e in eng:
-        out = generate(model, tok, f"{e}\n", state_npz=CKPT, max_tokens=40)
+        out = generate(model, tok, P0_BARE.format_prefix(cn=e), state_npz=CKPT, max_tokens=40)
         oc = out.split("\n")[0].strip() if "\n" in out else out.strip()
         print(f"EN: {e}")
         print(f"OUT: {oc[:80]!r}")
@@ -56,7 +59,7 @@ def main():
     print("\n===条件性: 乱码/数字 (期望不吐英文翻译句子)===")
     junk = ["1234567890", "asdfghjkl zxcvbnm", "！！！@#￥%……"]
     for j in junk:
-        out = generate(model, tok, f"{j}\n", state_npz=CKPT, max_tokens=40)
+        out = generate(model, tok, P0_BARE.format_prefix(cn=j), state_npz=CKPT, max_tokens=40)
         oc = out.split("\n")[0].strip() if "\n" in out else out.strip()
         print(f"IN: {j}")
         print(f"OUT: {oc[:80]!r}")

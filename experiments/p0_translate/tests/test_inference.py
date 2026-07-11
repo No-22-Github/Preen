@@ -6,12 +6,16 @@
 但必须保持语义相关(翻译测试)或行为一致(条件性测试)。
 """
 import json
+import sys
 from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / "src"))
+
 from conftest import GOLDEN_DIR
 from state_tuner import generate
+from statetuner.templates import P0_BARE
 
 
 def load_golden(name):
@@ -43,7 +47,7 @@ def test_translate_matches_golden(app, state_file, golden_file):
     golden = load_golden(golden_file)
 
     for cn, expected in golden.items():
-        out = generate(model, tok, f"{cn}\n", state_npz=state_file, max_tokens=70)
+        out = generate(model, tok, P0_BARE.format_prefix(cn=cn), state_npz=state_file, max_tokens=70)
         out = first_line(out)
         # 核心断言: 输出必须是英文 (翻译行为发生)
         assert english_ratio(out) > 0.5, (
@@ -66,7 +70,7 @@ def test_translate_test_set_semantic(app, state_file):
     golden = load_golden("translate_test.json")
     english_count = 0
     for cn, expected in golden.items():
-        out = first_line(generate(model, tok, f"{cn}\n", state_npz=state_file, max_tokens=70))
+        out = first_line(generate(model, tok, P0_BARE.format_prefix(cn=cn), state_npz=state_file, max_tokens=70))
         if english_ratio(out) > 0.5:
             english_count += 1
     assert english_count >= 4, f"测试集翻译: 仅 {english_count}/5 英文, 期望 ≥4"
@@ -79,7 +83,7 @@ def test_conditional_english_no_translate(app, state_file):
     model, tok = app
     golden = load_golden("conditional.json")["english"]
     for en_in, expected_out in golden.items():
-        out = first_line(generate(model, tok, f"{en_in}\n", state_npz=state_file, max_tokens=40))
+        out = first_line(generate(model, tok, P0_BARE.format_prefix(cn=en_in), state_npz=state_file, max_tokens=40))
         # 英文输入的输出应仍是英文 (续写), 不应变成中文
         assert english_ratio(out) > 0.4, (
             f"英文输入 {en_in!r} 输出异常: {out!r}\n"
@@ -97,7 +101,7 @@ def test_conditional_junk_no_translation(app, state_file):
     model, tok = app
     golden = load_golden("conditional.json")["junk"]
     for junk_in, expected_out in golden.items():
-        out = first_line(generate(model, tok, f"{junk_in}\n", state_npz=state_file, max_tokens=40))
+        out = first_line(generate(model, tok, P0_BARE.format_prefix(cn=junk_in), state_npz=state_file, max_tokens=40))
         # 不应产出中文 (state 方向应是 中→英, 非 英→中)
         cn_letters = [c for c in out if c.isalpha() and ord(c) > 127]
         assert len(cn_letters) < 5, (
@@ -116,7 +120,7 @@ def test_baseline_no_state_no_translate(app):
     model, tok = app
     golden = load_golden("baseline_no_state.json")
     for cn, expected_out in golden.items():
-        out = first_line(generate(model, tok, f"{cn}\n", state_npz=None, max_tokens=50))
+        out = first_line(generate(model, tok, P0_BARE.format_prefix(cn=cn), state_npz=None, max_tokens=50))
         # 无 state 时, 输出应是中文续写或标点, 不应是英文翻译
         assert english_ratio(out) < 0.5, (
             f"[无state] {cn}\n输出意外为英文: {out!r}\n"

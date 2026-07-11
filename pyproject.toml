@@ -1,0 +1,46 @@
+[project]
+name = "statetuner"
+version = "0.1.0"
+description = "RWKV-7 state tuning for Mac — train, export, and preview per-layer init states"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "mlx>=0.22",
+    "mlx-lm @ git+https://github.com/ml-explore/mlx-lm.git",
+    "transformers>=4.46",
+    "tokenizers",
+    "safetensors",
+    "numpy",
+    # torch is a hard dependency: the .pth state exporter (export.py) uses torch.save
+    # to produce files RWKV Runner can mount. Future packaging work may cut this to
+    # shrink the sidecar bundle (see docs/RWKV-StateTuner-Roadmap.md).
+    "torch",
+    "typer>=0.12",
+]
+
+[project.scripts]
+statetuner = "statetuner.cli:app"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/statetuner"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+markers = [
+    "slow: 训练测试,慢(~4min),需 pytest --slow 开启",
+]
+
+# ── src layout: 让 `import statetuner` 直接指向 src/statetuner ─────────────
+[tool.uv]
+package = true
+
+# hatchling 需要 allow-direct-references 才能接受 mlx-lm 的 git 依赖
+[tool.hatch.metadata]
+allow-direct-references = true

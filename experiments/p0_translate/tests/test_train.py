@@ -11,6 +11,7 @@ pytest --slow 显式开启。
 """
 import math
 import random
+import sys
 from pathlib import Path
 
 import pytest
@@ -20,9 +21,12 @@ import mlx.nn as nn
 import mlx.optimizers as optim
 import numpy as np
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / "src"))
+
 from conftest import MODEL_PATH, DATA_PATH
 from state_tuner import patch_rwkv7_for_train, make_state_params, forward_with_state, cosine_lr
 from data_v2 import prepare_samples_v2
+from statetuner.templates import P0_BARE
 from state_tuner import generate
 
 pytestmark = pytest.mark.slow
@@ -147,12 +151,12 @@ def test_full_train_and_translate(model_tokenizer):
     assert 0.05 < sstd < 1.0, f"state std 异常: {sstd:.4f} (合理 0.05~1.0)"
     # 3. 训出的 state 能翻译
     cn = samples[0][4]  # 第5元是中文原文
-    out = generate(model, tok, f"{cn}\n", state_npz=None, max_tokens=50)  # 先确认构造可用
+    out = generate(model, tok, P0_BARE.format_prefix(cn=cn), state_npz=None, max_tokens=50)  # 先确认构造可用
     # 注入训出的 state 重新生成
     import numpy as _np
     tmp = Path(__file__).parent / "_tmp_trained.npz"
     _np.savez(tmp, **{f"layer_{k}": _np.array(sp[k]) for k in sp})
-    out = generate(model, tok, f"{cn}\n", state_npz=str(tmp), max_tokens=50)
+    out = generate(model, tok, P0_BARE.format_prefix(cn=cn), state_npz=str(tmp), max_tokens=50)
     tmp.unlink(missing_ok=True)
     out = out.split("\n")[0].strip() if "\n" in out else out.strip()
     letters = [c for c in out if c.isalpha()]
