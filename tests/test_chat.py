@@ -93,4 +93,6 @@ def test_chat_streams_without_returning_duplicate_text():
     chunks = []
     reply = session.handle("你好", on_text=chunks.append)
     assert "".join(chunks) == "tuned"
-    assert reply.lines == ["[stop=eos, tokens=1, 0.10s]"]
+    assert reply.lines == [
+        "[stop=eos, tokens=1, 0.10s | Prompt: 0.0 t/s | Generation: 0.0 t/s]"
+    ]

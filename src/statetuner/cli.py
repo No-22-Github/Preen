@@ -267,9 +267,9 @@ def eval(
 
     prompt 从 templates 派生(与训练 encode 路径同源,保证编码同构)。
     """
-    if template != "nekoqa":
+    if template not in ("nekoqa", "g1g"):
         raise typer.BadParameter(
-            f"--template 当前只支持 nekoqa, 收到 {template!r}"
+            f"--template 当前只支持 nekoqa / g1g, 收到 {template!r}"
         )
     if not model.is_dir():
         _bad_input(ValueError(f"模型目录不存在: {model}"))
@@ -292,7 +292,7 @@ def eval(
         GenerationConfig(
             max_tokens=max_tokens, temperature=temperature, top_p=top_p, seed=seed
         ),
-        "nekoqa",
+        template,
     )
 
     typer.echo(f"# 加载模型 {model} (kernel 路径, template={template})", err=True)
@@ -373,15 +373,15 @@ def chat(
     seed: int = typer.Option(42, "--seed"),
     ab: bool = typer.Option(False, "--ab", help="启动时开启 A/B"),
     stream: bool = typer.Option(True, "--stream/--no-stream", help="逐步输出生成文本"),
-    template: str = typer.Option("nekoqa", "--template", help="raw | nekoqa"),
+    template: str = typer.Option("g1g", "--template", help="g1g(RWKV7-G1 原生,默认) | raw | nekoqa"),
 ):
     """模型常驻的交互模式；支持运行中动态切换 state。"""
     if not model.is_dir():
         _bad_input(ValueError(f"模型目录不存在: {model}"))
     if state is not None and not state.is_file():
         _bad_input(ValueError(f"state 文件不存在: {state}"))
-    if template not in ("raw", "nekoqa"):
-        _bad_input(ValueError("--template 只支持 raw / nekoqa"))
+    if template not in ("raw", "nekoqa", "g1g"):
+        _bad_input(ValueError("--template 只支持 raw / nekoqa / g1g"))
     if max_tokens <= 0 or temperature < 0 or not 0 < top_p <= 1:
         _bad_input(ValueError("max-tokens/temperature/top-p 参数范围非法"))
     if ab and state is None:
@@ -487,9 +487,9 @@ def preview(
     --template nekoqa 会把 --prompt 包成 "User: {prompt}\\n\\nAssistant:";
     raw 原样传入。
     """
-    if template not in ("raw", "nekoqa"):
+    if template not in ("raw", "nekoqa", "g1g"):
         raise typer.BadParameter(
-            f"--template 只支持 raw / nekoqa, 收到 {template!r}"
+            f"--template 只支持 raw / nekoqa / g1g, 收到 {template!r}"
         )
     if ab and state is None:
         raise typer.BadParameter("--ab 必须同时提供 --state")
@@ -554,10 +554,20 @@ def preview(
             typer.echo(json.dumps(result.to_dict(), ensure_ascii=False))
         elif stream:
             typer.echo()
-            typer.echo(f"[stop={result.stop_reason}, tokens={result.token_count}]")
+            typer.echo(
+                f"[stop={result.stop_reason}, tokens={result.token_count}, "
+                f"{result.elapsed:.2f}s | "
+                f"Prompt: {result.prompt_tps:.1f} t/s | "
+                f"Generation: {result.generation_tps:.1f} t/s]"
+            )
         else:
             typer.echo(result.text)
-            typer.echo(f"[stop={result.stop_reason}, tokens={result.token_count}]")
+            typer.echo(
+                f"[stop={result.stop_reason}, tokens={result.token_count}, "
+                f"{result.elapsed:.2f}s | "
+                f"Prompt: {result.prompt_tps:.1f} t/s | "
+                f"Generation: {result.generation_tps:.1f} t/s]"
+            )
 
 
 if __name__ == "__main__":

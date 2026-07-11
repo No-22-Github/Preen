@@ -58,3 +58,25 @@ NEKO_QA = TaskTemplate(
 prefix 以 "Assistant:" 结尾(无尾随空白),target 以一个前导空格开始,
 拼接后是 "Assistant: {回答}"。stop_token = 0(World tokenizer eos)。
 """
+
+
+G1G = TaskTemplate(
+    prefix_template="<|rwkv_tokenizer_end_of_text|>User: {q}\n\nAssistant: <think>\n</think>",
+    target_template=" {a}",
+    stop_token=0,
+    inference_stop_sequences=("\nUser:", "\nSystem:"),
+)
+"""RWKV7-G1 原生对话格式(不带思考)。
+
+对齐 g1g 官方 chat_template 的 enable_thinking=False 渲染结果(已实测 token 序列
+一致,见 tokenizer_config.json)。与 NEKO_QA 的关键差异:
+  - 开头 <|rwkv_tokenizer_end_of_text|>(= token 0 / bos):RWKV 每轮对话都以它
+    起始,缺它 state 初始化偏离训练分布。
+  - 结尾 Assistant: <think>\\n</think>:空 think 标签告诉模型"思考段为空,直接答题"。
+    缺它模型续写时不知该思考还是直答,易跑飞(实测:raw 格式跑满 120 token 自报
+    "ChatGPT";本格式 39 token 正常 eos 自然回答)。
+
+stop_token = 0(World tokenizer eos)。inference 还要在生成出下一轮角色标记
+(\\nUser: / \\nSystem:)前停下。模型输出开头常带一个 \\n(</think> 后的自然换行),
+显示侧由 chat 层 lstrip 处理。
+"""

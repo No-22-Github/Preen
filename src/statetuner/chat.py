@@ -65,26 +65,61 @@ class ChatSession:
             result = self.engine.compare(wrapped, state=self.state, config=self.config)
             lines = [
                 "=== 有 state ===",
-                result.with_state.text,
+                self._display_text(result.with_state.text),
                 self._summary(result.with_state),
                 "=== 无 state（基线）===",
-                result.baseline.text,
+                self._display_text(result.baseline.text),
                 self._summary(result.baseline),
             ]
             return ChatReply(lines, payload=result.to_dict())
 
+        # g1g 输出开头常有 \n(</think> 后的自然换行)，stream 首个非空 chunk 去掉它。
+        stream_callback = self._wrap_stream_callback(on_text) if on_text else None
         result = self.engine.generate(
-            wrapped, state=self.state, config=self.config, on_text=on_text
+            wrapped, state=self.state, config=self.config, on_text=stream_callback
         )
         if on_text is not None:
             return ChatReply([self._summary(result)], payload=result.to_dict())
         return ChatReply(
-            [result.text, self._summary(result)], payload=result.to_dict()
+            [self._display_text(result.text), self._summary(result)],
+            payload=result.to_dict(),
         )
+
+    def _display_text(self, text: str) -> str:
+        """模板相关的显示清洗。g1g 去掉前导换行(</think> 后的自然换行)。"""
+        if self.template == "g1g":
+            return text.lstrip("\n")
+        return text
+
+    def _wrap_stream_callback(self, callback: TextCallback) -> TextCallback:
+        """包装 stream 回调：首个非空 chunk 去掉模板前导换行。
+
+        inference.generate 的 emit_safe_text 只发增量 delta，首个 delta 通常就是
+        开头的 \\n（g1g）。这里一次性消费掉它，后续 chunk 原样透传。
+        """
+        if self.template != "g1g":
+            return callback
+        stripped = False
+
+        def _wrapped(chunk: str) -> None:
+            nonlocal stripped
+            if not stripped:
+                chunk = chunk.lstrip("\n")
+                stripped = True
+                if not chunk:
+                    return
+            callback(chunk)
+
+        return _wrapped
 
     @staticmethod
     def _summary(result) -> str:
-        return f"[stop={result.stop_reason}, tokens={result.token_count}, {result.elapsed:.2f}s]"
+        return (
+            f"[stop={result.stop_reason}, tokens={result.token_count}, "
+            f"{result.elapsed:.2f}s | "
+            f"Prompt: {result.prompt_tps:.1f} t/s | "
+            f"Generation: {result.generation_tps:.1f} t/s]"
+        )
 
     def _command(self, text: str) -> ChatReply:
         try:

@@ -13,9 +13,9 @@ import mlx.core as mx
 import mlx.nn as nn
 
 from .core import StateInput, _load_state_dict, build_state_cache
-from .templates import NEKO_QA
+from .templates import G1G, NEKO_QA
 
-TemplateName = Literal["raw", "nekoqa"]
+TemplateName = Literal["raw", "nekoqa", "g1g"]
 StopReason = Literal["eos", "stop_sequence", "max_tokens"]
 TextCallback = Callable[[str], None]
 
@@ -48,14 +48,38 @@ class GenerationResult:
     elapsed: float
     used_state: bool
     config: GenerationConfig
+    # 计时分段(对齐 llama.cpp 的 prompt eval / generation eval 口径)：
+    #   prompt_time        = 首次前向(整个 prompt 并行 prefill)耗时
+    #   generation_time    = 后续逐 token 串行 decode 耗时(不含 prefill)
+    #   elapsed            = 总耗时 ≈ prompt_time + generation_time
+    # 字段都带默认值，旧的构造点(tests/FakeEngine)无需改动。
+    prompt_tokens: int = 0
+    prompt_time: float = 0.0
+    generation_time: float = 0.0
 
     @property
     def token_count(self) -> int:
         return len(self.token_ids)
 
+    @property
+    def prompt_tps(self) -> float:
+        """Prompt prefill 速率（t/s）。无 prefill 记录时为 0。"""
+        return self.prompt_tokens / self.prompt_time if self.prompt_time > 0 else 0.0
+
+    @property
+    def generation_tps(self) -> float:
+        """Decode 生成速率（t/s）。无生成或未计时时为 0。"""
+        return (
+            self.token_count / self.generation_time
+            if self.generation_time > 0
+            else 0.0
+        )
+
     def to_dict(self) -> dict:
         data = asdict(self)
         data["token_count"] = self.token_count
+        data["prompt_tps"] = self.prompt_tps
+        data["generation_tps"] = self.generation_tps
         return data
 
 
@@ -79,6 +103,8 @@ def render_prompt(prompt: str, template: TemplateName = "raw") -> str:
         return prompt
     if template == "nekoqa":
         return NEKO_QA.format_prefix(q=prompt)
+    if template == "g1g":
+        return G1G.format_prefix(q=prompt)
     raise ValueError(f"不支持的模板: {template!r}")
 
 
@@ -90,6 +116,8 @@ def with_template_stops(
         return config
     if template == "nekoqa":
         return replace(config, stop_sequences=NEKO_QA.inference_stop_sequences)
+    if template == "g1g":
+        return replace(config, stop_sequences=G1G.inference_stop_sequences)
     raise ValueError(f"不支持的模板: {template!r}")
 
 
@@ -173,13 +201,28 @@ class InferenceEngine:
             sequence for sequence in cfg.stop_sequences if sequence
         )
 
-        for _ in range(cfg.max_tokens):
+        # 计时分段(对齐 llama.cpp)：
+        #   step 0  → 首次前向消化整个 prompt(prefill,并行)
+        #   step>0  → 逐 token decode(串行),累加到 t_gen
+        # t_step 窗口覆盖「前向 + 采样得 next_token」,int() 隐式触发 MLX eval,
+        # 保证 GPU 计算完成才停表。
+        t_prefill = 0.0
+        t_gen = 0.0
+        prompt_token_count = len(prompt_ids)
+
+        for step in range(cfg.max_tokens):
+            t_step_start = time.time()
             logits = self.model(input_ids, caches)[0, -1]
             if sampler is None:
                 next_token = int(mx.argmax(logits, axis=-1))
             else:
                 logprobs = nn.log_softmax(logits, axis=-1)
                 next_token = int(sampler(logprobs))
+            t_step = time.time() - t_step_start
+            if step == 0:
+                t_prefill = t_step
+            else:
+                t_gen += t_step
             if next_token == cfg.eos_token:
                 stop_reason = "eos"
                 break
@@ -213,6 +256,9 @@ class InferenceEngine:
             elapsed=time.time() - t0,
             used_state=state is not None,
             config=cfg,
+            prompt_tokens=prompt_token_count,
+            prompt_time=t_prefill,
+            generation_time=t_gen,
         )
 
     def compare(

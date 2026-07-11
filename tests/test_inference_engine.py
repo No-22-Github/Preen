@@ -5,7 +5,7 @@ import pytest
 import mlx.core as mx
 
 from statetuner.inference import GenerationConfig, InferenceEngine, render_prompt
-from statetuner.templates import NEKO_QA
+from statetuner.templates import G1G, NEKO_QA
 
 
 class DummyTokenizer:
@@ -148,3 +148,13 @@ def test_generation_config_validation():
 def test_render_prompt_uses_nekoqa_single_source():
     assert render_prompt("你好", "nekoqa") == NEKO_QA.format_prefix(q="你好")
     assert render_prompt("raw", "raw") == "raw"
+
+
+def test_render_prompt_g1g_aligned_with_official_template():
+    """g1g prompt 必须含开头 bos 与结尾空 think 标签(对齐训练分布)。"""
+    rendered = render_prompt("你好", "g1g")
+    assert rendered == G1G.format_prefix(q="你好")
+    # 开头 bos(World tokenizer eos 字面量,encode 后即 token 0)
+    assert rendered.startswith("<|rwkv_tokenizer_end_of_text|>")
+    # 结尾空 think(告诉模型跳过思考直接答)
+    assert rendered.endswith("Assistant: <think>\n</think>")

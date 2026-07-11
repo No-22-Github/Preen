@@ -118,6 +118,28 @@ PYTHONPATH=src .venv/bin/python -m statetuner.cli preview \
 
 ---
 
+## g1g 推理对齐(已验证)
+
+### g1g prompt 格式 = 降智/错乱的分水岭
+- **RWKV7-G1 是 reasoning 模型**,prompt 格式必须带 `<think>` 标签。`templates.py` 的 `G1G` 模板 = `<|bos|>User: {q}\n\nAssistant: <think>\n</think>`,对齐官方 chat_template 的 `enable_thinking=False` 渲染。
+- **实测铁证**:raw 格式(`User: 你好\n\nAssistant:`)→ 120 token 跑满、幻觉自报"ChatGPT";G1G 格式 → 39 token 正常 eos、自然回答。**降智根因是缺 bos + 空 think 标签,不是模型或框架问题。**
+- 两处关键段缺一不可:
+  - 开头 `<|rwkv_tokenizer_end_of_text|>`(token 0 / bos):RWKV 训练每轮都以此起始,缺它 state 初始化偏离分布。
+  - 结尾 `Assistant: <think>\n</think>`:空 think 标签告诉模型"跳过思考直接答"。缺它模型续写时不知该思考还是直答。
+- chat 命令默认模板已从 `nekoqa` 改为 `g1g`(产品主线是 g1g 原生对话;猫娘风格迁移用 `--template nekoqa` 显式切换)。
+- g1g 输出开头常有 `\n`(空 think 标签后的自然换行),`ChatSession` 显示时已 `lstrip('\n')`。
+- 详细 token 级数值对齐实验(贪心/logprobs/采样分歧)见 **[docs/g1g-decode-alignment.md](docs/g1g-decode-alignment.md)**。
+
+### llama.cpp 对比时的 tokenize 陷阱(踩过)
+**llama.cpp 的 `-f` 文件模式、`/tokenize` 端点、`/completion` 端点都不识别 RWKV 的特殊 token** —— 把 `<|rwkv_tokenizer_end_of_text|>` 当普通文本逐字符切成 14 个 token,而不是单个 token 0。**只有 `/v1/chat/completions`(走 jinja chat template)正确处理。**
+
+- 踩坑表现:`-no-cnv -f prompt.txt` 模式下,prompt 被错切成 37 token(应 24),模型续写完全跑飞,每次都生成 `<think>...` 英文思考链。
+- 验证方法:看返回的 `prompt_tokens` / `tokens_evaluated` 字段,和 MLX 的 `len(tok.encode(prompt))` 对比。对齐时 "你好" 应都是 17 token、"中国首都" 应都是 24。
+- **对比 llama.cpp 推理效果时,务必用 `/v1/chat/completions` + `chat_template_kwargs.enable_thinking=false`,不要用 `-no-cnv -f` 或 `/completion`。**
+- server 启动:`./models/llama-b9939/llama-server -m MODEL.gguf -c 2048 -ngl 99 --host 127.0.0.1 --port 8876`,模型只加载一次,比反复重启 `llama-cli`(每次 10s)高效得多。
+
+---
+
 ## ⚠️ 内存单位:全仓统一 GB(÷10⁹),禁止混用 GiB
 
 踩坑:`bytes/1024³`(GiB)和 `bytes/1e9`(GB)混用,会让同一块内存看起来不一致——例如 `12713115648 bytes` 算出来 `11.84`(GiB)vs `12.71`(GB),一旦两套口径同表对比,就出现"active+cache 12.06 超过 working_set 11.84"的假象(其实同口径没超)。
