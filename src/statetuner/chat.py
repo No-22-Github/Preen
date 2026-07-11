@@ -114,12 +114,7 @@ class ChatSession:
 
     @staticmethod
     def _summary(result) -> str:
-        return (
-            f"[stop={result.stop_reason}, tokens={result.token_count}, "
-            f"{result.elapsed:.2f}s | "
-            f"Prompt: {result.prompt_tps:.1f} t/s | "
-            f"Generation: {result.generation_tps:.1f} t/s]"
-        )
+        return result.summary_line()
 
     def _command(self, text: str) -> ChatReply:
         try:

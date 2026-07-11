@@ -1,8 +1,9 @@
 import json
 
+import numpy as np
 import pytest
 
-from statetuner.inspection import inspect_data, load_qa_pairs
+from statetuner.inspection import inspect_data, load_qa_pairs, validate_state_for_model
 
 
 class CharTokenizer:
@@ -58,3 +59,71 @@ def test_load_qa_pairs_rejects_empty_question(tmp_path):
     path.write_text('[{"instruction":"","output":"a"}]', encoding="utf-8")
     with pytest.raises(ValueError, match="非空字符串"):
         load_qa_pairs(path)
+
+
+# ── validate_state_for_model（不加载真实模型，tmp npz + fake model）──
+
+
+class _FakeModelArgs:
+    """模拟 mlx-lm 模型 args：hidden_size=1024, head_dim=64 → 16 头。"""
+
+    hidden_size = 1024
+    head_dim = 64
+
+
+class _FakeModel:
+    """模拟 mlx-lm 模型：2 层，每层期望 (16, 64, 64)。"""
+
+    args = _FakeModelArgs()
+
+    def __init__(self, n_layers=2):
+        self.layers = [object() for _ in range(n_layers)]
+
+
+def _save_state_npz(tmp_path, arrays: dict, name="state.npz"):
+    """构造 tmp npz，arrays = {layer_idx: ndarray}。"""
+    path = tmp_path / name
+    np.savez(path, **{f"layer_{i}": arr for i, arr in arrays.items()})
+    return path
+
+
+def test_validate_state_accepts_matching_state(tmp_path):
+    """层数与 shape 匹配 → 通过，返回加载的 dict。"""
+    path = _save_state_npz(
+        tmp_path,
+        {0: np.zeros((16, 64, 64), dtype=np.float32),
+         1: np.ones((16, 64, 64), dtype=np.float32)},
+    )
+    result = validate_state_for_model(path, _FakeModel(n_layers=2))
+    assert set(result.keys()) == {0, 1}
+
+
+def test_validate_state_rejects_layer_count_mismatch(tmp_path):
+    """state 层数 ≠ 模型层数 → ValueError（错误信息含两边的数字）。"""
+    path = _save_state_npz(
+        tmp_path, {0: np.zeros((16, 64, 64), dtype=np.float32)}
+    )
+    with pytest.raises(ValueError, match="层数 1 与模型层数 2 不匹配"):
+        validate_state_for_model(path, _FakeModel(n_layers=2))
+
+
+def test_validate_state_rejects_shape_mismatch(tmp_path):
+    """state shape ≠ 模型期望 → ValueError（错误信息含期望 shape）。"""
+    path = _save_state_npz(
+        tmp_path,
+        {0: np.zeros((8, 64, 64), dtype=np.float32),   # 头数错(8 vs 16)
+         1: np.zeros((16, 64, 64), dtype=np.float32)},
+    )
+    with pytest.raises(ValueError, match="shape 与模型不匹配"):
+        validate_state_for_model(path, _FakeModel(n_layers=2))
+
+
+def test_validate_state_rejects_non_rwkv7_format(tmp_path):
+    """shape 非 (H,64,64) → rwkv7_compatible=False → ValueError。"""
+    path = _save_state_npz(
+        tmp_path,
+        {0: np.zeros((16, 32, 64), dtype=np.float32),   # (H,32,64) 非 (H,64,64)
+         1: np.zeros((16, 32, 64), dtype=np.float32)},
+    )
+    with pytest.raises(ValueError, match="RWKV-7"):
+        validate_state_for_model(path, _FakeModel(n_layers=2))

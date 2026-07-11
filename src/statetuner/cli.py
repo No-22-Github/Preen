@@ -194,6 +194,9 @@ def train(
     from .service import TrainingRequest, run_training
     from .train import TrainConfig
 
+    # TODO(产品决策): 是否开放 g1g 训练模板未定。g1g 是 reasoning 模板，
+    # state tuning 是否能稳定注入风格/格式而非破坏推理链路，尚未验证。
+    # 当前只支持 nekoqa；若开放需在 templates/service/data 全链路同步。
     if template != "nekoqa":
         raise typer.BadParameter(
             f"--template 当前只支持 nekoqa, 收到 {template!r}"
@@ -258,14 +261,15 @@ def eval(
     seed: int = typer.Option(42, "--seed", help="采样随机种子"),
     template: str = typer.Option(
         "nekoqa", "--template",
-        help="任务模板: nekoqa(角色扮演 QA,默认)",
+        help="任务模板: nekoqa(角色扮演 QA,默认) | g1g(RWKV7-G1 原生)",
     ),
     limit: int = typer.Option(5, "--limit", help="最多输出条数(默认 5)"),
     json_output: bool = typer.Option(False, "--json", help="stdout 输出结构化 JSON"),
 ):
     """评估:对数据集逐条生成(state 注入),输出结果。
 
-    prompt 从 templates 派生(与训练 encode 路径同源,保证编码同构)。
+    prompt 从 templates 派生(与训练 encode 路径同源,保证编码同构);
+    --template 同时驱动 prompt 渲染与 stop sequences(同源,不分裂)。
     """
     if template not in ("nekoqa", "g1g"):
         raise typer.BadParameter(
@@ -283,10 +287,8 @@ def eval(
         raise typer.BadParameter("--limit 必须 > 0")
 
     from .core import load_model
-    from .inference import (
-        GenerationConfig, InferenceEngine, render_prompt, with_template_stops,
-    )
-    from .inspection import load_qa_pairs
+    from .inference import GenerationConfig, InferenceEngine, with_template_stops
+    from .service import EvaluationRequest, run_evaluation
 
     cfg = with_template_stops(
         GenerationConfig(
@@ -299,40 +301,28 @@ def eval(
     mdl, tok = load_model(model, patch=False)
     engine = InferenceEngine(mdl, tok)
 
-    # 构造 (问题, 参考) 对列表
-    if data is not None:
-        try:
-            pairs = load_qa_pairs(data)
-        except (OSError, ValueError, TypeError) as exc:
-            _bad_input(exc)
-    else:
-        pairs = [
-            ("你好呀，宝宝！今天想做什么？", ""),
-            ("主人要出门了，你会怎么做？", ""),
-            ("能教我用尾巴写字吗？", ""),
-        ]
+    request = EvaluationRequest(
+        engine=engine,
+        state=str(state),
+        template=template,
+        config=cfg,
+        data=data,
+        limit=limit,
+    )
+    try:
+        result = run_evaluation(request)
+    except (OSError, ValueError, TypeError) as exc:
+        _bad_input(exc)
 
-    results = []
-    for i, (q, ref) in enumerate(pairs[:limit]):
-        prompt = render_prompt(q, "nekoqa")
-        generated = engine.generate(prompt, state=str(state), config=cfg)
-        out = generated.text.strip()
-        results.append({
-            "index": i + 1,
-            "question": q,
-            "reference": ref,
-            **generated.to_dict(),
-            "text": out,
-        })
-        if json_output:
-            continue
-        typer.echo(f"[{i+1}] {q}")
-        if ref:
-            typer.echo(f"    REF: {ref[:100]}")
-        typer.echo(f"    OUT: {out[:300]}")
-        typer.echo()
     if json_output:
-        typer.echo(json.dumps({"results": results}, ensure_ascii=False))
+        typer.echo(json.dumps(result.to_dict(), ensure_ascii=False))
+        return
+    for item in result.items:
+        typer.echo(f"[{item.index}] {item.question}")
+        if item.reference:
+            typer.echo(f"    REF: {item.reference[:100]}")
+        typer.echo(f"    OUT: {item.text[:300]}")
+        typer.echo()
 
 
 @app.command()
@@ -390,31 +380,16 @@ def chat(
     from .chat import ChatSession
     from .core import load_model
     from .inference import GenerationConfig, InferenceEngine
-    from .inspection import inspect_state
+    from .inspection import validate_state_for_model
 
     typer.echo(f"# 加载模型 {model}（模型将在会话期间常驻）", err=True)
     mdl, tok = load_model(model, patch=False)
     engine = InferenceEngine(mdl, tok)
-    expected_layers = len(mdl.layers)
-    expected_shape = [
-        mdl.args.hidden_size // mdl.args.head_dim,
-        mdl.args.head_dim,
-        mdl.args.head_dim,
-    ]
 
+    # state 校验+加载下沉到 inspection.validate_state_for_model；
+    # CLI 与 ChatSession 运行中 /state 切换共用同一校验逻辑。
     def _load_checked(path: Path):
-        info = inspect_state(path)
-        if not info.rwkv7_compatible:
-            raise ValueError("state 不是连续层号的 RWKV-7 (H,64,64) 格式")
-        if info.layers != expected_layers:
-            raise ValueError(
-                f"state 层数 {info.layers} 与模型层数 {expected_layers} 不匹配"
-            )
-        if any(shape != expected_shape for shape in info.shapes):
-            raise ValueError(
-                f"state shape 与模型不匹配，期望每层 {expected_shape}"
-            )
-        return engine.load_state(path)
+        return validate_state_for_model(path, mdl)
 
     loaded_state = None
     if state is not None:
@@ -477,15 +452,16 @@ def preview(
     ab: bool = typer.Option(False, "--ab", help="A/B 对比:有 state vs 无 state 双输出"),
     template: str = typer.Option(
         "raw", "--template",
-        help="包装 prompt 的模板: raw(原样,默认) | nekoqa",
+        help="包装 prompt 的模板: raw(原样,默认) | nekoqa | g1g(RWKV7-G1 原生)",
     ),
     json_output: bool = typer.Option(False, "--json", help="stdout 输出结构化 JSON"),
     stream: bool = typer.Option(False, "--stream", help="逐步输出单路生成文本"),
 ):
     """预览:注入 state 生成。--ab 做 A/B 对比，temperature=0 时为贪心。
 
-    --template nekoqa 会把 --prompt 包成 "User: {prompt}\\n\\nAssistant:";
-    raw 原样传入。
+    --template 决定 prompt 包装与 stop sequences(同源,不分裂):
+      raw 原样传入;nekoqa 包成 "User: {prompt}\\n\\nAssistant:";
+      g1g 包成带 bos + 空 think 标签的 RWKV7-G1 格式。
     """
     if template not in ("raw", "nekoqa", "g1g"):
         raise typer.BadParameter(
@@ -554,20 +530,10 @@ def preview(
             typer.echo(json.dumps(result.to_dict(), ensure_ascii=False))
         elif stream:
             typer.echo()
-            typer.echo(
-                f"[stop={result.stop_reason}, tokens={result.token_count}, "
-                f"{result.elapsed:.2f}s | "
-                f"Prompt: {result.prompt_tps:.1f} t/s | "
-                f"Generation: {result.generation_tps:.1f} t/s]"
-            )
+            typer.echo(result.summary_line())
         else:
             typer.echo(result.text)
-            typer.echo(
-                f"[stop={result.stop_reason}, tokens={result.token_count}, "
-                f"{result.elapsed:.2f}s | "
-                f"Prompt: {result.prompt_tps:.1f} t/s | "
-                f"Generation: {result.generation_tps:.1f} t/s]"
-            )
+            typer.echo(result.summary_line())
 
 
 if __name__ == "__main__":

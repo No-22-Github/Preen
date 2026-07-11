@@ -187,6 +187,41 @@ def inspect_state(path: Path) -> StateInspection:
     )
 
 
+def validate_state_for_model(state_path: Path, model) -> dict:
+    """校验 state 与目标模型匹配并返回已加载的 state dict。
+
+    三重校验（行为与错误信息与历史 _load_checked 一致）：
+      - rwkv7_compatible：必须是连续层号的 (H,64,64) RWKV-7 格式
+      - 层数与模型层数一致
+      - 每层 shape 与模型期望一致([H, head_dim, head_dim])
+
+    返回 {layer_idx: mx.array}，可直接注入 InferenceEngine.generate。
+    CLI 的初始加载与 ChatSession 运行中 /state 切换共用此函数。
+
+    model 需暴露 model.args.{hidden_size,head_dim} 与 model.layers（mlx-lm 约定）。
+    """
+    from .core import _load_state_dict
+
+    info = inspect_state(state_path)
+    expected_layers = len(model.layers)
+    expected_shape = [
+        model.args.hidden_size // model.args.head_dim,
+        model.args.head_dim,
+        model.args.head_dim,
+    ]
+    if not info.rwkv7_compatible:
+        raise ValueError("state 不是连续层号的 RWKV-7 (H,64,64) 格式")
+    if info.layers != expected_layers:
+        raise ValueError(
+            f"state 层数 {info.layers} 与模型层数 {expected_layers} 不匹配"
+        )
+    if any(shape != expected_shape for shape in info.shapes):
+        raise ValueError(
+            f"state shape 与模型不匹配，期望每层 {expected_shape}"
+        )
+    return _load_state_dict(state_path)
+
+
 def doctor_report() -> dict:
     """返回轻量环境报告；单个可选组件失败不会让整个 doctor 崩溃。"""
     report: dict[str, Any] = {

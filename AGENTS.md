@@ -9,9 +9,10 @@
 ## 这是什么项目
 
 Mac 原生的 RWKV-7 **state tuning** 工具。冻结模型全部权重,只训练每层初始状态矩阵 S₀(64×64)。
-当前阶段:P1 完成(CLI + 训练 + 导出),NekoQA 风格迁移已跑通,正在做测试化。
+当前阶段:**P2 已完成**(CLI + 独立推理引擎 + `.pth` 导出就绪),NekoQA 风格迁移已跑通。
 
-**git 分支注意**:`main` 只有 P0 实验;**P1 正式代码在 `p1-statetuner-cli` 分支**(`src/statetuner/` + 根 `tests/` + 根 `pyproject.toml`)。开始工作前先确认分支对。
+**git 分支注意**:正式代码全部在 `main` 分支(`src/statetuner/` + 根 `tests/` + 根 `pyproject.toml`)。
+唯一存活的实验分支是 `exp/precision`(混合精度实验归档),用不到也不要动它。
 
 ---
 

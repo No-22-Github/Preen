@@ -82,6 +82,19 @@ class GenerationResult:
         data["generation_tps"] = self.generation_tps
         return data
 
+    def summary_line(self) -> str:
+        """摘要行的单一事实源（cli.py preview / chat.py 共用）。
+
+        格式对齐 llama.cpp 的 prompt eval / generation 分段：
+          [stop=..., tokens=..., 总耗时 | Prompt: .. t/s | Generation: .. t/s]
+        """
+        return (
+            f"[stop={self.stop_reason}, tokens={self.token_count}, "
+            f"{self.elapsed:.2f}s | "
+            f"Prompt: {self.prompt_tps:.1f} t/s | "
+            f"Generation: {self.generation_tps:.1f} t/s]"
+        )
+
 
 @dataclass(frozen=True)
 class ABResult:

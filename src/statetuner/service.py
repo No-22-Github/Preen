@@ -156,3 +156,103 @@ def run_training(
         final_state_std=result.final_state_std,
         elapsed=result.elapsed,
     )
+
+
+# ── 评估用例 ────────────────────────────────────────────────
+
+# 缺省示例 prompt：无 --data 时的内置演示用例。
+# 属于用例（非 CLI），故放在 service 层；猫娘风格默认对齐 nekoqa 训练分布。
+# 注：模板渲染交给 run_evaluation 按传入 template 统一处理，这里只存原始问题。
+DEFAULT_EVAL_QUESTIONS: tuple[tuple[str, str], ...] = (
+    ("你好呀，宝宝！今天想做什么？", ""),
+    ("主人要出门了，你会怎么做？", ""),
+    ("能教我用尾巴写字吗？", ""),
+)
+
+
+@dataclass(frozen=True)
+class EvaluationRequest:
+    """单次评估 job 的全部输入。engine 由调用方注入（模型已加载）。"""
+
+    engine: object  # InferenceEngine，type 用字符串避免 import 循环
+    state: object  # StateInput（str 路径 / dict / None）
+    template: str
+    config: object  # GenerationConfig
+    data: Optional[Path] = None
+    limit: int = 5
+
+
+@dataclass(frozen=True)
+class EvaluationItem:
+    """单条评估结果（结构化，供文本/JSON 双输出派生）。"""
+
+    index: int
+    question: str
+    reference: str
+    generation: dict  # GenerationResult.to_dict()
+    text: str  # 已 strip 的输出文本
+
+    def to_dict(self) -> dict:
+        return {
+            "index": self.index,
+            "question": self.question,
+            "reference": self.reference,
+            **self.generation,
+            "text": self.text,
+        }
+
+
+@dataclass(frozen=True)
+class EvaluationResult:
+    items: list[EvaluationItem]
+
+    def to_dict(self) -> dict:
+        return {"results": [item.to_dict() for item in self.items]}
+
+
+def validate_evaluation_request(request: EvaluationRequest) -> None:
+    """应用层校验；sidecar/其他客户端不依赖 CLI 也能得到同样保护。"""
+    if request.template not in ("nekoqa", "g1g"):
+        raise ValueError(f"评估模板只支持 nekoqa / g1g，收到 {request.template!r}")
+    if request.data is not None and not request.data.is_file():
+        raise ValueError(f"评估数据不存在: {request.data}")
+    if request.limit <= 0:
+        raise ValueError("limit 必须 > 0")
+    if request.state is None:
+        raise ValueError("评估必须提供 state")
+
+
+def run_evaluation(request: EvaluationRequest) -> EvaluationResult:
+    """对数据集（或内置示例）逐条生成，返回结构化结果。
+
+    编排不感知 Typer：QA 加载、limit 截断、prompt 渲染（按 template）、
+    逐条生成循环、结构化结果组装全部在此完成。CLI/sidecar 只负责模型加载、
+    engine 构造与输出格式化。
+    """
+    validate_evaluation_request(request)
+    from .inference import render_prompt
+    from .inspection import load_qa_pairs
+
+    if request.data is not None:
+        pairs = load_qa_pairs(request.data)
+    else:
+        pairs = list(DEFAULT_EVAL_QUESTIONS)
+
+    items: list[EvaluationItem] = []
+    # 同一 template 同时驱动 prompt 渲染与 stop sequences（已在 config 构造时注入），
+    # 保证渲染与 stops 同源（历史 bug：render_prompt 硬编码 nekoqa）。
+    for i, (question, reference) in enumerate(pairs[: request.limit]):
+        prompt = render_prompt(question, request.template)
+        generated = request.engine.generate(
+            prompt, state=request.state, config=request.config
+        )
+        items.append(
+            EvaluationItem(
+                index=i + 1,
+                question=question,
+                reference=reference,
+                generation=generated.to_dict(),
+                text=generated.text.strip(),
+            )
+        )
+    return EvaluationResult(items=items)

@@ -4,7 +4,12 @@ import pytest
 
 import mlx.core as mx
 
-from statetuner.inference import GenerationConfig, InferenceEngine, render_prompt
+from statetuner.inference import (
+    GenerationConfig,
+    GenerationResult,
+    InferenceEngine,
+    render_prompt,
+)
 from statetuner.templates import G1G, NEKO_QA
 
 
@@ -158,3 +163,25 @@ def test_render_prompt_g1g_aligned_with_official_template():
     assert rendered.startswith("<|rwkv_tokenizer_end_of_text|>")
     # 结尾空 think(告诉模型跳过思考直接答)
     assert rendered.endswith("Assistant: <think>\n</think>")
+
+
+def test_summary_line_format_is_stable():
+    """summary_line() 是 cli.py preview / chat.py 共用的摘要行单一事实源。
+
+    锁定输出格式（对齐 llama.cpp prompt/gen 分段），改动此格式需同步 golden/快照。
+    """
+    result = GenerationResult(
+        text="hi",
+        token_ids=[72, 73],
+        stop_reason="eos",
+        elapsed=1.25,
+        used_state=True,
+        config=GenerationConfig(),
+        prompt_tokens=10,
+        prompt_time=0.5,
+        generation_time=0.75,
+    )
+    assert result.summary_line() == (
+        "[stop=eos, tokens=2, 1.25s | "
+        "Prompt: 20.0 t/s | Generation: 2.7 t/s]"
+    )
