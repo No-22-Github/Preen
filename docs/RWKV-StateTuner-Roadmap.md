@@ -59,18 +59,25 @@
 - **实验脚本**归档于 `experiments/mixed_precision/`(裁决报告 `report_*.md` 本地留档不进 git)。
 
 **对后续阶段的影响:**
-- Phase 2 解除阻塞,可开工。
+- Phase 2 已完成，CLI 与未来 sidecar 共用独立推理 API。
 - Phase 3「低内存模式」(gradient checkpointing):当前非必须——16GB 机器在 L600 安全档内可跑,checkpointing 降优先级。若未来要支持更长样本或更低端机器再启用。
 
 ---
 
-## Phase 2 — 内置推理预览(2~3 天,已解除阻塞)
+## Phase 2 — 内置推理预览 ✅
 
 不内嵌 llama.cpp(不支持挂载外部 init state),用 MLX 模型自己做预览。
 
-- [ ] state 注入 `generate()` 封装(CLI preview --ab 已有,主要是封装)
-- [ ] 采样参数(评估默认 top-p 0.9 轻采样;贪心仅用于可复现对比)
-- [ ] A/B 对比预览
+- [x] 独立 `inference.py`:生成配置、state 注入、停止原因、结构化结果；不感知 CLI/UI
+- [x] 采样参数:temperature / top-p / seed；temperature=0 保留贪心回归路径
+- [x] A/B 对比:同配置/seed 下 tuned state vs 零 state，支持人类文本和 JSON 输出
+- [x] 模型常驻 `chat`:每轮 fresh cache，运行中 `/state` 动态切换 S₀，支持 `/ab`
+- [x] 模板级停止序列:NekoQA 在下一轮 `User:` 角色边界前停止，避免裸生成自问自答
+- [x] stop-aware 流式输出:按解码文本检测并缓冲潜在角色边界前缀，不依赖上下文分词；`chat` 默认流式
+- [x] CLI 检查入口:`doctor` / `data-info` / `state-info`
+
+`core.generate()` 保留为兼容薄包装，现有 NekoQA golden 继续走贪心；CLI 与未来
+sidecar 直接消费 `InferenceEngine` 的结构化结果。
 
 ---
 

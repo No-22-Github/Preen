@@ -2,10 +2,10 @@
 
 P0 实验报告 §三/§七 的修正建议落地于此:
   - 默认 lr 0.01(非 RWKV-PEFT 的 1.0;实测 1.0 导致 state 爆炸 std 7~13)
-  - state std 监控:>1.0 预警(可能爆炸),但不中断训练
+  - state std 监控:每 epoch 记录；健康区间未标定，不设产品告警阈值
   - held-out 早停:每 epoch 在 held-out 上算 loss,连续 N 次不改善则停(废除固定 epoch)
   - checkpoint/中断恢复:存 state + optimizer 状态 + 进度,可断点续训
-  - 结构化事件:全程 EventEmitter 发出 start/step/epoch_end/std_warning/
+  - 结构化事件:全程 EventEmitter 发出 start/step/epoch_end/
     checkpoint/early_stop/final,为 CLI 输出和未来 sidecar IPC 铺路
 
 关键实现点:
@@ -54,7 +54,8 @@ class TrainConfig:
     log_every: int = 10  # 每 N 步发一个 step 事件
 
     # state std 监控
-    max_state_std: float = 1.0  # > 此值发 std_warning(不中断)
+    # 健康区间尚未标定；None = 只记录 std，不做阈值解释。
+    max_state_std: Optional[float] = None
 
     # held-out 早停
     early_stop: bool = True
@@ -255,7 +256,7 @@ class Trainer:
             )
 
             # state std 预警
-            if sstd > cfg.max_state_std:
+            if cfg.max_state_std is not None and sstd > cfg.max_state_std:
                 self.emitter.emit(events.std_warning(epoch, sstd, cfg.max_state_std))
 
             # checkpoint
@@ -396,5 +397,7 @@ def save_state_npz(states: Dict[int, "mx.array"], path: PathLike) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     arrays = {f"layer_{k}": np.array(states[k]) for k in sorted(states)}
-    np.savez(path, **arrays)
+    tmp = path.with_name(path.name + ".tmp.npz")
+    np.savez(tmp, **arrays)
+    tmp.replace(path)
     return path

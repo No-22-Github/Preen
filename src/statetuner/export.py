@@ -115,7 +115,14 @@ def load_pth_as_numpy(path: PathLike, *, reverse_transpose: bool = False) -> Sta
 def load_npz_as_numpy(path: PathLike) -> StateDict:
     """读 npz(P0 内部格式 layer_{i}) → {layer_idx: ndarray}。"""
     data = np.load(Path(path))
-    return {i: np.array(data[f"layer_{i}"]).astype(np.float32) for i in range(len(data.files))}
+    out: StateDict = {}
+    for key in data.files:
+        if not key.startswith("layer_"):
+            continue
+        suffix = key.removeprefix("layer_")
+        if suffix.isdigit():
+            out[int(suffix)] = np.array(data[key]).astype(np.float32)
+    return out
 
 
 def verify_roundtrip(

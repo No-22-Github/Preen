@@ -33,6 +33,8 @@ class TaskTemplate:
     prefix_template: str
     target_template: str
     stop_token: int = 0
+    # 推理时若模型开始生成下一轮角色标记，应在该序列前停止。
+    inference_stop_sequences: tuple[str, ...] = ()
 
     def format_prefix(self, **kwargs) -> str:
         """渲染 prefix 字符串。占位符由 kwargs 提供(如 cn=..., en=...)。"""
@@ -49,6 +51,7 @@ NEKO_QA = TaskTemplate(
     prefix_template="User: {q}\n\nAssistant:",
     target_template=" {a}",
     stop_token=0,
+    inference_stop_sequences=("\nUser:",),
 )
 """NekoQA 问答格式(角色扮演 / QA 任务)。
 

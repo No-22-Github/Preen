@@ -1,4 +1,4 @@
-"""statetuner CLI — train / eval / export / preview 四子命令。
+"""statetuner CLI — 训练、推理、导出与输入检查入口。
 
 这是 P1 的对外入口,也是未来 sidecar IPC 的雏形(每个子命令对应一个 IPC handler)。
 
@@ -10,11 +10,17 @@
   statetuner eval --model MODELS --state state.npz --data test.json
   statetuner export --state state.npz --out state.pth
   statetuner preview --model MODELS --state state.npz --prompt "你好" --ab
+  statetuner doctor
+  statetuner data-info --model MODELS --data DATA.json
+  statetuner state-info --state state.npz
+  statetuner chat --model MODELS --state state.npz
 """
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Optional
+
+import json
 
 import typer
 
@@ -26,15 +32,118 @@ app = typer.Typer(
 )
 
 
+def _bad_input(exc: Exception) -> None:
+    """把可预期的输入错误转成简洁 CLI 错误。"""
+    typer.echo(f"错误: {exc}", err=True)
+    raise typer.Exit(2)
+
+
+@app.command("doctor")
+def doctor(
+    json_output: bool = typer.Option(False, "--json", help="stdout 输出结构化 JSON"),
+):
+    """检查 Python、MLX、Metal 和导出依赖。"""
+    from .inspection import doctor_report
+
+    report = doctor_report()
+    if json_output:
+        typer.echo(json.dumps(report, ensure_ascii=False))
+        return
+    typer.echo(f"Python: {report['python']}")
+    typer.echo(f"平台: {report['platform']} ({report['machine']})")
+    typer.echo(f"Apple Silicon: {'✓' if report['apple_silicon'] else '✗'}")
+    for name in ("mlx", "mlx_lm", "torch", "numpy"):
+        info = report[name]
+        typer.echo(f"{name}: {'✓ ' + info.get('version', '') if info['ok'] else '✗ ' + info['error']}")
+    typer.echo(f"Metal: {'✓' if report.get('metal_available') else '✗'}")
+    if report.get("metal_available"):
+        typer.echo(
+            f"内存: physical={report.get('memory_size_gb', 0):.2f}G "
+            f"working_set={report.get('working_set_gb', 0):.2f}G"
+        )
+
+
+@app.command("data-info")
+def data_info(
+    model: Path = typer.Option(..., "--model", "-m", help="HF 模型目录(tokenizer 来源)"),
+    data: Path = typer.Option(..., "--data", "-d", help="NekoQA JSON/JSONL"),
+    ctx_len: int = typer.Option(512, "--ctx-len"),
+    json_output: bool = typer.Option(False, "--json", help="stdout 输出结构化 JSON"),
+):
+    """用真实 tokenizer 检查数据字段、长度与截断情况。"""
+    if not model.is_dir():
+        _bad_input(ValueError(f"模型目录不存在: {model}"))
+    if not data.is_file():
+        _bad_input(ValueError(f"数据文件不存在: {data}"))
+    if ctx_len <= 0:
+        _bad_input(ValueError("--ctx-len 必须 > 0"))
+
+    from .inspection import inspect_data
+    from mlx_lm.utils import load_tokenizer
+
+    typer.echo(f"# 加载 tokenizer: {model}", err=True)
+    try:
+        tok = load_tokenizer(
+            str(model), tokenizer_config_extra={"trust_remote_code": True}
+        )
+        result = inspect_data(data, tok, ctx_len=ctx_len)
+    except (OSError, ValueError, TypeError) as exc:
+        _bad_input(exc)
+    payload = result.to_dict()
+    if json_output:
+        typer.echo(json.dumps(payload, ensure_ascii=False))
+        return
+    typer.echo(f"数据: {result.path}")
+    typer.echo(
+        f"样本: total={result.total} valid={result.valid} "
+        f"empty_q={result.skipped_empty_question} empty_a={result.skipped_empty_answer}"
+    )
+    typer.echo(
+        f"tokens: min={result.min_tokens} mean={result.mean_tokens:.1f} "
+        f"p95={result.p95_tokens:.1f} max={result.max_tokens}"
+    )
+    typer.echo(
+        f"ctx={result.ctx_len}: truncated={result.truncated} "
+        f"target_fully_truncated={result.target_fully_truncated}"
+    )
+
+
+@app.command("state-info")
+def state_info(
+    state: Path = typer.Option(..., "--state", "-s", help="state npz/pth"),
+    json_output: bool = typer.Option(False, "--json", help="stdout 输出结构化 JSON"),
+):
+    """检查 state 格式、层号、shape、dtype 与 std。"""
+    from .inspection import inspect_state
+
+    try:
+        result = inspect_state(state)
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        _bad_input(exc)
+    payload = result.to_dict()
+    if json_output:
+        typer.echo(json.dumps(payload, ensure_ascii=False))
+        return
+    typer.echo(f"state: {result.path} ({result.format})")
+    typer.echo(
+        f"layers={result.layers} continuous={'yes' if result.continuous_layers else 'no'} "
+        f"rwkv7_compatible={'yes' if result.rwkv7_compatible else 'no'}"
+    )
+    typer.echo(f"shapes={result.shapes} dtypes={result.dtypes}")
+    typer.echo(
+        f"std: min={result.std_min:.6f} mean={result.std_mean:.6f} max={result.std_max:.6f}"
+    )
+
+
 @app.command()
 def train(
     model: Path = typer.Option(..., "--model", "-m", help="转换后的 HF 模型目录"),
-    data: Path = typer.Option(..., "--data", "-d", help="训练数据 jsonl"),
+    data: Path = typer.Option(..., "--data", "-d", help="训练数据 JSON/JSONL"),
     test_data: Optional[Path] = typer.Option(
         None, "--test-data", help="held-out 数据(早停用);缺省则从 train 划分"
     ),
     out: Path = typer.Option(
-        Path("state.npz"), "--out", "-o", help="输出 state(npz,P0 内部格式)"
+        Path("state.npz"), "--out", "-o", help="输出训练 state(.npz)"
     ),
     lr: float = typer.Option(0.01, "--lr", help="学习率(默认 0.01,P0 实测;1.0 会爆炸)"),
     lr_floor: float = typer.Option(1e-4, "--lr-floor", help="cosine 衰减终点"),
@@ -42,9 +151,6 @@ def train(
     ctx_len: int = typer.Option(512, "--ctx-len", help="上下文长度"),
     epochs: int = typer.Option(20, "--epochs", help="epoch 数(配早停后是上限)"),
     grad_clip: float = typer.Option(1.0, "--grad-clip"),
-    max_state_std: float = typer.Option(
-        1.0, "--max-state-std", help="state std 预警阈值(>此值发 warning,不中断)"
-    ),
     early_stop: bool = typer.Option(True, "--early-stop/--no-early-stop", help="held-out 早停"),
     patience: int = typer.Option(3, "--patience", help="早停耐心(连续 N 次不改善则停)"),
     test_ratio: float = typer.Option(0.1, "--test-ratio", help="无 --test-data 时从 train 划分比例"),
@@ -63,60 +169,72 @@ def train(
     seed: int = typer.Option(42, "--seed"),
 ):
     """训练 state tuning。事件流输出到 stdout(JSON lines)。"""
+    if not model.is_dir():
+        _bad_input(ValueError(f"模型目录不存在: {model}"))
+    if not data.is_file():
+        _bad_input(ValueError(f"训练数据不存在: {data}"))
+    if test_data is not None and not test_data.is_file():
+        _bad_input(ValueError(f"held-out 数据不存在: {test_data}"))
+    if lr <= 0:
+        _bad_input(ValueError("--lr 必须 > 0"))
+    if lr_floor <= 0 or lr_floor > lr:
+        _bad_input(ValueError("--lr-floor 必须 > 0 且 <= --lr"))
+    if warmup < 0 or ctx_len <= 0 or epochs <= 0 or grad_clip <= 0:
+        _bad_input(ValueError("warmup/ctx-len/epochs/grad-clip 参数范围非法"))
+    if not 0 < test_ratio < 1:
+        _bad_input(ValueError("--test-ratio 必须在 (0, 1) 范围内"))
+    if patience <= 0 or checkpoint_every <= 0:
+        _bad_input(ValueError("--patience 和 --checkpoint-every 必须 > 0"))
+    if pth_out is not None and not export_pth:
+        _bad_input(ValueError("--pth-out 必须配合 --export-pth"))
+
     import mlx.core as mx
 
     from . import events
-    from .core import load_model
-    from .data import load_qa_dataset, train_test_split
-    from .train import Trainer, TrainConfig, save_state_npz
+    from .service import TrainingRequest, run_training
+    from .train import TrainConfig
 
     if template != "nekoqa":
         raise typer.BadParameter(
             f"--template 当前只支持 nekoqa, 收到 {template!r}"
         )
 
-    # 加载模型(patch ops 路径,训练用)
-    model_path = str(model)
-    typer.echo(f"# 加载模型 {model_path} (patch ops 路径, template={template})", err=True)
-    mdl, tok = load_model(model_path, patch=True)
-    mdl.freeze()
-
-    samples = load_qa_dataset(data, tok, max_len=ctx_len)
-    typer.echo(f"# 训练样本: {len(samples)} 条 (template={template})", err=True)
-
-    held_out = None
-    if early_stop:
-        if test_data is not None:
-            held_out = load_qa_dataset(test_data, tok, max_len=ctx_len)
-            typer.echo(f"# held-out: {len(held_out)} 条 (来自 {test_data})", err=True)
-        else:
-            samples, held_out = train_test_split(samples, test_ratio=test_ratio, seed=seed)
-            typer.echo(f"# held-out: {len(held_out)} 条 (从 train 划分 {test_ratio:.0%})", err=True)
-
     cfg = TrainConfig(
         lr=lr, lr_floor=lr_floor, warmup=warmup, ctx_len=ctx_len, epochs=epochs,
-        grad_clip=grad_clip, max_state_std=max_state_std,
+        # std 健康区间未标定：只记录，不使用旧 1.0 阈值报警。
+        grad_clip=grad_clip, max_state_std=None,
         early_stop=early_stop, early_stop_patience=patience,
         checkpoint_dir=checkpoint_dir, checkpoint_every=checkpoint_every,
         resume=resume, seed=seed,
     )
 
+    request = TrainingRequest(
+        model=model,
+        data=data,
+        out=out,
+        train_config=cfg,
+        template=template,
+        test_data=test_data,
+        test_ratio=test_ratio,
+        export_pth=export_pth,
+        pth_out=pth_out,
+    )
+
+    def _status(message: str) -> None:
+        typer.echo(f"# {message}", err=True)
+
     with events.EventEmitter(file=events_file) as em:
-        trainer = Trainer(mdl, cfg, em)
-        result = trainer.train(samples, held_out)
-
-    # 存 npz
-    save_state_npz(result.states, out)
-    typer.echo(f"# state → {out} (std={result.final_state_std:.4f})", err=True)
-
-    # 可选导出 pth
-    if export_pth:
-        from .export import export_pth as _export, verify_roundtrip
-
-        pth_path = pth_out or out.with_suffix(".pth")
-        _export({i: result.states[i] for i in result.states}, pth_path)
-        ok, msg = verify_roundtrip({i: result.states[i] for i in result.states}, pth_path)
-        typer.echo(f"# pth → {pth_path} ({'OK' if ok else 'WARN'}: {msg})", err=True)
+        try:
+            result = run_training(request, em, status=_status)
+        except KeyboardInterrupt:
+            em.emit(events.cancelled())
+            raise typer.Exit(130)
+        except typer.Exit:
+            raise
+        except Exception as exc:
+            em.emit(events.failed(str(exc), path=str(out)))
+            typer.echo(f"错误: {exc}", err=True)
+            raise typer.Exit(1) from None
 
     peak = float(mx.get_peak_memory()) / 1e9
     typer.echo(
@@ -135,39 +253,58 @@ def eval(
         None, "--data", "-d", help="评估数据(jsonl 或 json 数组);缺省用内置示例"
     ),
     max_tokens: int = typer.Option(70, "--max-tokens"),
+    temperature: float = typer.Option(0.8, "--temperature", help="采样温度;0=贪心"),
+    top_p: float = typer.Option(0.9, "--top-p", help="nucleus sampling 阈值"),
+    seed: int = typer.Option(42, "--seed", help="采样随机种子"),
     template: str = typer.Option(
         "nekoqa", "--template",
         help="任务模板: nekoqa(角色扮演 QA,默认)",
     ),
     limit: int = typer.Option(5, "--limit", help="最多输出条数(默认 5)"),
+    json_output: bool = typer.Option(False, "--json", help="stdout 输出结构化 JSON"),
 ):
     """评估:对数据集逐条生成(state 注入),输出结果。
 
     prompt 从 templates 派生(与训练 encode 路径同源,保证编码同构)。
     """
-    import json
-
-    from .core import generate, load_model
-    from .data import load_jsonl
-
     if template != "nekoqa":
         raise typer.BadParameter(
             f"--template 当前只支持 nekoqa, 收到 {template!r}"
         )
+    if not model.is_dir():
+        _bad_input(ValueError(f"模型目录不存在: {model}"))
+    if not state.is_file():
+        _bad_input(ValueError(f"state 文件不存在: {state}"))
+    if data is not None and not data.is_file():
+        _bad_input(ValueError(f"评估数据不存在: {data}"))
+    if max_tokens <= 0 or temperature < 0 or not 0 < top_p <= 1:
+        _bad_input(ValueError("max-tokens/temperature/top-p 参数范围非法"))
+    if limit <= 0:
+        raise typer.BadParameter("--limit 必须 > 0")
+
+    from .core import load_model
+    from .inference import (
+        GenerationConfig, InferenceEngine, render_prompt, with_template_stops,
+    )
+    from .inspection import load_qa_pairs
+
+    cfg = with_template_stops(
+        GenerationConfig(
+            max_tokens=max_tokens, temperature=temperature, top_p=top_p, seed=seed
+        ),
+        "nekoqa",
+    )
 
     typer.echo(f"# 加载模型 {model} (kernel 路径, template={template})", err=True)
     mdl, tok = load_model(model, patch=False)
+    engine = InferenceEngine(mdl, tok)
 
     # 构造 (问题, 参考) 对列表
     if data is not None:
-        dpath = Path(data)
-        if dpath.suffix == ".json":
-            with open(dpath, encoding="utf-8") as f:
-                items = json.load(f)
-            items = items if isinstance(items, list) else [items]
-        else:
-            items = load_jsonl(dpath)
-        pairs = [(it.get("instruction", ""), it.get("output", "")) for it in items]
+        try:
+            pairs = load_qa_pairs(data)
+        except (OSError, ValueError, TypeError) as exc:
+            _bad_input(exc)
     else:
         pairs = [
             ("你好呀，宝宝！今天想做什么？", ""),
@@ -175,17 +312,27 @@ def eval(
             ("能教我用尾巴写字吗？", ""),
         ]
 
-    from .templates import NEKO_QA
-
+    results = []
     for i, (q, ref) in enumerate(pairs[:limit]):
-        prompt = NEKO_QA.format_prefix(q=q)
-        out = generate(mdl, tok, prompt, state=str(state), max_tokens=max_tokens)
-        out = out.strip()
+        prompt = render_prompt(q, "nekoqa")
+        generated = engine.generate(prompt, state=str(state), config=cfg)
+        out = generated.text.strip()
+        results.append({
+            "index": i + 1,
+            "question": q,
+            "reference": ref,
+            **generated.to_dict(),
+            "text": out,
+        })
+        if json_output:
+            continue
         typer.echo(f"[{i+1}] {q}")
         if ref:
             typer.echo(f"    REF: {ref[:100]}")
         typer.echo(f"    OUT: {out[:300]}")
         typer.echo()
+    if json_output:
+        typer.echo(json.dumps({"results": results}, ensure_ascii=False))
 
 
 @app.command()
@@ -195,6 +342,12 @@ def export(
     verify: bool = typer.Option(True, "--verify/--no-verify", help="导出后 round-trip 验证"),
 ):
     """npz → RWKV Runner 可挂载的 .pth。"""
+    if not state.is_file():
+        _bad_input(ValueError(f"state 文件不存在: {state}"))
+    if state.suffix.lower() != ".npz":
+        _bad_input(ValueError("export 的 --state 必须是 .npz"))
+    out.parent.mkdir(parents=True, exist_ok=True)
+
     from .export import export_pth as _export, load_npz_as_numpy, verify_roundtrip
 
     typer.echo(f"# 读取 {state}", err=True)
@@ -211,6 +364,106 @@ def export(
 
 
 @app.command()
+def chat(
+    model: Path = typer.Option(..., "--model", "-m", help="HF 模型目录"),
+    state: Optional[Path] = typer.Option(None, "--state", "-s", help="初始 state(npz/pth)"),
+    max_tokens: int = typer.Option(200, "--max-tokens", help="单轮最大生成 token"),
+    temperature: float = typer.Option(0.8, "--temperature", help="采样温度;0=贪心"),
+    top_p: float = typer.Option(0.9, "--top-p"),
+    seed: int = typer.Option(42, "--seed"),
+    ab: bool = typer.Option(False, "--ab", help="启动时开启 A/B"),
+    stream: bool = typer.Option(True, "--stream/--no-stream", help="逐步输出生成文本"),
+    template: str = typer.Option("nekoqa", "--template", help="raw | nekoqa"),
+):
+    """模型常驻的交互模式；支持运行中动态切换 state。"""
+    if not model.is_dir():
+        _bad_input(ValueError(f"模型目录不存在: {model}"))
+    if state is not None and not state.is_file():
+        _bad_input(ValueError(f"state 文件不存在: {state}"))
+    if template not in ("raw", "nekoqa"):
+        _bad_input(ValueError("--template 只支持 raw / nekoqa"))
+    if max_tokens <= 0 or temperature < 0 or not 0 < top_p <= 1:
+        _bad_input(ValueError("max-tokens/temperature/top-p 参数范围非法"))
+    if ab and state is None:
+        _bad_input(ValueError("--ab 必须同时提供 --state"))
+
+    from .chat import ChatSession
+    from .core import load_model
+    from .inference import GenerationConfig, InferenceEngine
+    from .inspection import inspect_state
+
+    typer.echo(f"# 加载模型 {model}（模型将在会话期间常驻）", err=True)
+    mdl, tok = load_model(model, patch=False)
+    engine = InferenceEngine(mdl, tok)
+    expected_layers = len(mdl.layers)
+    expected_shape = [
+        mdl.args.hidden_size // mdl.args.head_dim,
+        mdl.args.head_dim,
+        mdl.args.head_dim,
+    ]
+
+    def _load_checked(path: Path):
+        info = inspect_state(path)
+        if not info.rwkv7_compatible:
+            raise ValueError("state 不是连续层号的 RWKV-7 (H,64,64) 格式")
+        if info.layers != expected_layers:
+            raise ValueError(
+                f"state 层数 {info.layers} 与模型层数 {expected_layers} 不匹配"
+            )
+        if any(shape != expected_shape for shape in info.shapes):
+            raise ValueError(
+                f"state shape 与模型不匹配，期望每层 {expected_shape}"
+            )
+        return engine.load_state(path)
+
+    loaded_state = None
+    if state is not None:
+        try:
+            loaded_state = _load_checked(state)
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            _bad_input(exc)
+
+    session = ChatSession(
+        engine,
+        config=GenerationConfig(
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            seed=seed,
+        ),
+        template=template,
+        state=loaded_state,
+        state_label=str(state) if state else None,
+        state_loader=_load_checked,
+        ab=ab,
+    )
+
+    typer.echo("交互模式已启动。每轮从当前 S₀ 重新开始；输入 /help 查看命令。")
+    typer.echo(session.config_line())
+    while True:
+        try:
+            line = input("You> ")
+        except (EOFError, KeyboardInterrupt):
+            typer.echo("\n会话结束。")
+            break
+        use_stream = stream and not session.ab and not line.lstrip().startswith("/")
+        if use_stream:
+            typer.echo("Neko> ", nl=False)
+
+            def _on_text(chunk: str) -> None:
+                typer.echo(chunk, nl=False)
+
+            reply = session.handle(line, on_text=_on_text)
+            typer.echo()
+        else:
+            reply = session.handle(line)
+        for output_line in reply.lines:
+            typer.echo(output_line)
+        if reply.exit:
+            break
+
+
+@app.command()
 def preview(
     model: Path = typer.Option(..., "--model", "-m", help="HF 模型目录"),
     state: Optional[Path] = typer.Option(
@@ -218,51 +471,93 @@ def preview(
     ),
     prompt: str = typer.Option(..., "--prompt", "-p", help="输入文本(问题/中文)"),
     max_tokens: int = typer.Option(80, "--max-tokens"),
+    temperature: float = typer.Option(0.0, "--temperature", help="采样温度;0=贪心"),
+    top_p: float = typer.Option(0.9, "--top-p", help="nucleus sampling 阈值"),
+    seed: int = typer.Option(42, "--seed", help="采样随机种子"),
     ab: bool = typer.Option(False, "--ab", help="A/B 对比:有 state vs 无 state 双输出"),
     template: str = typer.Option(
         "raw", "--template",
         help="包装 prompt 的模板: raw(原样,默认) | nekoqa",
     ),
+    json_output: bool = typer.Option(False, "--json", help="stdout 输出结构化 JSON"),
+    stream: bool = typer.Option(False, "--stream", help="逐步输出单路生成文本"),
 ):
-    """预览:注入 state 贪心生成。--ab 做 A/B 对比。
+    """预览:注入 state 生成。--ab 做 A/B 对比，temperature=0 时为贪心。
 
     --template nekoqa 会把 --prompt 包成 "User: {prompt}\\n\\nAssistant:";
     raw 原样传入。
     """
-    from .core import generate, load_model
-    from .templates import NEKO_QA
-
     if template not in ("raw", "nekoqa"):
         raise typer.BadParameter(
             f"--template 只支持 raw / nekoqa, 收到 {template!r}"
         )
+    if ab and state is None:
+        raise typer.BadParameter("--ab 必须同时提供 --state")
+    if stream and (ab or json_output):
+        raise typer.BadParameter("--stream 不能与 --ab / --json 同时使用")
+    if not model.is_dir():
+        _bad_input(ValueError(f"模型目录不存在: {model}"))
+    if state is not None and not state.is_file():
+        _bad_input(ValueError(f"state 文件不存在: {state}"))
+    if not prompt:
+        _bad_input(ValueError("--prompt 不能为空"))
+    if max_tokens <= 0 or temperature < 0 or not 0 < top_p <= 1:
+        _bad_input(ValueError("max-tokens/temperature/top-p 参数范围非法"))
+
+    from .core import load_model
+    from .inference import (
+        GenerationConfig, InferenceEngine, render_prompt, with_template_stops,
+    )
+
+    cfg = with_template_stops(
+        GenerationConfig(
+            max_tokens=max_tokens, temperature=temperature, top_p=top_p, seed=seed
+        ),
+        template,
+    )
 
     # 按模板包装 prompt(与训练/eval 同源)
-    if template == "nekoqa":
-        wrapped = NEKO_QA.format_prefix(q=prompt)
-    else:
-        wrapped = prompt
+    wrapped = render_prompt(prompt, template)
 
     typer.echo(f"# 加载模型 {model} (template={template})", err=True)
     mdl, tok = load_model(model, patch=False)
+    engine = InferenceEngine(mdl, tok)
 
     if ab:
+        result = engine.compare(wrapped, state=str(state), config=cfg)
+        if json_output:
+            typer.echo(json.dumps(result.to_dict(), ensure_ascii=False))
+            return
         typer.echo("=== 有 state ===")
-        if state is not None:
-            out_s = generate(mdl, tok, wrapped, state=str(state), max_tokens=max_tokens)
-            typer.echo(out_s)
-        else:
-            typer.echo("(未提供 --state)")
-        typer.echo("=== 无 state(基线)===")
-        out_n = generate(mdl, tok, wrapped, state=None, max_tokens=max_tokens)
-        typer.echo(out_n)
-    else:
-        out = generate(
-            mdl, tok, wrapped,
-            state=(str(state) if state else None),
-            max_tokens=max_tokens,
+        typer.echo(result.with_state.text)
+        typer.echo(
+            f"[stop={result.with_state.stop_reason}, tokens={result.with_state.token_count}]"
         )
-        typer.echo(out)
+        typer.echo("=== 无 state(基线)===")
+        typer.echo(result.baseline.text)
+        typer.echo(
+            f"[stop={result.baseline.stop_reason}, tokens={result.baseline.token_count}]"
+        )
+    else:
+        callback = None
+        if stream:
+            def callback(chunk: str) -> None:
+                typer.echo(chunk, nl=False)
+
+        result = engine.generate(
+            wrapped,
+            state=(str(state) if state else None),
+            config=cfg,
+            on_text=callback,
+        )
+        if json_output:
+            typer.echo(json.dumps(result.to_dict(), ensure_ascii=False))
+        elif stream:
+            typer.echo()
+            typer.echo(f"[stop={result.stop_reason}, tokens={result.token_count}]")
+        else:
+            typer.echo(result.text)
+            typer.echo(f"[stop={result.stop_reason}, tokens={result.token_count}]")
 
 
 if __name__ == "__main__":

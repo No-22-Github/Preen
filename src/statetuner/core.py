@@ -16,7 +16,7 @@ state 语义(导出 .pth 时的关键依据):
 本模块三件事:
   1. patch_rwkv7_for_train: monkeypatch Rwkv7TimeMixing._wkv7 强制走 ops 循环。
   2. state 构造/注入: make_state_params / build_state_cache / forward_with_state。
-  3. 推理: generate(支持 dict / npz 路径 / pth 路径 / None)。
+  3. 兼容推理入口:generate；完整推理 API 见 inference.py。
 """
 from __future__ import annotations
 
@@ -134,11 +134,7 @@ def compute_loss(model, batch, states: Dict[int, "mx.array"]):
 
 
 def state_std(states: Dict[int, "mx.array"]) -> float:
-    """各层 state std 的均值,用于训练时监控是否数值爆炸。
-
-    P0 实测:正常推理 state std ~0.01~0.23;lr=1.0 训练会涨到 7~13(爆炸)。
-    >1.0 视为异常,train.py 据此发 std_warning。
-    """
+    """各层 state std 的均值，仅作训练观测；健康阈值尚未标定。"""
     stds = [float(np.array(states[i]).std()) for i in sorted(states)]
     return float(np.mean(stds)) if stds else 0.0
 
@@ -150,8 +146,7 @@ def _load_state_dict(state: StateInput) -> Optional[Dict[int, "mx.array"]]:
       None                       → None(模型默认零 state)
       dict[int, mx.array]        → 原样
       npz 路径(P0 内部格式 layer_{i}) → 读 npz
-      pth 路径(RWKV-PEFT 格式 blocks.{i}.att.time_state)→ 读 pth 并 transpose(1,2)
-        注: pth 里存的是 transpose 后的, 加载要转回来还原成 MLX 方向的 S
+      pth 路径(RWKV-PEFT 格式 blocks.{i}.att.time_state)→ 按 x070 原样读回
     """
     if state is None:
         return None
@@ -164,8 +159,10 @@ def _load_state_dict(state: StateInput) -> Optional[Dict[int, "mx.array"]]:
 
     if path.suffix == ".npz":
         # P0 内部格式: layer_{i}
-        data = np.load(path)
-        return {i: mx.array(data[f"layer_{i}"]) for i in range(len(data.files))}
+        from .export import load_npz_as_numpy
+
+        raw = load_npz_as_numpy(path)
+        return {i: mx.array(arr) for i, arr in raw.items()}
 
     if path.suffix == ".pth":
         # RWKV-7 (x070) 格式: blocks.{i}.att.time_state, 原样存训练方向(Runner 不转置)
@@ -185,33 +182,23 @@ def generate(
     state: StateInput = None,
     max_tokens: int = 80,
 ) -> str:
-    """注入 state 做贪心生成。
+    """兼容入口：注入 state 做贪心生成并仅返回文本。
 
     state:
       None              → 模型默认零 state(基线)
       dict / npz 路径   → 直接注入
-      pth 路径          → 读回并 transpose 还原后注入
+      pth 路径          → 按 RWKV-7 x070 原样读回后注入
     贪心解码(argmax),遇 eos(token 0)停止。eos 本身不解码进输出
     (旧实现把 eos append 进结果,导致输出末尾出现 <|...end_of_text|> 字面量)。
     """
-    state_dict = _load_state_dict(state)
+    from .inference import GenerationConfig, InferenceEngine
 
-    if state_dict is not None:
-        caches = build_state_cache(state_dict, batch_size=1)
-    else:
-        caches = model.make_cache()
-
-    prompt_ids = tokenizer.encode(prompt)
-    input_ids = mx.array([prompt_ids])
-    generated = []
-    for _ in range(max_tokens):
-        logits = model(input_ids, caches)
-        next_token = int(mx.argmax(logits[0, -1], axis=-1))
-        if next_token == 0:  # eos:停下,且不把 eos 解码进输出
-            break
-        generated.append(next_token)
-        input_ids = mx.array([[next_token]])
-    return tokenizer.decode(generated)
+    result = InferenceEngine(model, tokenizer).generate(
+        prompt,
+        state=state,
+        config=GenerationConfig(max_tokens=max_tokens, temperature=0.0),
+    )
+    return result.text
 
 
 def load_model(model_path: Union[str, Path], *, patch: bool = False):

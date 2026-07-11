@@ -10,10 +10,13 @@
   epoch_start    epoch 开始
   step           一个训练步(按 log_every 抽样)
   epoch_end      epoch 结束,带平均 loss / state_std / lr
-  std_warning    state std 超阈值(可能爆炸,不中断)
+  std_warning    兼容旧实验的可选阈值事件(产品默认不启用)
   checkpoint     存了 checkpoint
   early_stop     held-out 早停触发
-  final          训练结束,带最终 state 路径 / 总耗时
+  final          Trainer 计算结束(产物可能尚未落盘)
+  completed      CLI job 必需产物均已落盘
+  failed         CLI job 失败
+  cancelled      用户取消
 
 字段全部是原生类型(str/int/float/bool/list/dict),json.dumps 直接序列化。
 """
@@ -83,7 +86,9 @@ class EventEmitter:
         if file is not None:
             # 覆盖写(非追加):每次训练是一个独立事件流,重跑应清空旧事件,
             # 否则不同训练的 epoch/step 会混在同一文件里造成误读。
-            self._file = open(file, "w", encoding="utf-8")
+            file_path = Path(file)
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            self._file = open(file_path, "w", encoding="utf-8")
             self._owns_file = True
         self._stream = None if quiet else (stream if stream is not None else sys.stdout)
         self._callbacks: List[Callable[[Event], None]] = (
@@ -192,3 +197,16 @@ def early_stop(epoch: int, best: float, held_out_loss: float) -> Event:
 
 def final(path: str, elapsed: float, best: Optional[float] = None) -> Event:
     return Event(type="final", path=path, elapsed=elapsed, best=best)
+
+
+def completed(path: str, elapsed: float, message: Optional[str] = None) -> Event:
+    """整个 CLI job 的必需产物均已落盘。"""
+    return Event(type="completed", path=path, elapsed=elapsed, message=message)
+
+
+def failed(message: str, path: Optional[str] = None) -> Event:
+    return Event(type="failed", path=path, message=message)
+
+
+def cancelled(message: str = "用户取消") -> Event:
+    return Event(type="cancelled", message=message)
