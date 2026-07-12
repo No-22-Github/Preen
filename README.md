@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="Preen_title.png" alt="Preen — RWKV Fine-Tuning Studio" width="720">
+</p>
+
 # Preen — RWKV-7 State Tuning for Mac
 
 > 在 Mac 上给 RWKV-7 做 state tuning 的工具。目标形态是一个 SwiftUI 应用:
