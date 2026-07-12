@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import time
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from typing import Callable, Literal, Optional
 
 import mlx.core as mx
@@ -36,7 +36,15 @@ TextCallback = Callable[[str], None]
 
 @dataclass(frozen=True)
 class GenerationConfig:
-    """单次生成配置。temperature=0 保持可复现的贪心解码。"""
+    """单次生成配置。temperature=0 保持可复现的贪心解码。
+
+    重复惩罚(对齐 ChatRWKV 官方 v2/chat.py 的 occurrence penalty):
+      presence_penalty:  对已出现过的 token 施加固定惩罚(官方默认 0.4)。
+      frequency_penalty:  按出现次数累加惩罚(官方默认 0.4)。
+      penalty_decay:      每步对历史计数做指数衰减(官方默认 0.996),
+                          老的 token 惩罚递减,避免过度抑制早期内容。
+      三者都为 0 时无惩罚(贪心/纯采样)。
+    """
 
     max_tokens: int = 80
     temperature: float = 0.0
@@ -44,6 +52,15 @@ class GenerationConfig:
     seed: int = 42
     eos_token: int = 0
     stop_sequences: tuple[str, ...] = ()
+    # 重复惩罚(ChatRWKV 官方语义,默认值对齐官方推荐)
+    presence_penalty: float = 0.4
+    frequency_penalty: float = 0.4
+    penalty_decay: float = 0.996
+
+    @property
+    def has_penalty(self) -> bool:
+        """是否启用重复惩罚(任一参数非零)。"""
+        return self.presence_penalty > 0 or self.frequency_penalty > 0
 
     def validate(self) -> None:
         if self.max_tokens <= 0:
@@ -52,12 +69,30 @@ class GenerationConfig:
             raise ValueError("temperature 必须 >= 0")
         if not 0 < self.top_p <= 1:
             raise ValueError("top_p 必须在 (0, 1] 范围内")
+        if self.presence_penalty < 0:
+            raise ValueError("presence_penalty 必须 >= 0")
+        if self.frequency_penalty < 0:
+            raise ValueError("frequency_penalty 必须 >= 0")
+        if not 0 < self.penalty_decay <= 1:
+            raise ValueError("penalty_decay 必须在 (0, 1] 范围内")
 
 
 @dataclass(frozen=True)
 class GenerationResult:
+    """单次生成的结果(Phase 3 §2 多轮改造)。
+
+    token 账本拆分(§2.3):
+      display_token_ids: 干净展示文本对应的 token(旧 token_ids 改名,不含角色边界/污染)。
+      fed_token_ids:     实际走过前向的完整 token 序列(含 stop_sequence 污染部分)。
+        - eos/max_tokens 停止:fed == display(eos 不进 cache)
+        - stop_sequence 停止:fed ⊃ display(污染 token 已进 cache)
+
+    cache 字段(§2.4):
+      cache:       前向结束后的 running cache,供下轮续传传入。None = 未产出(重放场景)。
+      cache_clean: cache 洁净性(§2.2)。eos/max_tokens 干净可续传;stop_sequence 脏需重放。
+    """
     text: str
-    token_ids: list[int]
+    display_token_ids: list[int]
     stop_reason: StopReason
     elapsed: float
     used_state: bool
@@ -66,14 +101,17 @@ class GenerationResult:
     #   prompt_time        = 首次前向(整个 prompt 并行 prefill)耗时
     #   generation_time    = 后续逐 token 串行 decode 耗时(不含 prefill)
     #   elapsed            = 总耗时 ≈ prompt_time + generation_time
-    # 字段都带默认值，旧的构造点(tests/FakeEngine)无需改动。
     prompt_tokens: int = 0
     prompt_time: float = 0.0
     generation_time: float = 0.0
+    # Phase 3 §2 新增字段(带默认值,旧的无多轮构造点零改动)
+    fed_token_ids: list[int] = field(default_factory=list)
+    cache: object = None
+    cache_clean: bool = True
 
     @property
     def token_count(self) -> int:
-        return len(self.token_ids)
+        return len(self.display_token_ids)
 
     @property
     def prompt_tps(self) -> float:
@@ -94,6 +132,9 @@ class GenerationResult:
         data["token_count"] = self.token_count
         data["prompt_tps"] = self.prompt_tps
         data["generation_tps"] = self.generation_tps
+        # cache 是不透明的模型对象,不可序列化;to_dict 用于 JSON 输出(serve/CLI),
+        # 这里排除 cache 字段,只保留可序列化的审计字段。
+        data.pop("cache", None)
         return data
 
     def summary_line(self) -> str:
@@ -220,18 +261,32 @@ class InferenceEngine:
         prompt: str,
         *,
         state: StateInput = None,
+        cache=None,
         config: Optional[GenerationConfig] = None,
         on_text: Optional[TextCallback] = None,
     ) -> GenerationResult:
+        """单次生成。
+
+        Phase 3 §2 多轮改造:
+          cache=None  → 按 state 新建 running cache(零 state 走 model.make_cache())
+          cache=<obj> → 续传:复用传入的 cache,只 prefill 新 prompt
+        返回的 GenerationResult.cache 是前向结束后的 cache,供下轮续传。
+        cache_clean(§2.2):eos/max_tokens 干净可续传;stop_sequence 脏需重放。
+        """
         cfg = config or GenerationConfig()
         cfg.validate()
 
-        state_dict = _load_state_dict(state)
-        caches = (
-            build_state_cache(state_dict, batch_size=1)
-            if state_dict is not None
-            else self.model.make_cache()
-        )
+        # cache 续传优先:传入 cache 则复用,否则按 state 新建。
+        # state 仍要传入(用于 used_state 标记 + 续传场景下 state 已固化为 cache)。
+        if cache is not None:
+            caches = cache
+        else:
+            state_dict = _load_state_dict(state)
+            caches = (
+                build_state_cache(state_dict, batch_size=1)
+                if state_dict is not None
+                else self.model.make_cache()
+            )
 
         prompt_ids = self.tokenizer.encode(prompt)
         if not prompt_ids:
@@ -245,11 +300,14 @@ class InferenceEngine:
             sampler = make_sampler(temp=cfg.temperature, top_p=cfg.top_p)
 
         input_ids = mx.array([prompt_ids])
-        generated: list[int] = []
+        generated: list[int] = []          # 展示文本对应的 token(干净)
+        fed_token_ids: list[int] = []      # 实际喂入前向的完整 token(含污染,§2.3)
         stop_reason: StopReason = "max_tokens"
         emitted_text = ""
         final_text = ""
         t0 = time.time()
+        # 重复惩罚 occurrence 表(ChatRWKV 官方语义): {token_id: 衰减后计数}
+        occurrence: dict[int, float] = {}
 
         def emit_safe_text(safe_text: str) -> None:
             nonlocal emitted_text
@@ -296,6 +354,11 @@ class InferenceEngine:
         for step in range(cfg.max_tokens):
             t_step_start = time.time()
             logits = self.model(input_ids, caches)[0, -1]
+            # 重复惩罚(ChatRWKV 官方语义):对已出现 token 施加
+            # -(presence + count*frequency) 到 logits 上。贪心/采样路径都生效。
+            if cfg.has_penalty and occurrence:
+                for tok_id, cnt in occurrence.items():
+                    logits[tok_id] -= cfg.presence_penalty + cnt * cfg.frequency_penalty
             if sampler is None:
                 next_token = int(mx.argmax(logits, axis=-1))
             else:
@@ -310,6 +373,14 @@ class InferenceEngine:
                 stop_reason = "eos"
                 break
             generated.append(next_token)
+            # fed_token_ids 记录所有走过前向的生成 token(含将被 stop_sequence
+            # 污染的部分),用于多轮审计(§2.3)。eos 不进 cache,不记入。
+            fed_token_ids.append(next_token)
+            # 更新 occurrence:先衰减所有历史计数,再给当前 token 计数+1
+            if cfg.has_penalty:
+                for t_id in occurrence:
+                    occurrence[t_id] *= cfg.penalty_decay
+                occurrence[next_token] = occurrence.get(next_token, 0.0) + 1.0
             decoded_text = self.tokenizer.decode(generated)
             stop_positions = [
                 decoded_text.find(sequence) for sequence in stop_sequences
@@ -318,7 +389,8 @@ class InferenceEngine:
             if stop_positions:
                 final_text = decoded_text[: min(stop_positions)]
                 emit_safe_text(final_text)
-                # token_ids 表示实际返回文本，不包含角色边界。
+                # display_token_ids 表示实际返回文本，不包含角色边界。
+                # fed_token_ids 保留污染部分(供审计),不重编码。
                 generated = self.tokenizer.encode(final_text)
                 stop_reason = "stop_sequence"
                 break
@@ -332,9 +404,12 @@ class InferenceEngine:
             final_text = self.tokenizer.decode(generated)
             emit_safe_text(final_text)
 
+        # cache 洁净性(§2.2):eos/max_tokens 未产生越界 token,干净;stop_sequence 脏。
+        cache_clean = stop_reason != "stop_sequence"
+
         return GenerationResult(
             text=final_text,
-            token_ids=generated,
+            display_token_ids=generated,
             stop_reason=stop_reason,
             elapsed=time.time() - t0,
             used_state=state is not None,
@@ -342,6 +417,9 @@ class InferenceEngine:
             prompt_tokens=prompt_token_count,
             prompt_time=t_prefill,
             generation_time=t_gen,
+            fed_token_ids=fed_token_ids,
+            cache=caches,
+            cache_clean=cache_clean,
         )
 
     def compare(

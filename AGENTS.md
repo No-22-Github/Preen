@@ -157,6 +157,32 @@ reasoning 方言(bos 前缀 + think 标签)由正交开关 `--reasoning` + `--th
 - **对比 llama.cpp 推理效果时,务必用 `/v1/chat/completions` + `chat_template_kwargs.enable_thinking=false`,不要用 `-no-cnv -f` 或 `/completion`。**
 - server 启动:`./models/llama-b9939/llama-server -m MODEL.gguf -c 2048 -ngl 99 --host 127.0.0.1 --port 8876`,模型只加载一次,比反复重启 `llama-cli`(每次 10s)高效得多。
 
+### 多轮会话 cache 续传 vs 重放(Phase 3 §2,已实施)
+
+InferenceEngine + ChatSession 的多轮改造(2026-07 落地)。核心机制事实:
+
+- **续传 vs 重放的分级(单一判定)**:`continuation_safe = (template == "qa" and not reasoning)`。
+  纯 qa 走续传(轮间保留 cache);所有 reasoning 组合(off/fast/on)走重放。
+  裁决依据:`docs/g1g-decode-alignment.md §8` 的 g1g 多轮 token 实测 + 附录 D.2。
+- **为什么 reasoning 不能续传**:官方 `chat_template`(g1g/g1d/g1h 三模型完全一致)里
+  历史 assistant 是**裸内容**(无 think 标签),think 只在当前生成轮。续传会固化首轮的
+  think 标签(`<think>\n</think>`),导致历史段 token 偏离训练分布。这是 reasoning 模型
+  品类结构性属性(DeepSeek-R1/Qwen3 同惯例),不是 bug。
+- **bos 每对话一次**:jinja 里 bos 在 `{% for %}` 之前,多轮不重复。
+- **cache 洁净性**:eos/max_tokens 干净(可续传);stop_sequence 脏(token 先喂入前向再检测,
+  `\nUser:` 的若干 token 已进 cache)。脏 cache 下轮自动走重放,不修补不回滚。
+- **token 账本**:`GenerationResult.display_token_ids`(干净展示文本 token,旧 `token_ids` 改名)
+  vs `fed_token_ids`(实际喂入前向的完整 token,含污染)。eos 路径两者相等,stop_sequence
+  路径 fed ⊃ display。重放以 history **文本**为准(文本是唯一事实源),不用 fed_token_ids 拼接。
+- **官方 chat_template 只有 fast/on 两档,无 off 档**:本产品 `think=off`(裸 `Assistant:`)
+  是自定义档,偏离训练分布。官方"不思考"实为 fast 档(空 think 标签)。
+- **ChatSession 状态机**:`history: list[Turn]`(按 [user, assistant] 分别记录)、`cache`、
+  `cache_clean`。`/rewind [n]` 每轮=2 turn,截断 n 轮=删 2n turn,触发重放。
+  `/state` 中途切换=换 S₀=换人设,清空会话。
+- **上游生态裁决**:RWKV Runner/Ai00/llama.cpp/HF chat_template 都是"渲染文本是真相,
+  cache 是前缀优化"的重放语义。RWKV 的 state 无法按位置截断(只能有限 checkpoint),
+  但语义相同。我们 v1 不做 state snapshot,reasoning 多轮每轮全量重放。
+
 ---
 
 ## ⚠️ 内存单位:全仓统一 GB(÷10⁹),禁止混用 GiB

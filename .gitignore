@@ -38,6 +38,7 @@ train_data/NekoQA_30k/
 models/converted/
 models/output/
 out/
+output/
 outputs/
 checkpoints/
 runs/

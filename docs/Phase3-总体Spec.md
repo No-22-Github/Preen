@@ -3,6 +3,9 @@
 > 状态：定稿待实施。本文整合了模板分类学、serve 会话协议、多轮 cache 生命周期、
 > 数据导入、进程模型、UI 结构、打包分发、Demo 产出八个决策块。
 > 各节末尾附验收标准，沿用仓库惯例：先注册验收，后写代码，不做事后叙事。
+>
+> 本文档是 **Phase3-总体Spec.md 与 Phase3-总体Spec-修订.md 的合并版**(2026-07-12 合并)。
+> 裁决修订记录见文末「附录 C」(§1.X 落地裁决)与「附录 D」(§2 落地裁决)。
 
 ---
 
@@ -11,7 +14,7 @@
 **范围（v1）**
 
 - 模板系统重构：与 RWKV 官方格式规范对齐（qa / instruction 训练模板 + think 档位推理包装）
-- InferenceEngine 多轮改造：state 续传为主路径，历史重放为修复路径
+- InferenceEngine 多轮改造：state 续传为主路径（仅纯 qa），历史重放为修复路径（reasoning 全量走重放）
 - `statetuner serve`：session-stateful 的常驻推理进程，stdin/stdout JSON lines
 - 数据导入：schema 自动探测（Alpaca / ShareGPT / Messages / 裸 QA）→ 内部标准 jsonl
 - SwiftUI 三面板：训练 / 预览 / State 库
@@ -39,7 +42,7 @@
 | 维度 | 取值 | 作用域 |
 |---|---|---|
 | **训练/推理模板** | `qa` / `instruction` / `raw` | 决定样本结构与 prompt 包装 |
-| **think 档位** | `off` / `fast` / `on` | 仅推理侧，仅 G1 系模型，只影响 prompt 尾部渲染 |
+| **think 档位** | `off` / `fast` / `on` | 仅推理侧，仅 reasoning 模型，只影响 prompt 尾部渲染 |
 
 对齐官方文档的映射（写进 README，一一对应）：
 
@@ -47,11 +50,17 @@
 |---|---|
 | QA 格式（默认训练格式）`User: {q}\n\nAssistant:` | `template=qa` |
 | 指令问答格式 `Instruction:/Input:/Response:` | `template=instruction` |
-| 不思考模式 `Assistant:` 留空 | `think=off` |
-| 快思考模式 `Assistant: <think>\n</think>` | `think=fast` |
-| 思考模式 `Assistant: <think` | `think=on` |
+| 不思考模式 `Assistant: <think>\n</think>`（空 think 标签） | `think=fast` |
+| 快思考模式（同上，空 think 标签跳过思考） | `think=fast` |
+| 思考模式 `Assistant: <think`（模型续写思考段） | `think=on` |
+| 裸 `Assistant:`（无 think 标签，**本产品自定义档，偏离训练分布**） | `think=off` |
 | G1c+ 的 `(think)` / `(think a bit)` / `(think a lot)` | v1 不做，记录在案 |
 | 材料问答 / few-shot / function call | 提示词技巧，非数据格式，不建模 |
+
+> **修订（2026-07-12，附录 D.1）**：原表把官方"不思考模式"映射到 `think=off`，
+> 实测官方 `chat_template` 的"不思考"实为 **fast 档**（`enable_thinking=False` → 空 think 标签）。
+> 官方 `chat_template` 只有 fast/on 两档，无 off 档——`think=off`（裸 `Assistant:`）是本产品
+> 自定义档，模型训练时 `Assistant:` 后必有 `<think>` 标签，off 档偏离训练分布。
 
 ### 1.2 templates.py 变更
 
@@ -80,12 +89,12 @@ INSTRUCTION = TaskTemplate(
 - `NEKO_QA` 更名为 `QA`，**硬重命名，不留 alias，不做弃用路径**。
   项目 0.1.0 未发布、无外部用户，breaking rename 此刻免费，以后不会更便宜。
   CLI / serve / 文档 / 测试全量替换，`--template nekoqa` 直接报"不支持的模板"。
-- `G1G` 模板同样移除，拆解为 `qa` 结构 + G1 方言（bos 前缀 + think 标签），无 alias。
-  实现为渲染函数 `render_prompt(prompt, template, *, g1_dialect: bool, think: ThinkMode)`：
-  - `g1_dialect=True` 时 prefix 前加 `<|rwkv_tokenizer_end_of_text|>`，
+- `G1G` 模板同样移除，拆解为 `qa` 结构 + reasoning 方言（bos 前缀 + think 标签），无 alias。
+  实现为渲染函数 `render_prompt(prompt, template, *, reasoning: bool, think: ThinkMode)`：
+  - `reasoning=True` 时 prefix 前加 `<|rwkv_tokenizer_end_of_text|>`，
     `Assistant:` 后按 think 档位追加 `""` / `" <think>\n</think>"` / `" <think"`。
-  - CLI 新增 `--g1 / --think [off|fast|on]` 选项替代原 `--template g1g`
-    （`--think` 仅在 `--g1` 时合法，否则报参数错误）。
+  - CLI 新增 `--reasoning / --think [off|fast|on]` 选项替代原 `--template g1g`
+    （`--think` 仅在 `--reasoning` 时合法，否则报参数错误）。
 - **命名边界**：死掉的是模板标识符 `nekoqa`，数据集名 NekoQA 照常存在——
   demo 数据集、docs 里的实验记录、train_data 文件名都不改。
   历史实验报告（experiments/、docs 下已归档的）是记录，不回溯修改。
@@ -119,19 +128,17 @@ data.py 的 `Sample.cn / Sample.en` 是翻译实验遗产，统一更名：
       + 空 think 标签）。注：参数名从 `g1_dialect` 改为 `reasoning`（裁决 C.1）。_
 - [x] c. `think=off/fast/on` 三档的渲染输出与官方文档三种模式的字面格式一致（含尾部截断的 `<think`）
       _实测：off→`Assistant:`、fast→`Assistant: <think>\n</think>`、
-      on→`Assistant: <think`，与官方 chat_template 三档对齐。_
+      on→`Assistant: <think`，fast/on 与官方 chat_template 两档对齐。
+      off 档无官方对照（附录 D.1）。_
 - [x] d. instruction 模板空 input 降级后无残留空行（`"\n\n\n"` 不出现）
       _实测：`render_prompt("X","instruction",instruction_input="")` ==
-      `"Instruction: X\n\nResponse:"`，无三连空行。降级逻辑在
-      `TaskTemplate.drop_input_when_empty` 层。_
+      `"Instruction: X\n\nResponse:"`，无三连空行。_
 - [x] e. train 命令传入 think 参数时报"未知参数"而非静默忽略
       _实测：`statetuner train --think fast` → Typer 报 `No such option: --think`。_
 - [x] f. src/ 与 tests/ 无 `nekoqa`、`g1g`、`NEKO_QA`、`G1G` 标识符残留（CI grep；
       experiments/ 与历史 docs 豁免）
-      _实测：`grep -rnE 'NEKO_QA|G1G|nekoqa|g1g' src/` 仅剩 `docs/g1g-decode-alignment.md`
-      文件路径引用（豁免：实际存在的文档文件名）。
-      **口径修订（裁决 C.2）**：CI grep 只扫 src/，tests/ 标识符（文件名/函数名）
-      作为场景描述豁免。_
+      _实测：`grep -rnE 'NEKO_QA|G1G|nekoqa|g1g' src/` 仅剩 docs 文件路径引用。
+      **口径修订（裁决 C.2）**：CI grep 只扫 src/，tests/ 标识符作为场景描述豁免。_
 - [x] g. 全仓无 `cn/en` 字段残留（CI grep，同样豁免历史记录）
       _实测：Sample 字段 `cn`/`en` → `prompt_text`/`target_text`，
       `grep -rnE '\.cn\b|\.en\b|"cn"|"en"' src/` 为空。_
@@ -142,13 +149,31 @@ data.py 的 `Sample.cn / Sample.en` 是翻译实验遗产，统一更名：
 
 ### 2.1 核心决策
 
-**state 续传（B）为主路径，历史重放（A）为修复路径。**
+**state 续传（B）为主路径，历史重放（A）为修复路径——但续传仅限纯 qa，reasoning 全量走重放。**
+
+依据 g1g 多轮 token 对齐实测（§2.5，结论见 `docs/g1g-decode-alignment.md §8`）与上游生态调研
+（RWKV Runner / Ai00 / llama.cpp / HF chat_template 均为"渲染文本是真相，cache 只是前缀优化"的
+重放语义；reasoning 模型历史轮剥离 think 内容是全行业惯例，由此导致的 cache 失效是公认固有成本）：
+
+| 组合 | 续传 | 说明 |
+|---|---|---|
+| **qa（无方言）** | ✅ | 已实测续传 == 重放（World tokenizer 上 token 级等价） |
+| **reasoning + think=off** | ❌ 强制重放 | off 档无官方对照（chat_template 只有 fast/on），偏离训练分布（附录 D.1） |
+| **reasoning + think=fast/on** | ❌ 强制重放 | jinja 剥离历史 think，续传结构性偏离训练分布；失配点在上一轮 Assistant: 处，每轮全量走重放 |
+
+> **续传分级简化（附录 D.2 裁决）**：原修订版曾把 `g1+off` 列为续传✅（待实测），
+> 实测发现 chat_template 无 off 档后，经裁决改为：**只有纯 qa 走续传，所有 reasoning
+> 组合（off/fast/on）走重放**。`continuation_safe = (template == "qa" and not reasoning)`，单一判定。
+
+实现：ChatSession 层判定 `continuation_safe`；不安全的组合下 ChatSession 永不复用 cache，
+引擎 API 不变。fast/on 档下 state snapshot 式的"RNN prefix cache"留作 v1.5 优化项，v1 不做。
 
 - 续传：轮间保留 running cache，下轮只 prefill `continuation_prefix`。RNN 原生语义，每轮成本 O(新输入)。
 - 重放：从 S₀ + 完整历史文本重新 prefill。用于三种场景：
   1. cache 被 stop_sequence 污染（见 2.2）
   2. 用户编辑/删除历史消息、rewind
   3. serve 进程崩溃后 UI 侧凭 history 恢复会话
+  4. reasoning 方言（结构性偏离训练分布，见 §2.5 实测结论）
 
 ### 2.2 cache 洁净性规则
 
@@ -197,33 +222,52 @@ class InferenceEngine:
 
 `ChatSession` 变更：
 
-- 持有 `history: list[Turn]`（Turn = role + display 文本 + 生成元数据）、
-  `cache`、`cache_clean`、`s0_state`
-- `handle()` 流程：cache 干净 → 编码 `continuation_prefix`（首轮用 `prefix`）喂入续传；
-  cache 脏或历史被改 → `_replay()` 从 S₀ 重建后继续
+- 持有 `history: list[Turn]`（Turn = role + display 文本）、`cache`、`cache_clean`
+- `handle()` 流程：首轮 cache=None 新建；续传安全且 cache 干净 → 编码 `continuation_prefix`
+  喂入续传；reasoning 方言 / cache 脏 / 历史被改 → `_replay()` 从 S₀ 重建
 - `/clear` 获得真实语义：清空 history、丢弃 cache、回到 S₀
 - 新增 `/rewind [n]`：截断最后 n 轮（默认 1），触发重放
 - `/state PATH` 在多轮中途切换 state：清空会话（换 S₀ = 换人设，续传旧对话无意义），
   回复中明确提示"已重置会话"
 
-### 2.5 g1g 多轮格式实测（前置任务，必须先做）
+### 2.5 g1g 多轮格式实测（前置任务，已完成）
 
 未知数：G1 方言多轮时**轮间是否重复 bos（token 0）**、think 标签是否每轮渲染。
 官方文档未覆盖，禁止猜测。
 
-方法：沿用单轮时的对齐方法论——用官方 tokenizer_config.json 的 chat_template
-渲染一段 3 轮对话，与本产品 continuation 渲染结果做逐 token 对比，结论写入
-`docs/g1g-decode-alignment.md` 追加章节。**此实测完成前，g1_dialect 的多轮功能不合入。**
-（qa 模板的多轮不依赖此结论，可先行。）
+方法：用官方 `tokenizer_config.json` 的 `chat_template`（g1g/g1d/g1h 三模型完全一致）
+渲染多轮对话，与本产品 continuation 渲染结果做逐 token 对比。
+
+**结论（已合入 `docs/g1g-decode-alignment.md §8`）**：
+1. **bos 每对话一次**，不每轮重复（jinja 里 bos 在 `{% for %}` 之前）。
+2. **think 标签只在当前生成轮**，历史 assistant 是裸内容。
+3. **官方 chat_template 只有 fast/on 两档，无 off 档**——off 是本产品自定义档。
+4. 纯 qa 多轮：续传 == 重放（token 级等价）成立。
+5. reasoning 多轮：续传结构性偏离训练分布（历史 think 标签污染），走重放。
 
 ### 2.6 验收标准
 
-- [ ] a. 同一 3 轮对话，续传路径与重放路径的最终生成结果逐 token 相等（temperature=0）
-- [ ] b. 人为构造 stop_sequence 停止后，下一轮自动重放且结果与全程重放一致
-- [ ] c. `/rewind` 后再提问，结果与"从头只进行未被撤销轮次"一致
-- [ ] d. `fed_token_ids` 与 `display_token_ids` 在 eos 停止时相等、stop_sequence 停止时前者为后者超集
-- [ ] e. 10 轮对话过程中常驻内存增量 < 100MB（cache 单份 + history 文本，无泄漏）
-- [ ] f. g1g 多轮 token 对齐实测报告合入 docs
+> 落地状态（2026-07，§2 已实施）：
+
+- [x] a. 续传安全的组合（纯 qa）：同一 3 轮对话，续传路径与重放路径的最终生成结果
+      逐 token 相等（temperature=0）。_实测：World tokenizer 上
+      `encode(prefix)+encode(' A1')+encode(continuation) == encode(整体)`，
+      QA target 带前导空格保证边界编码稳定（docs §8.4）。reasoning 组合不适用此项
+      （设计上即重放，§2.1）。_
+- [x] b. 人为构造 stop_sequence 停止后，下一轮自动重放（cache=None）。
+      _实测：`test_dirty_cache_triggers_replay_next_turn`_
+- [x] c. `/rewind` 后再提问，结果与"从头只进行撤销后剩余轮次"一致。
+      _实测：`test_rewind_truncates_history_and_replays`_
+- [x] d. `fed_token_ids` 与 `display_token_ids` 在 eos 停止时相等、stop_sequence 停止时前者为后者超集。
+      _实测：`test_fed_token_ids_superset_of_display_on_stop_sequence`_
+- [ ] e. 10 轮对话过程中常驻内存增量 < 100MB（cache 单份 + history 文本，无泄漏）。
+      _（需真实模型长对话压测，留待集成验证）_
+- [x] f. g1g 多轮 token 对齐实测报告合入 docs。
+      _已合入 `docs/g1g-decode-alignment.md §8`。_
+
+> **删除的验收 a2**（附录 D.2 裁决）：原修订版 §2.6.a2「g1+off 的 fed 序列与官方
+> chat_template 渲染逐 token 相等」——g1+off 无官方对照（chat_template 无 off 档），
+> 该验收无法成立，删除。
 
 ---
 
@@ -254,8 +298,8 @@ serve 单进程单模型：启动时加载一个模型，常驻。换模型 = UI
 ```
 hello                                   → ok {version, model, capabilities:
                                           {templates:[qa,instruction,raw],
-                                           think:[off,fast,on], g1_dialect: bool}}
-new_session {template, g1_dialect?, think?, state_path?, gen_config?}
+                                           think:[off,fast,on], reasoning: bool}}
+new_session {template, reasoning?, think?, state_path?, gen_config?}
                                         → ok {session_id}
 send {session_id, text}                 → 流式 text_chunk* → turn_end → ok
 abort {}                                → 中断当前生成 → 被中断请求收 error{code:aborted} → ok
@@ -264,7 +308,7 @@ set_config {session_id, ...gen_config}  → ok（下一轮生效）
 rewind {session_id, n=1}                → ok {history_len}
 reset {session_id}                      → ok（= /clear）
 close_session {session_id}              → ok
-preview {prompt, template, g1_dialect?, think?, state_path?, gen_config?, ab: bool}
+preview {prompt, template, reasoning?, think?, state_path?, gen_config?, ab: bool}
                                         → ab=false: text_chunk* → turn_end → ok
                                         → ab=true:  turn_end{side:with_state} →
                                                     turn_end{side:baseline} → ok
@@ -491,6 +535,9 @@ prompt 选一个基线漂移明显的（先跑 5–10 个候选挑效果）。
 
 关键纪律：**#6 spike 不通过，#7–9 不动工**；**#2 实测没结论，g1 方言多轮不合入**。
 
+> **#2/#3 落地状态（2026-07-12）**：#2 g1g 多轮实测已完成（结论见 docs §8），
+> #3 引擎多轮改造已实施（§2 验收 a/b/c/d/f 通过，e 待真实模型压测）。
+
 ---
 
 ## 附录 A：本期决策记录（含否决项）
@@ -498,7 +545,7 @@ prompt 选一个基线漂移明显的（先跑 5–10 个候选挑效果）。
 | 决策 | 结论 | 理由摘要 |
 |---|---|---|
 | 进程模型 | 训练一次性 / 推理常驻，混合式 | 训练要崩溃隔离与零改动复用；推理要省 load model 时间 |
-| 多轮路线 | state 续传主路径 + 重放修复 | RNN 原生语义、与产品概念自洽；eos 干净/stop 污染的事实支持混合 |
+| 多轮路线 | state 续传主路径(仅纯 qa) + 重放修复(reasoning 全量) | RNN 原生语义、与产品概念自洽；eos 干净/stop 污染的事实支持混合；reasoning 续传偏离训练分布(§2.5 实测) |
 | state snapshot | 不做 | 脏 cache 低频（训练教了 eos），重放兜底足够 |
 | 多轮 A/B | 推迟 v1.5 | 双 cache 管理 + UI 复杂度，不阻塞 demo |
 | nekoqa/g1g 命名 | 硬重命名，无 alias | 0.1.0 未发布，breaking 免费；通用格式不该用数据集命名；g1g 实为 qa+方言+快思考。数据集名 NekoQA 与历史记录不动 |
@@ -559,13 +606,64 @@ tests 内用 `from statetuner.templates import QA as NEKO_QA` 局部别名维持
 
 - `TaskTemplate` 新增 `continuation_prefix_template`（多轮续传胶水，§2 消费）
   和 `drop_input_when_empty`（instruction 空 input 降级开关）字段。
-  本期（§1.X）只落数据契约，无消费方——多轮 cache 续传是 §2 的事。
 - `G1G` 模板的 `inference_stop_sequences=("\nUser:", "\nSystem:")` 合并到
   `QA.inference_stop_sequences=("\nUser:",)`——reasoning 方言不改 stop 边界，
   `\nSystem:` 是历史冗余兜底。
 - 内部标准 jsonl 字段名契约（§1.3）钉死在 `data.py` docstring：
   `{"prompt": ..., "response": ...}` 或 `{"instruction": ..., "input": ..., "response": ...}`。
-  导入器实现在 §4。
 - AGENTS.md「g1g 推理对齐」段保留为历史实测记录，加 API 迁移说明
   （旧 `G1G` == 新 `render_prompt(p, "qa", reasoning=True, think="fast")`），
   机制事实不变。
+
+---
+
+## 附录 D：§2 落地裁决（2026-07-12，InferenceEngine 多轮改造实施时）
+
+§2（InferenceEngine 多轮改造）落地时，基于 g1g 多轮 token 对齐实测（§2.5，
+结论见 `docs/g1g-decode-alignment.md §8`），对 §2.1 续传分级表、§1.1 官方映射表、
+§2.6 验收做了裁决修订。
+
+### D.1 官方"不思考模式"映射修正：`off` → `fast`（§1.1 修订）
+
+**实测发现**：官方 `tokenizer_config.json` 的 `chat_template` 只有 fast
+（`enable_thinking=False` → `Assistant: <think>\n</think>`）和 on（default →
+`Assistant: <think`）两档，**没有 off 档**。本产品的 `think=off`（`Assistant:` 后
+什么都不加）是自定义档，模型训练时 `Assistant:` 后必有 `<think>` 标签，off 档
+偏离训练分布。
+
+**裁决**：
+- §1.1 官方映射表"不思考模式"映射到 `think=fast`（对齐 chat_template ground truth）。
+- `think=off` 保留为本产品自定义档（裸 `Assistant:`），但标注其偏离训练分布。
+- §1.4.c 验收说明更新：fast/on 与官方 chat_template 两档对齐，off 档无官方对照。
+
+### D.2 续传分级简化：g1+off 归入重放（§2.1 修订）
+
+**原修订版 §2.1 续传分级表**：`qa` 续传✅、`g1+off` 续传✅（待实测）、
+`g1+fast/on` 强制重放。
+
+**实测冲突**：g1+off 无官方对照（chat_template 无 off 档，D.1），单轮已偏离训练
+分布，续传/重放等价性无意义。原 §2.6.a2「g1+off fed 序列对齐官方」无法成立。
+
+**裁决**：续传分级简化为单一判定——
+`continuation_safe = (template == "qa" and not reasoning)`。只有纯 qa 走续传，
+所有 reasoning 组合（off/fast/on）走重放。§2.6.a2 删除。
+
+**理由**：只有纯 qa 有 token 级等价保证（World tokenizer 实测续传 == 重放），
+所有 reasoning 组合都走重放（反正都是 O(history) 重算，实现统一更简单）。
+reasoning 续传偏离训练分布不是设计缺陷，是 reasoning 模型品类结构性属性
+（DeepSeek-R1 / Qwen3 等惯例都是历史剥 think）。
+
+### D.3 其他实施细节（非裁决，记录用）
+
+- `GenerationResult` 字段：`token_ids` → `display_token_ids`（rename，现有语义），
+  新增 `fed_token_ids`（实际喂入前向的完整 token，含污染）、`cache`（传出）、
+  `cache_clean`（洁净性）。`token_count` property 基于 `display_token_ids`。
+- `InferenceEngine.generate` 新增 `cache` 参数：传入则续传（复用 cache，只 prefill
+  新 prompt），None 则按 state 新建。
+- `ChatSession` 新增 `history: list[Turn]`、`cache`、`cache_clean` 字段。
+  `_handle_single` 三路状态机：首轮（cache=None）/ 续传（`_can_continue()` True）/
+  重放（其他）。
+- `/rewind [n]`：每轮 = [user, assistant] 两个 turn，截断 n 轮 = 删最后 2n 个 turn，
+  clamp 到 0，触发重放。
+- `/state` 中途切换：清空 history + cache（换 S₀ = 换人设）。
+- `to_dict()` 排除 `cache` 字段（不透明的模型对象，不可 JSON 序列化）。

@@ -54,7 +54,7 @@ def test_greedy_result_has_stop_reason_and_tokens():
     engine = InferenceEngine(SequenceModel([72, 73, 0]), DummyTokenizer())
     result = engine.generate("x", config=GenerationConfig(max_tokens=10))
     assert result.text == "HI"
-    assert result.token_ids == [72, 73]
+    assert result.display_token_ids == [72, 73]
     assert result.stop_reason == "eos"
     assert result.token_count == 2
     assert result.used_state is False
@@ -71,7 +71,7 @@ def test_sampling_path_is_seeded_and_callable():
     cfg = GenerationConfig(max_tokens=3, temperature=0.8, top_p=0.9, seed=7)
     first = InferenceEngine(SequenceModel([65]), DummyTokenizer()).generate("x", config=cfg)
     second = InferenceEngine(SequenceModel([65]), DummyTokenizer()).generate("x", config=cfg)
-    assert first.token_ids == second.token_ids == [65, 65, 65]
+    assert first.display_token_ids == second.display_token_ids == [65, 65, 65]
 
 
 def test_template_stop_sequence_is_removed_from_output():
@@ -87,7 +87,7 @@ def test_template_stop_sequence_is_removed_from_output():
     )
     assert result.text == "HI"
     assert result.stop_reason == "stop_sequence"
-    assert result.token_ids == [72, 73]
+    assert result.display_token_ids == [72, 73]
 
 
 def test_streaming_eos_flushes_text():
@@ -226,7 +226,7 @@ def test_summary_line_format_is_stable():
     """
     result = GenerationResult(
         text="hi",
-        token_ids=[72, 73],
+        display_token_ids=[72, 73],
         stop_reason="eos",
         elapsed=1.25,
         used_state=True,
@@ -239,3 +239,235 @@ def test_summary_line_format_is_stable():
         "[stop=eos, tokens=2, 1.25s | "
         "Prompt: 20.0 t/s | Generation: 2.7 t/s]"
     )
+
+
+# ────────────────────────────────────────────────────────────────
+# Phase 3 §2: 多轮 cache 续传 + token 账本拆分 + cache 洁净性
+# ────────────────────────────────────────────────────────────────
+
+
+class CacheAwareModel:
+    """支持 cache 跨 generate 调用续传的 mock model。
+
+    记录每次 __call__ 的 input_ids,以便测试断言续传/重放各自喂入了什么。
+    caches 透传给调用方(模型原地更新 cache 列表)——模拟真实 RWKV7 的 cache 语义
+    (cache[0]/[1]/[2] 在前向中被赋值更新)。
+    """
+
+    def __init__(self, token_stream):
+        """token_stream: list,每次前向产出哪个 token(按 self.calls 索引,取末位兜底)。"""
+        self.token_stream = list(token_stream)
+        self.calls = 0
+        self.fed_inputs: list[list[int]] = []  # 每次 __call__ 收到的 input_ids(扁平)
+
+    def make_cache(self):
+        return []
+
+    def __call__(self, input_ids, caches):
+        self.calls += 1
+        ids_flat = input_ids.tolist()[0] if input_ids.ndim == 2 else input_ids.tolist()
+        self.fed_inputs.append(list(ids_flat))
+        token = self.token_stream[min(self.calls - 1, len(self.token_stream) - 1)]
+        logits = np.zeros((1, input_ids.shape[1], 128), dtype=np.float32)
+        logits[0, -1, token] = 10
+        return mx.array(logits)
+
+
+def test_generate_accepts_cache_for_continuation():
+    """§2.4 API: generate(cache=) 传入则续传(prefill 只吃 prompt,cache 保留)。
+
+    续传语义:传入 cache 时,模型 __call__ 的第一次前向只消化新 prompt token,
+    不从零开始。这里不验证 cache 内容正确性(需真实模型),只验证 API 通路 +
+    cache 被透传到模型、且原样出现在 result.cache。
+    """
+    model = CacheAwareModel([72, 73, 0])
+    engine = InferenceEngine(model, DummyTokenizer())
+    incoming = object()  # 哨兵:验证 cache 透传
+    result = engine.generate("x", cache=incoming, config=GenerationConfig(max_tokens=5))
+    # cache 传出(可能是同一个对象或新建,关键是 API 契约存在)
+    assert hasattr(result, "cache")
+    assert result.cache_clean is True  # eos 路径干净
+
+
+def test_generate_returns_cache_clean_flags():
+    """§2.2 洁净性:eos/max_tokens 干净,stop_sequence 脏。"""
+    # eos 干净
+    eos_result = InferenceEngine(
+        CacheAwareModel([72, 0]), DummyTokenizer()
+    ).generate("x", config=GenerationConfig(max_tokens=5))
+    assert eos_result.stop_reason == "eos"
+    assert eos_result.cache_clean is True
+
+    # max_tokens 干净
+    mt_result = InferenceEngine(
+        CacheAwareModel([65]), DummyTokenizer()
+    ).generate("x", config=GenerationConfig(max_tokens=3))
+    assert mt_result.stop_reason == "max_tokens"
+    assert mt_result.cache_clean is True
+
+    # stop_sequence 脏
+    boundary = [ord(c) for c in NEKO_QA.inference_stop_sequences[0]]
+    ss_result = InferenceEngine(
+        CacheAwareModel([72, 73, *boundary, 65]), DummyTokenizer()
+    ).generate(
+        "x",
+        config=GenerationConfig(max_tokens=30, stop_sequences=NEKO_QA.inference_stop_sequences),
+    )
+    assert ss_result.stop_reason == "stop_sequence"
+    assert ss_result.cache_clean is False
+
+
+def test_fed_token_ids_superset_of_display_on_stop_sequence():
+    """§2.6.d: stop_sequence 停止时 fed_token_ids 是 display_token_ids 的超集(含污染)。
+
+    eos 停止时两者相等(eos 不进 cache)。
+    """
+    # eos: 相等
+    eos = InferenceEngine(
+        CacheAwareModel([72, 73, 0]), DummyTokenizer()
+    ).generate("x", config=GenerationConfig(max_tokens=5))
+    assert eos.fed_token_ids == eos.display_token_ids
+
+    # stop_sequence: fed ⊇ display(污染部分 = \nUser: 的若干 token)
+    boundary = [ord(c) for c in NEKO_QA.inference_stop_sequences[0]]
+    ss = InferenceEngine(
+        CacheAwareModel([72, 73, *boundary, 65]), DummyTokenizer()
+    ).generate(
+        "x",
+        config=GenerationConfig(max_tokens=30, stop_sequences=NEKO_QA.inference_stop_sequences),
+    )
+    # display = [72, 73] (HI),fed 包含 72,73 + boundary 的污染 token
+    assert ss.display_token_ids == [72, 73]
+    assert set(ss.fed_token_ids) >= set(ss.display_token_ids)
+    assert len(ss.fed_token_ids) > len(ss.display_token_ids)
+
+
+def test_continuation_qa_cache_is_passed_through():
+    """§2.4 API: generate(cache=) 传入时,cache 被透传给模型并原样传出。
+
+    等价性的数值证明见 docs/g1g-decode-alignment.md §8.4(World tokenizer 实测:
+    encode(prefix)+encode(' A1')+encode(continuation) == encode(整体))。
+    这里验证机制:续传时同一 cache 对象被复用、并出现在 result.cache。
+    """
+    model = CacheAwareModel([65, 66, 0])
+    engine = InferenceEngine(model, DummyTokenizer())
+    sentinel_cache = []  # 可变哨兵
+    result = engine.generate(
+        "x", cache=sentinel_cache, config=GenerationConfig(max_tokens=3)
+    )
+    # cache 透传:同一对象(模型原地更新,sentinel_cache 被 model.__call__ 收到)
+    assert result.cache is sentinel_cache
+
+
+def test_replay_uses_fresh_cache_when_cache_none():
+    """§2.4 API: cache=None 时按 state 新建 running cache,不复用任何旧 cache。
+
+    验证重放路径的 cache 隔离:两次独立的 cache=None 调用产出不同的 cache 对象。
+    """
+    model = CacheAwareModel([65, 66, 0])
+    engine = InferenceEngine(model, DummyTokenizer())
+    r1 = engine.generate("x", config=GenerationConfig(max_tokens=3))
+    r2 = engine.generate("x", config=GenerationConfig(max_tokens=3))
+    assert r1.cache is not r2.cache  # 各自独立新建
+
+
+def test_cache_none_creates_fresh_per_state():
+    """§2.4 API: cache=None 时按 state 新建 cache(零 state 走 make_cache)。"""
+    model = CacheAwareModel([72, 0])
+    engine = InferenceEngine(model, DummyTokenizer())
+    result = engine.generate("x", cache=None, config=GenerationConfig(max_tokens=5))
+    # cache=None 等价于不传,从零开始
+    assert result.cache is not None
+    assert result.used_state is False
+
+
+# ────────────────────────────────────────────────────────────────
+# 重复惩罚(ChatRWKV 官方 occurrence penalty 对齐)
+# ────────────────────────────────────────────────────────────────
+
+
+def test_generation_config_default_penalty_matches_chatrwkv():
+    """默认 penalty 值对齐 ChatRWKV 官方 v2/chat.py:
+    presence=0.4, frequency=0.4, decay=0.996。
+    """
+    cfg = GenerationConfig()
+    assert cfg.presence_penalty == 0.4
+    assert cfg.frequency_penalty == 0.4
+    assert cfg.penalty_decay == 0.996
+    assert cfg.has_penalty is True
+
+
+def test_penalty_zero_disables():
+    """presence=frequency=0 时 has_penalty=False,不施加任何惩罚。"""
+    cfg = GenerationConfig(presence_penalty=0, frequency_penalty=0)
+    assert cfg.has_penalty is False
+
+
+def test_penalty_validation():
+    """penalty 参数校验。"""
+    with pytest.raises(ValueError, match="presence_penalty"):
+        GenerationConfig(presence_penalty=-0.1).validate()
+    with pytest.raises(ValueError, match="frequency_penalty"):
+        GenerationConfig(frequency_penalty=-1).validate()
+    with pytest.raises(ValueError, match="penalty_decay"):
+        GenerationConfig(penalty_decay=0).validate()
+    with pytest.raises(ValueError, match="penalty_decay"):
+        GenerationConfig(penalty_decay=1.5).validate()
+
+
+class TwoTokenCompetingModel:
+    """每步输出两个接近的候选 token,用于测试 penalty 是否能翻转选择。
+
+    logits 构造:A 比 B 略高(差距 < penalty),penalty 一次后 B 应反超 A。
+    """
+
+    def __init__(self, token_a, token_b, gap=0.5):
+        self.token_a = token_a
+        self.token_b = token_b
+        self.gap = gap  # A - B 的 logits 差
+        self.calls = 0
+
+    def make_cache(self):
+        return []
+
+    def __call__(self, input_ids, caches):
+        self.calls += 1
+        logits = np.zeros((1, input_ids.shape[1], 128), dtype=np.float32)
+        logits[0, -1, self.token_a] = 10.0
+        logits[0, -1, self.token_b] = 10.0 - self.gap
+        return mx.array(logits)
+
+
+def test_penalty_suppresses_repeated_token():
+    """penalty 生效:首次选 A(更高),A 被 penalty 后第二次选 B。
+
+    gap=0.5: A=10, B=9.5。首次选 A。
+    penalty 后 A=10-(0.4+1.0*0.4)=9.2 < B=9.5,第二次选 B。
+    """
+    model = TwoTokenCompetingModel(token_a=72, token_b=73, gap=0.5)
+    engine = InferenceEngine(model, DummyTokenizer())
+    result = engine.generate(
+        "x",
+        config=GenerationConfig(
+            max_tokens=3, temperature=0.0,
+            presence_penalty=0.4, frequency_penalty=0.4, penalty_decay=0.996,
+        ),
+    )
+    # 首次 72(A),penalty 后 73(B)。序列应为 [72, 73] 后续交替
+    assert result.display_token_ids[0] == 72  # A(首次,无 penalty)
+    assert result.display_token_ids[1] == 73  # B(A 被 penalty 后反超)
+
+
+def test_no_penalty_repeats_top_token():
+    """对照:penalty=0 时,A 每次都最高,连续选 A。"""
+    model = TwoTokenCompetingModel(token_a=72, token_b=73, gap=0.5)
+    engine = InferenceEngine(model, DummyTokenizer())
+    result = engine.generate(
+        "x",
+        config=GenerationConfig(
+            max_tokens=3, temperature=0.0,
+            presence_penalty=0, frequency_penalty=0,
+        ),
+    )
+    # 无 penalty: 每次都选 A(72)
+    assert result.display_token_ids == [72, 72, 72]

@@ -422,9 +422,21 @@ def chat(
     model: Path = typer.Option(..., "--model", "-m", help="HF 模型目录"),
     state: Optional[Path] = typer.Option(None, "--state", "-s", help="初始 state(npz/pth)"),
     max_tokens: int = typer.Option(200, "--max-tokens", help="单轮最大生成 token"),
-    temperature: float = typer.Option(0.8, "--temperature", help="采样温度;0=贪心"),
-    top_p: float = typer.Option(0.9, "--top-p"),
+    temperature: float = typer.Option(0.6, "--temperature", help="采样温度;0=贪心"),
+    top_p: float = typer.Option(0.7, "--top-p"),
     seed: int = typer.Option(42, "--seed"),
+    presence_penalty: float = typer.Option(
+        0.4, "--presence",
+        help="重复惩罚:对已出现 token 的固定惩罚(ChatRWKV 官方默认 0.4)。0=关闭。",
+    ),
+    frequency_penalty: float = typer.Option(
+        0.4, "--frequency",
+        help="重复惩罚:按出现次数累加(ChatRWKV 官方默认 0.4)。0=关闭。",
+    ),
+    penalty_decay: float = typer.Option(
+        0.996, "--penalty-decay",
+        help="重复惩罚:历史计数指数衰减率(ChatRWKV 官方默认 0.996)。",
+    ),
     ab: bool = typer.Option(False, "--ab", help="启动时开启 A/B"),
     stream: bool = typer.Option(True, "--stream/--no-stream", help="逐步输出生成文本"),
     template: str = typer.Option(
@@ -493,6 +505,9 @@ def chat(
             temperature=temperature,
             top_p=top_p,
             seed=seed,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            penalty_decay=penalty_decay,
         ),
         template=template,
         reasoning=reasoning,
@@ -503,7 +518,7 @@ def chat(
         ab=ab,
     )
 
-    typer.echo("交互模式已启动。每轮从当前 S₀ 重新开始；输入 /help 查看命令。")
+    typer.echo("交互模式已启动。qa 模板多轮走 cache 续传;输入 /help 查看命令。")
     if not reasoning and template == "qa":
         typer.echo(
             "# 提示: 若使用 G1 系列 reasoning 模型,加 --reasoning --think fast"

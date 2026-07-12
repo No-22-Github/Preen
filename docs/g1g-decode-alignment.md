@@ -189,3 +189,97 @@ curl -s http://127.0.0.1:8876/v1/chat/completions -H 'Content-Type: application/
   "chat_template_kwargs":{"enable_thinking":false}
 }'
 ```
+
+---
+
+## 8. 多轮对话格式对齐(2026-07-12,Phase 3 §2.5 前置任务)
+
+> 本节回答 Phase 3 Spec §2.5 的两个未知数,作为 InferenceEngine 多轮改造(§2)的前置结论:
+> **G1 方言多轮时,轮间是否重复 bos(token 0)?think 标签是否每轮渲染?**
+> 方法沿用本报告的对齐方法论——以官方 `tokenizer_config.json` 的 `chat_template` 为真值。
+
+### 8.1 实验方法
+
+三个模型的 `tokenizer_config.json` 的 `chat_template` 字段(g1g-1.5b / g1d-0.4b / g1h-1.5b)**逐字符完全一致**(均 516 字符),取任一即可。jinja 源码:
+
+```jinja
+{{ '<|rwkv_tokenizer_end_of_text|>' }}              ← bos 在 for 循环【之前】
+{% for message in messages %}
+  {% user %}      'User: ' + content + '\n\n'
+  {% system %}    'System: ' + content + '\n\n'
+  {% assistant %} 'Assistant: ' + content + '\n\n'   ← 历史 assistant = 裸内容
+{% endfor %}
+{% if add_generation_prompt %}
+  {% enable_thinking==False %} 'Assistant: <think>\n</think>'   ← think 仅当前生成轮
+  {% else %}                   'Assistant: <think'
+{% endif %}
+```
+
+用 jinja 渲染 3 轮对话,再用 World tokenizer(HF `AutoTokenizer`)encode 成 token ids,逐 token 对比。
+
+### 8.2 两个未知数的定论
+
+**未知数 1:bos(token 0)是否每轮重复?**
+**定论:不重复。整对话只出现一次,在最开头。** 实测 3 轮 fast 对话渲染后 encode,`bos(0)` 出现位置 = `[0]`,全序列仅一处。jinja 里 bos 字面量在 `{% for %}` 之前,逻辑上就是每对话一次。
+
+**未知数 2:think 标签是否每轮渲染?**
+**定论:只在当前生成轮。历史 assistant 是裸内容,无 think 标签。** jinja 的 think 渲染在 `{% if add_generation_prompt %}` 分支内,即只作用于"待生成的当前轮"。历史轮走 `{% assistant %}` 分支,是 `'Assistant: ' + content + '\n\n'`,裸内容。
+
+实测 3 轮 fast 对话整体渲染(token 级,38 tokens):
+```
+<|bos|>User: Q1\n\nAssistant: A1\n\nUser: Q2\n\nAssistant: A2\n\nUser: Q3\n\nAssistant: <think>\n</think>
+└ bos 只此一处                                                              └ think 只在当前轮
+```
+
+### 8.3 chat_template 的 think 档位覆盖(发现)
+
+**官方 `chat_template` 只有两档,没有 off 档**:
+
+| `enable_thinking` | 渲染 | 本产品对应 |
+|---|---|---|
+| `False` | `Assistant: <think>\n</think>` | `think=fast` ✓ |
+| `True` 或未定义(default) | `Assistant: <think` | `think=on` ✓ |
+| (无) | — | `think=off` 无官方对照 |
+
+本产品的 `think=off`(`Assistant:` 后什么都不加)是**自定义档**,模型训练时 `Assistant:` 后必有 `<think>` 标签(fast 或 on),off 档偏离训练分布。这与 Phase 3 Spec §1.1 官方映射表"不思考模式 `Assistant:` 留空 = think=off"冲突——官方 chat_template 的"不思考"实为 **fast 档**(空 think 标签),不是 off。
+
+### 8.4 续传 vs 重放的 token 级等价性(Phase 3 §2.6.a 验收依据)
+
+以"续传 = 轮间保留 running cache,下轮只 prefill continuation;重放 = 从 S₀ + 完整历史文本重新 prefill"为定义:
+
+| 组合 | 续传 == 重放(逐 token) | 证据 |
+|---|---|---|
+| **纯 qa(无方言)** | ✅ **成立** | QA target 带前导空格(` {a}`),`encode(prefix) + encode(' A1') + encode(continuation) == encode(整体文本)`,边界编码稳定。实测三段拼接与整体 encode 逐 token 相等。 |
+| **reasoning + off** | ❌ **不适用** | off 档无官方对照(§8.3),单轮已偏离训练分布,续传/重放等价性无意义。 |
+| **reasoning + fast/on** | ❌ **不成立** | 续传会固化 turn1 的 think 标签(`<think>\n</think>`),导致历史段 token = `...Assistant: <think>\n</think>A1`;而 jinja 真实多轮历史段是裸 `...Assistant: A1`。实测 2 轮 fast 对话:续传 34 tokens vs 重放 28 tokens,差 6 个多余 token(历史轮的 think 标签)。 |
+
+reasoning 组合的续传偏离**不是本产品的设计缺陷,是 reasoning 模型品类的结构性属性**:DeepSeek-R1 / Qwen3 等主流 reasoning 模型的多轮惯例都是历史剥 think,由此导致的 prefix cache 失效是公认固有成本(详见 Phase 3 §2.1 修订依据的上游生态调研)。
+
+### 8.5 结论(裁决 Phase 3 §2 续传分级)
+
+基于 §8.3/§8.4 实测,经用户裁决(2026-07-12):
+
+1. **续传分级简化为单一判定**:`continuation_safe = (template == "qa" and not reasoning)`。纯 qa 走续传,所有 reasoning 组合(off/fast/on)走重放。
+2. **Phase 3 §1.1 官方映射表修正**:官方"不思考模式"映射到 `think=fast`(对齐 chat_template),不是 off。`think=off` 保留为本产品自定义档(裸 `Assistant:`),但标注其偏离训练分布。
+3. **Phase 3 §2.6.a2(g1+off fed 序列对齐官方)删除**:g1+off 无官方对照,该验收无法成立。
+4. **reasoning 多轮全量走重放**:上游生态(RWKV Runner / Ai00 / llama.cpp / HF chat_template)均为"渲染文本是真相、cache 是前缀优化"的重放语义,本产品对齐这一惯例。fast/on 档下 state snapshot 式的"RNN prefix cache"留作 v1.5 优化项,v1 不做。
+
+### 8.6 复现方法
+
+```bash
+cd /Users/no22/Projects/Preen
+.venv/bin/python3 -c "
+import json, warnings; warnings.filterwarnings('ignore')
+from jinja2 import Template
+from transformers import AutoTokenizer
+tok = AutoTokenizer.from_pretrained('models/converted/rwkv7-g1g-1.5b', trust_remote_code=True)
+with open('models/converted/rwkv7-g1g-1.5b/tokenizer_config.json') as f:
+    tmpl = Template(json.load(f)['chat_template'])
+msgs = [{'role':'user','content':'Q1'},{'role':'assistant','content':'A1'},
+        {'role':'user','content':'Q2'},{'role':'assistant','content':'A2'},
+        {'role':'user','content':'Q3'}]
+fast = tmpl.render(messages=msgs, add_generation_prompt=True, enable_thinking=False)
+ids = tok.encode(fast)
+print('bos 位置:', [i for i,t in enumerate(ids) if t==0])  # [0] = 整对话一次
+"
+```

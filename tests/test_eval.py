@@ -32,7 +32,7 @@ class _RecordingEngine:
         self.calls.append((prompt, config))
         return GenerationResult(
             text="reply",
-            token_ids=[1],
+            display_token_ids=[1],
             stop_reason="eos",
             elapsed=0.0,
             used_state=state is not None,
@@ -140,7 +140,7 @@ def test_run_evaluation_result_structure():
     assert first["index"] == 1
     assert first["text"] == "reply"
     assert first["stop_reason"] == "eos"
-    assert "token_ids" in first
+    assert "display_token_ids" in first
 
 
 def test_validate_evaluation_request_rejects_bad_template(tmp_path):

@@ -196,7 +196,12 @@ def generate(
     result = InferenceEngine(model, tokenizer).generate(
         prompt,
         state=state,
-        config=GenerationConfig(max_tokens=max_tokens, temperature=0.0),
+        # 纯贪心:显式关闭重复惩罚。core.generate 是底层兼容入口(golden 测试
+        # 守护编码路径),penalty 是上层 ChatSession/CLI 的采样增强,不在此生效。
+        config=GenerationConfig(
+            max_tokens=max_tokens, temperature=0.0,
+            presence_penalty=0.0, frequency_penalty=0.0,
+        ),
     )
     return result.text
 
