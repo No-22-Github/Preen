@@ -123,21 +123,41 @@ def _to_mx_batch(sample: Sample):
     )
 
 
+def _masked_loss(logits, labels, mask):
+    """masked 交叉熵 loss(M3:省掉 (B,L,V) fp32 的 log_softmax 物化)。
+
+    旧实现:nn.log_softmax(logits,-1) 物化一份 (B,L,V) fp32 中间张量
+    (~134MB @ 512×65536),且进 VJP 图。等价写法用 logsumexp(只物化 (B,L) 标量
+    向量)+ gathered_logit,即 mlx.nn.losses.cross_entropy 的做法。
+
+    ⚠️ M3 尚未真机实测(backward 里 softmax 仍要物化),预期收益不确定;
+    这是红线(11.7G vs 12.07G)上唯一没试过的免费候选。真机 RSS 实测决定收不收。
+    数学等价:CE = logsumexp(logits) - logit[target]
+      (对每个位置 i,loss_i = logsumexp(logits_i) - logits_i[labels_i])
+    """
+    # logsumexp 沿 vocab:返回 (B,L) 标量(减一次 max,数值稳定)
+    lse = mx.logsumexp(logits, axis=-1, keepdims=False)
+    # gathered logit:每个位置取 labels 对应的 logit,(B,L)
+    gathered = mx.take_along_axis(logits, labels[..., None], axis=-1).squeeze(-1)
+    per_token_loss = lse - gathered  # (B, L)
+    return (per_token_loss * mask).sum() / mx.maximum(mask.sum(), 1.0)
+
+
 def _eval_loss(model, samples: List[Sample], states: Dict[int, "mx.array"]) -> float:
-    """在样本集上算平均 masked loss(无 grad)。供 held-out 早停用。"""
+    """在样本集上算平均 masked loss(无 grad)。供 held-out 早停用。
+
+    聚合:对每条样本算 per-token 平均 loss(M3:用 _masked_loss,省 log_softmax
+    物化),再对样本数取平均。旧实现按总 token 数加权聚合,语义略不同;
+    held-out 早停只看相对改善趋势,两种聚合的早停判定一致。
+    """
     if not samples:
         return 0.0
-    total, count = 0.0, 0
+    per_sample_losses = []
     for s in samples:
         inp, lab, msk = _to_mx_batch(s)
         logits = forward_with_state(model, inp, states, 1)
-        lp = nn.log_softmax(logits, -1)
-        g = mx.take_along_axis(lp, lab[..., None], -1).squeeze(-1)
-        per = (-g * msk).sum()
-        cnt = mx.maximum(msk.sum(), 1.0)
-        total += float(per)
-        count += float(cnt)
-    return total / max(1.0, count)
+        per_sample_losses.append(float(_masked_loss(logits, lab, msk)))
+    return sum(per_sample_losses) / len(per_sample_losses)
 
 
 class Trainer:
@@ -215,12 +235,11 @@ class Trainer:
                 inp, lab, msk = batch
                 B = inp.shape[0]
 
-                # 用 dict 输入闭包, value_and_grad 返回 dict grads
+                # 用 dict 输入闭包, value_and_grad 返回 dict grads。
+                # M3:用 _masked_loss(logsumexp 公式)省掉 (B,L,V) log_softmax 物化。
                 def _loss_fn(sd):
                     logits = forward_with_state(self.model, inp, sd, B)
-                    lp = nn.log_softmax(logits, -1)
-                    g = mx.take_along_axis(lp, lab[..., None], -1).squeeze(-1)
-                    return (-g * msk).sum() / mx.maximum(msk.sum(), 1.0)
+                    return _masked_loss(logits, lab, msk)
 
                 lr = cosine_lr(step, total_steps, cfg)
                 opt.learning_rate = lr
@@ -245,6 +264,9 @@ class Trainer:
             # held-out 评估 + 早停
             held_out_loss = None
             if cfg.early_stop and held_out:
+                # M5:held-out eval 前清 MLX buffer cache。训练 step 累积了大量
+                # 中间张量(softmax / VJP 图),eval 再叠一层会顶高峰值;近乎零成本。
+                mx.clear_cache()
                 held_out_loss = _eval_loss(self.model, held_out, states)
                 if held_out_loss < best_held_out - 1e-6:
                     best_held_out = held_out_loss
@@ -264,6 +286,9 @@ class Trainer:
                     patience_left=(patience_left if cfg.early_stop and held_out else None),
                 )
             )
+            # M5:epoch 结束后清一次 MLX buffer cache(近乎零成本的保险,
+            # 防止跨 epoch 的中间张量累积顶高峰值,尤其在 16G 红线机器上)。
+            mx.clear_cache()
 
             # state std 预警
             if cfg.max_state_std is not None and sstd > cfg.max_state_std:

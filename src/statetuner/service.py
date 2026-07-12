@@ -74,6 +74,29 @@ def validate_training_request(request: TrainingRequest) -> None:
         raise ValueError("pth_out 必须配合 export_pth")
 
 
+def _check_data_warnings(summary, ctx_len: int, notify: StatusCallback) -> None:
+    """数据检查的建议性 warn(M4,不 raise)。
+
+    p95 逼近 16G bf16 训练红线(均值 591 / max 644)→ notify 建议:
+      - 若 ctx_len < summary.p95_tokens:部分样本被截断(可能丢 target)
+      - 若 p95 ≥ 580:即便没截断也在红线附近,长样本会触发换页,建议降 ctx
+    """
+    if summary.p95_near_limit:
+        notify(
+            f"⚠ p95_tokens={summary.p95_tokens:.0f} 接近 16G bf16 训练红线"
+            f"(均值 591 / max 644,见 AGENTS.md);长样本可能触发换页。"
+        )
+        if ctx_len >= 580:
+            notify(
+                f"  建议:--ctx-len 降到 ~480(当前 {ctx_len}),或减小 --cache-limit-gb。"
+            )
+    if summary.truncated > 0 and ctx_len < summary.p95_tokens:
+        notify(
+            f"⚠ {summary.truncated} 条样本 > ctx_len={ctx_len} 将被截断"
+            f"(p95={summary.p95_tokens:.0f});截头部保尾部 stop(S3),但 target 前段会丢。"
+        )
+
+
 def run_training(
     request: TrainingRequest,
     emitter: EventEmitter,
@@ -102,6 +125,7 @@ def run_training(
         from .data import load_standard_jsonl
         from .inspection import inspect_standard_jsonl as _inspect_std
         data_summary = _inspect_std(request.data, tokenizer, template=request.template, ctx_len=cfg.ctx_len)
+        _check_data_warnings(data_summary, cfg.ctx_len, notify)
         if data_summary.target_fully_truncated:
             raise ValueError(
                 f"有 {data_summary.target_fully_truncated} 条样本的 target 被 ctx_len 完全截断"
@@ -110,6 +134,7 @@ def run_training(
         notify(f"训练样本: {len(samples)} 条 (importer 产物, template={request.template})")
     else:
         data_summary = inspect_data(request.data, tokenizer, ctx_len=cfg.ctx_len)
+        _check_data_warnings(data_summary, cfg.ctx_len, notify)
         if data_summary.target_fully_truncated:
             raise ValueError(
                 f"有 {data_summary.target_fully_truncated} 条样本的 target 被 ctx_len 完全截断"

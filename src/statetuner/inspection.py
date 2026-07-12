@@ -27,8 +27,23 @@ class DataInspection:
     ctx_len: int
     template: str = "qa"
 
+    # M4:16G 机器 bf16 训练的红线(AGENTS.md 内存事实)。
+    # step_peak 均值 591 / max 644 顶到削顶线 12.07G。
+    # p95 接近 580 → warn(ctx_len 默认 512 已经在红线附近,长样本会触发换页)。
+    P95_WARN_THRESHOLD = 580
+
     def to_dict(self) -> dict:
         return asdict(self)
+
+    @property
+    def p95_near_limit(self) -> bool:
+        """p95 是否逼近 16G bf16 训练红线(M4)。
+
+        红线来自 AGENTS.md:step_peak 均值 591 / max 644,削顶线 12.07G。
+        p95 ≥ 580 → 多数样本接近红线,长样本(>600)会触发换页,建议降 ctx_len。
+        这是建议性 warn(不 raise),由调用方决定怎么呈现。
+        """
+        return self.p95_tokens >= self.P95_WARN_THRESHOLD
 
 
 @dataclass(frozen=True)

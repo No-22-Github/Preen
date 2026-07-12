@@ -61,6 +61,32 @@ def test_load_qa_pairs_rejects_empty_question(tmp_path):
         load_qa_pairs(path)
 
 
+def test_p95_near_limit_threshold():
+    """M4:p95 接近 16G bf16 红线(均值 591/max 644)时 p95_near_limit=True。
+
+    红线来自 AGENTS.md;阈值 580(略低于均值 591,留提前量)。
+    DataInspection 直接构造(不依赖 inspect_data 的数据准备)。
+    """
+    from statetuner.inspection import DataInspection
+
+    common = dict(
+        path="x", total=10, valid=10, skipped_empty_question=0,
+        skipped_empty_answer=0, truncated=0, target_fully_truncated=0,
+        min_tokens=100, mean_tokens=400, max_tokens=700, ctx_len=512,
+    )
+    # p95 远低于红线
+    safe = DataInspection(p95_tokens=300, **common)
+    assert safe.p95_near_limit is False
+    # p95 接近/超过红线
+    near = DataInspection(p95_tokens=585, **common)
+    assert near.p95_near_limit is True
+    over = DataInspection(p95_tokens=650, **common)
+    assert over.p95_near_limit is True
+    # 边界:正好阈值
+    at = DataInspection(p95_tokens=580, **common)
+    assert at.p95_near_limit is True
+
+
 # ── validate_state_for_model（不加载真实模型，tmp npz + fake model）──
 
 
