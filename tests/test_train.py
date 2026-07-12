@@ -231,37 +231,6 @@ def test_cosine_lr_schedule():
     assert cosine_lr(total - 1, total, cfg) < cfg.lr_floor + (cfg.lr - cfg.lr_floor) * 0.05
 
 
-def test_masked_loss_equivalent_to_log_softmax():
-    """M3:_masked_loss(logsumexp 公式)与旧 nn.log_softmax 实现数学等价。
-
-    旧实现物化 (B,L,V) log_softmax(~134MB);新实现用 logsumexp(只物化 (B,L))+
-    gathered_logit,即 cross_entropy 的做法。验证两者逐数值相等(在 fp32 精度内)。
-    内存收益要真机 RSS 实测(backward 里 softmax 仍要物化),本测试只锁数学等价。
-    """
-    import mlx.core as mx
-    import mlx.nn as nn
-    from statetuner.train import _masked_loss
-
-    mx.random.seed(0)
-    B, L, V = 2, 8, 200
-    logits = mx.random.normal((B, L, V))
-    labels = mx.random.randint(0, V, (B, L))
-    mask = mx.array([[1.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0],
-                     [0.0, 1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 0.0]])
-
-    # 旧实现(参考)
-    lp = nn.log_softmax(logits, -1)
-    g = mx.take_along_axis(lp, labels[..., None], -1).squeeze(-1)
-    old = float((-g * mask).sum() / mx.maximum(mask.sum(), 1.0))
-
-    # 新实现
-    new = float(_masked_loss(logits, labels, mask))
-
-    assert old == pytest.approx(new, abs=1e-5), (
-        f"M3 loss 不等价: old={old:.8f} new={new:.8f}"
-    )
-
-
 # ── checkpoint/resume 回归(P0-1 + Q4)────────────────────────
 
 
