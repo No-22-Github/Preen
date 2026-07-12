@@ -26,7 +26,13 @@ dependencies = [
 statetuner = "statetuner.cli:app"
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = [
+    "pytest>=8",
+    # torch 仅开发期依赖:不进 bundle,只为让 pth_io 的外部 oracle
+    # (test_torch_reads_bf16 / test_torch_can_load) 从 importorskip skip 变真门禁。
+    # RWKV Runner 走的就是 torch.load,两个测试通过的语义 = 文件容器正确。
+    "torch>=2.3",
+]
 
 [build-system]
 requires = ["hatchling"]

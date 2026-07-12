@@ -380,14 +380,22 @@ class ServeProtocol:
         self._busy = threading.Lock()
         self._in_flight_id: Optional[str] = None  # 当前在跑的请求 id(busy 检查用)
         self._shutdown = False
+        # X1:_emit 跨线程无锁会撕裂 JSON 行。读线程(abort 的 ok)和主线程同时写
+        # stdout 靠 GIL 撞运气,违反「stdout 只有完整 JSON 行」不变式。显式加锁。
+        self._emit_lock = threading.Lock()
 
-    # ── 输出 ────────────────────────────────────────────────
+    # ── 输出 ────────────────────────────────────────────────────
 
     def _emit(self, event: dict) -> None:
-        """写一个事件到 stdout(原子写一行 + flush)。"""
+        """写一个事件到 stdout(原子写一行 + flush)。
+
+        X1:加锁保证一行完整 —— 读线程(abort ok)与主线程(turn_end/text_chunk)
+        可能并发 emit,裸 write + flush 会撕裂行。
+        """
         line = json.dumps(event, ensure_ascii=False)
-        self._stdout.write(line + "\n")
-        self._stdout.flush()
+        with self._emit_lock:
+            self._stdout.write(line + "\n")
+            self._stdout.flush()
 
     def _log(self, msg: str) -> None:
         """人类可读日志走 stderr(§3.2:stdout 只有 JSON)。"""
@@ -522,7 +530,9 @@ class ServeProtocol:
         if cmd == "abort":
             # abort 正常在读线程内联处理(_maybe_handle_abort_inline,立即生效)。
             # 这里是同步兜底路径(测试直接调 handle_line / 无在跑生成时的幂等回 ok)。
-            # 若有在跑生成,读线程已 set event 并回 ok,不会走到这;走到这说明无在跑。
+            # 注意(P3/X2):走到这里不能断言"无在跑" —— 读线程可能在主线程把 send
+            # 取出队列之前就内联处理了 abort,此时 _in_flight_id 可能已设、event 未 set。
+            # 当前实现幂等回 ok,真正的竞态修复见 X2(本 commit 仅订正注释)。
             self._emit(_ok(id_))
             return
         if cmd == "detect_import":

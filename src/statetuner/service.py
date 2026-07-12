@@ -34,6 +34,15 @@ class TrainingJobResult:
     elapsed: float
 
 
+def _has_import_sidecar(data_path: Path) -> bool:
+    """数据文件旁是否有 <name>.import.json(importer 产物标记)。
+
+    拆出来便于单测,且 run_training 与 validate 共用同一判定。
+    """
+    sidecar = data_path.with_name(data_path.stem + data_path.suffix + ".import.json")
+    return sidecar.exists()
+
+
 def validate_training_request(request: TrainingRequest) -> None:
     """应用层校验；sidecar/其他客户端不依赖 CLI 也能得到同样保护。"""
     cfg = request.train_config
@@ -47,10 +56,18 @@ def validate_training_request(request: TrainingRequest) -> None:
         raise ValueError(f"训练数据不存在: {request.data}")
     if request.test_data is not None and not request.test_data.is_file():
         raise ValueError(f"held-out 数据不存在: {request.test_data}")
+    # S1:遗留数据(无 importer sidecar)只能走 qa 模板。load_qa_dataset 无条件
+    # 按 QA 编码,放行 instruction 会在 metadata 里写假话却按 QA 训练。
+    # 在校验阶段就拦下(早于模型加载),便于 Q5 单测且避免无谓 load_model。
+    if request.template == "instruction" and not _has_import_sidecar(request.data):
+        raise ValueError(
+            "遗留数据(无 .import.json sidecar)不支持 instruction 模板;"
+            "请先用 `statetuner import` 转标准 jsonl,或显式 --template qa"
+        )
     if cfg.lr <= 0 or cfg.lr_floor <= 0 or cfg.lr_floor > cfg.lr:
         raise ValueError("lr/lr_floor 参数范围非法")
     if cfg.warmup < 0 or cfg.ctx_len <= 0 or cfg.epochs <= 0 or cfg.grad_clip <= 0:
-        raise ValueError("warmup/ctx_len/epochs/grad_clip 参数范围非法")
+        raise ValueError("warmup/ctx-len/epochs/grad_clip 参数范围非法")
     if not 0 < request.test_ratio < 1:
         raise ValueError("test_ratio 必须在 (0, 1) 范围内")
     if request.pth_out is not None and not request.export_pth:
@@ -80,8 +97,8 @@ def run_training(
 
     # 数据分流(§4.3):importer 产物(带 .import.json sidecar)走标准 loader,
     # 遗留数据(instruction/output 字段)走 load_qa_dataset。两条路径都有截断检查。
-    sidecar = request.data.with_name(request.data.stem + request.data.suffix + ".import.json")
-    if sidecar.exists():
+    # S1:遗留数据只支持 qa 模板已在 validate_training_request 拦下。
+    if _has_import_sidecar(request.data):
         from .data import load_standard_jsonl
         from .inspection import inspect_standard_jsonl as _inspect_std
         data_summary = _inspect_std(request.data, tokenizer, template=request.template, ctx_len=cfg.ctx_len)
@@ -98,7 +115,7 @@ def run_training(
                 f"有 {data_summary.target_fully_truncated} 条样本的 target 被 ctx_len 完全截断"
             )
         samples = load_qa_dataset(request.data, tokenizer, max_len=cfg.ctx_len)
-        notify(f"训练样本: {len(samples)} 条 (template={request.template})")
+        notify(f"训练样本: {len(samples)} 条 (template=qa)")
 
     held_out = None
     if cfg.early_stop:

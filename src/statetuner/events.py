@@ -173,11 +173,18 @@ def epoch_end(
 
 
 def std_warning(epoch: int, state_std: float, threshold: float) -> Event:
+    """state std 超过给定阈值的事件。
+
+    产品 CLI 默认不启用(max_state_std=None);只有显式传阈值时才会触发。
+    文案对齐现状:state std 健康区间尚未标定,超阈值只记录不解释、不中断
+    (旧文案写"可能数值爆炸"是给已废弃的 1.0 阈值背书,与 core.state_std 的
+    "阈值尚未标定"注释矛盾 —— 同一事实在仓库里曾有两个版本)。
+    """
     return Event(
         type="std_warning",
         epoch=epoch,
         state_std=state_std,
-        message=f"state std {state_std:.3f} > {threshold} (可能数值爆炸, 已记录但未中断)",
+        message=f"state std {state_std:.3f} > {threshold} (已记录;健康区间尚未标定, 不中断)",
     )
 
 

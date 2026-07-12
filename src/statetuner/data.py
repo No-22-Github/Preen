@@ -81,6 +81,9 @@ def encode_template_sample(
     含末位 stop_token。即 label 落在 [prefix_len, len(full)) 区间才算 loss。
     (mask[i]=1 当 (i+1) >= prefix_len。)
 
+    超长样本:按 max_len **截头部**(丢 prefix 早期 token)以保尾部 stop_token,
+    否则会砍掉 "让模型学会停" 的终止符。旧实现切尾部是 bug(S3)。
+
     tokenizer: 需有 .encode(str)->list[int] / .decode(ids)->str。
     template:  TaskTemplate 实例(prefix/target/stop_token 同源)。
     **fields:  模板占位符的值(如 q=..., a=... 或 instruction=..., input=..., a=...)。
@@ -98,9 +101,16 @@ def encode_template_sample(
     mask = [1 if (i + 1) >= prefix_len else 0 for i in range(len(input_ids))]
 
     if len(input_ids) > max_len:
-        input_ids = input_ids[:max_len]
-        labels = labels[:max_len]
-        mask = mask[:max_len]
+        # S3:超长样本按 max_len 截断,且必须保尾部(含 stop_token)。
+        # 旧实现切尾部 → 超长样本第一个被砍的就是 stop_token,正好毁掉
+        # "让模型学会停" 这个核心设计。改为切头部:丢掉 prefix 早期 token,
+        # 保留 target 末尾 + stop_token。同时 full_ids 一致截断(Sample 内部
+        # 不再自相矛盾)。仍可能丢 target 前段,但 stop 一定在。
+        overflow = len(input_ids) - max_len
+        input_ids = input_ids[overflow:]
+        labels = labels[overflow:]
+        mask = mask[overflow:]
+        full_ids = full_ids[overflow:]
 
     # prompt_text/target_text 仅用于 debug/eval 展示;通用模板无 cn/en 概念,
     # 取 fields 里的近似值(兼容 q/a 与 instruction/input/a 占位符)。
@@ -223,29 +233,3 @@ def train_test_split(
     train = [samples[i] for i in range(len(samples)) if i not in test_idx]
     test = [samples[i] for i in sorted(test_idx)]
     return train, test
-
-
-def verify_boundary(samples: List[Sample], tokenizer, n: int = 3) -> None:
-    """打印前 n 条样本的 mask 边界,人工确认切对了(CLI preview 用)。"""
-    for i, s in enumerate(samples[:n]):
-        print(f"--- 样本 {i} ---")
-        print(f"  prompt: {s.prompt_text}")
-        print(f"  target: {s.target_text}")
-        print(f"  prefix_len(边界): {s.prefix_len}, 总长: {s.length}")
-        before = tokenizer.decode(s.input_ids[: s.prefix_len])
-        at_boundary = (
-            tokenizer.decode([s.input_ids[s.prefix_len]])
-            if s.prefix_len < len(s.input_ids)
-            else "?"
-        )
-        after = tokenizer.decode(s.input_ids[s.prefix_len : s.prefix_len + 5])
-        print(f"  边界前(prefix): {before!r}")
-        print(f"  边界处 token[{s.prefix_len}]: {at_boundary!r}")
-        print(f"  边界后(target): {after!r}")
-        transitions = [
-            (j, s.mask[j])
-            for j in range(len(s.mask))
-            if j == 0 or s.mask[j] != s.mask[j - 1]
-        ]
-        print(f"  mask 0→1 转换: {transitions}")
-        print()

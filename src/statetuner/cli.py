@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Optional
 
 import json
+import sys
 
 import typer
 
@@ -43,17 +44,27 @@ def _apply_cache_limit(spec: Optional[str]) -> None:
 
     必须在任何 MLX 加载/分配前调用才有效(mem_probe 验证过的时序)。
     spec 解析:
-      None       — 不动 MLX 默认(理论上不会被触发,默认是 auto)
       "auto"     — 物理内存 × 25%(16GB 机器 ≈ 4.3G,c4G 同档)
       "<number>" — 直接当 GB,如 "4" → 4G
     全仓 GB 口径(÷1e9),禁止 /1024³。
     """
     if spec is None:
-        return
+        # 调用方未传 spec(理论上不会触发:CLI 默认是 "auto")。
+        # 见 review T2 / P3:不再保留"理论上不会被触发"的薛定谔分支,
+        # 一旦出现说明调用方漏传 —— 直接断言,别让默认值静默走偏。
+        assert False, "_apply_cache_limit 收到 None(spec 缺省应为 'auto')"
     import mlx.core as mx
 
     if spec == "auto":
-        gb = mx.device_info()["memory_size"] / 1e9 * 0.25
+        # memory_size 用 .get 兜底:Linux MLX / 部分版本 device_info 可能缺该键,
+        # 与 doctor_report 保持同一防御口径(否则裸下标 KeyError)。
+        mem_bytes = mx.device_info().get("memory_size", 0)
+        if mem_bytes <= 0:
+            _bad_input(ValueError(
+                "MLX device_info 未报告 memory_size,无法走 auto;"
+                "请显式 --cache-limit-gb <GB>"
+            ))
+        gb = mem_bytes / 1e9 * 0.25
     else:
         try:
             gb = float(spec)
@@ -276,10 +287,19 @@ def train(
             typer.echo(f"错误: {exc}", err=True)
             raise typer.Exit(1) from None
 
-    peak = float(mx.get_peak_memory()) / 1e9
+    # AGENTS.md 内存铁律:mx.get_peak_memory() 严重漏报(只算 MLX allocator,
+    # 不含 Metal wired memory)。RSS 是唯一可信口径 —— 这里取进程峰值 RSS。
+    # macOS: ru_maxrss 单位是字节;Linux 是 KB。按平台换算到 GB(全仓 GB 口径)。
+    import resource
+
+    ru = resource.getrusage(resource.RUSAGE_SELF)
+    if sys.platform == "darwin":
+        peak_rss_gb = ru.ru_maxrss / 1e9
+    else:
+        peak_rss_gb = ru.ru_maxrss * 1024 / 1e9
     typer.echo(
         f"# 完成: epochs={result.epochs_run} loss={result.final_loss:.4f} "
-        f"std={result.final_state_std:.4f} peak_mem={peak:.2f}GB "
+        f"std={result.final_state_std:.4f} peak_rss={peak_rss_gb:.2f}GB "
         f"elapsed={result.elapsed:.1f}s",
         err=True,
     )

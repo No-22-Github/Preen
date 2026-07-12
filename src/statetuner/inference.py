@@ -371,11 +371,15 @@ class InferenceEngine:
                 raise GenerationAborted()
             t_step_start = time.time()
             logits = self.model(input_ids, caches)[0, -1]
-            # 重复惩罚(ChatRWKV 官方语义):对已出现 token 施加
-            # -(presence + count*frequency) 到 logits 上。贪心/采样路径都生效。
+            # 重复惩罚(X3 向量化):ChatRWKV 官方语义 logits[tok] -= presence+cnt*freq。
+            # 旧实现是 per-token Python 循环,300 token 对话后期每步几百次 dispatch;
+            # 改成 scatter(权重)+ 一次相减,避免每步往图里塞 len(occurrence) 个小 op。
             if cfg.has_penalty and occurrence:
-                for tok_id, cnt in occurrence.items():
-                    logits[tok_id] -= cfg.presence_penalty + cnt * cfg.frequency_penalty
+                tok_ids = mx.array(list(occurrence.keys()))
+                counts = mx.array(list(occurrence.values()))
+                penalties = cfg.presence_penalty + counts * cfg.frequency_penalty
+                # scatter-add 取负 = 在 tok_ids 位置减去 penalties(原地语义)
+                logits[tok_ids] -= penalties
             if sampler is None:
                 next_token = int(mx.argmax(logits, axis=-1))
             else:
@@ -394,10 +398,12 @@ class InferenceEngine:
             # fed_token_ids 记录所有走过前向的生成 token(含将被 stop_sequence
             # 污染的部分),用于多轮审计(§2.3)。eos 不进 cache,不记入。
             fed_token_ids.append(next_token)
-            # 更新 occurrence:先衰减所有历史计数,再给当前 token 计数+1
+            # 更新 occurrence:先衰减所有历史计数,再给当前 token 计数+1。
+            # X3:衰减也批处理(字典推导式一次性重建),避免 per-key Python 循环。
             if cfg.has_penalty:
-                for t_id in occurrence:
-                    occurrence[t_id] *= cfg.penalty_decay
+                occurrence = {
+                    t_id: cnt * cfg.penalty_decay for t_id, cnt in occurrence.items()
+                }
                 occurrence[next_token] = occurrence.get(next_token, 0.0) + 1.0
             decoded_text = self.tokenizer.decode(generated)
             stop_positions = [

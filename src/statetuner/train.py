@@ -50,7 +50,9 @@ class TrainConfig:
     ctx_len: int = 512
     bsz: int = 1
     epochs: int = 20  # 配 early_stop 后是上限
-    grad_clip: float = 1.0  # state tuning 梯度可能大,裁剪
+    grad_clip: float = 1.0  # value clipping(mx.clip(g,-c,c));注意是逐元素 clip
+                            # 而非 global norm clip —— 改变梯度方向(非等比缩放)。
+                            # state tuning 实测此值合理;改语义前先读这行。
     log_every: int = 10  # 每 N 步发一个 step 事件
 
     # state std 监控
@@ -196,6 +198,13 @@ class Trainer:
         step = start_epoch * len(samples)
         global_step_offset = step
 
+        # 预初始化 epoch/avg_loss/sstd,防止 resume 已到末尾时 for 循环一次不进
+        # 导致后续引用 NameError(review TR2)。resume 到末尾时这些值应反映
+        # "没有新 epoch 跑过":epoch 回退到最后一个完成的轮次,loss/std 取当前 state。
+        epoch = start_epoch - 1
+        avg_loss = float("nan")
+        sstd = state_std(states)
+
         for epoch in range(start_epoch, cfg.epochs):
             self.emitter.emit(events.epoch_start(epoch))
             order = list(range(len(samples)))
@@ -217,6 +226,8 @@ class Trainer:
                 lr = cosine_lr(step, total_steps, cfg)
                 opt.learning_rate = lr
                 loss, grads = mx.value_and_grad(_loss_fn)(states)
+                # TR4: value clipping(逐元素 clip 到 [-c, c]),非 global-norm。
+                # 改方向不等比缩放;state tuning 实测此阈值可用,不要按 norm clip 常识调参。
                 grads = {k: mx.clip(g, -cfg.grad_clip, cfg.grad_clip) for k, g in grads.items()}
                 states = opt.apply_gradients(grads, states)
                 mx.eval(states, loss)
@@ -278,6 +289,10 @@ class Trainer:
 
         # 用最佳 state(若用了 held-out),否则用最后
         final_states = best_states if (cfg.early_stop and held_out) else states
+        # TR3:final_state_std 必须描述 final_states,而不是最后一轮的 states。
+        # 早停时 final_states == best_states(可能是第 5 轮),而 sstd 是第 8 轮的;
+        # 三个字段并排出现在 metadata 里会误导读者以为描述同一对象。
+        final_state_std = state_std(final_states)
         elapsed = time.time() - t0
 
         out_path = None
@@ -303,7 +318,7 @@ class Trainer:
             states=final_states,
             best_held_out_loss=(best_held_out if best_held_out != math.inf else None),
             final_loss=avg_loss,
-            final_state_std=sstd,
+            final_state_std=final_state_std,
             epochs_run=epoch + 1 - start_epoch,
             elapsed=elapsed,
         )
@@ -319,11 +334,11 @@ class Trainer:
         patience_left: int,
         name: Optional[str] = None,
     ) -> Path:
-        """存 checkpoint: state(npz) + meta(json, 含 optimizer 状态)。
+        """存 checkpoint: state(npz) + meta(json)。
 
-        npz: layer_{i} (P0 内部格式, generate 直接可读)
-        meta: epoch / step / best / patience_left / lr / optimizer.m / optimizer.v
-              (Adam 的 m/v 手动序列化为 npz,恢复时重建)
+        原子写(TR5):npz 先写 .tmp 再 replace,与 save_state_npz 同一纪律;
+        meta json 同样 tmp+replace。中途被打断不会留下半截文件让 resume 读错。
+        optimizer 状态在 P0-1 修复后随 npz 一起存(本 commit 仅做原子化)。
         """
         ckpt_dir.mkdir(parents=True, exist_ok=True)
         fname = name or f"epoch{epoch:03d}.npz"
@@ -343,8 +358,11 @@ class Trainer:
                     if "v" in st:
                         opt_v[f"layer_{param_key}"] = np.array(st["v"])
 
-        np.savez(npz_path, **state_arrays, **{f"_optm_{k}": v for k, v in opt_m.items()},
+        # TR5: tmp + replace 原子写(对齐 save_state_npz)
+        tmp_npz = npz_path.with_name(npz_path.name + ".tmp")
+        np.savez(tmp_npz, **state_arrays, **{f"_optm_{k}": v for k, v in opt_m.items()},
                  **{f"_optv_{k}": v for k, v in opt_v.items()})
+        tmp_npz.replace(npz_path)
 
         # meta
         meta = {
@@ -358,7 +376,9 @@ class Trainer:
             "n_layers": len(states),
         }
         meta_path = npz_path.with_suffix(".meta.json")
-        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp_meta = meta_path.with_name(meta_path.name + ".tmp")
+        tmp_meta.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp_meta.replace(meta_path)
 
         return npz_path
 
