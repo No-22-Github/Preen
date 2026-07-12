@@ -263,19 +263,16 @@ def train(
             typer.echo(f"错误: {exc}", err=True)
             raise typer.Exit(1) from None
 
-    # AGENTS.md 内存铁律:mx.get_peak_memory() 严重漏报(只算 MLX allocator,
-    # 不含 Metal wired memory)。RSS 是唯一可信口径 —— 这里取进程峰值 RSS。
-    # macOS: ru_maxrss 单位是字节;Linux 是 KB。按平台换算到 GB(全仓 GB 口径)。
-    import resource
+    # 内存口径(runtime.py):用 phys_footprint 峰值(== Activity Monitor「内存」列,
+    # 含 Metal 的 IOKit 映射)。旧实现用 ru_maxrss 漏报 ~7x(不含 IOKit);
+    # mx.get_peak_memory() 更不准(只算 MLX allocator)。见 runtime.py docstring。
+    from .runtime import memory_report
 
-    ru = resource.getrusage(resource.RUSAGE_SELF)
-    if sys.platform == "darwin":
-        peak_rss_gb = ru.ru_maxrss / 1e9
-    else:
-        peak_rss_gb = ru.ru_maxrss * 1024 / 1e9
+    snap = memory_report()
+    peak_gb = snap.peak_footprint_gb or snap.rss_gb or 0.0
     typer.echo(
         f"# 完成: epochs={result.epochs_run} loss={result.final_loss:.4f} "
-        f"std={result.final_state_std:.4f} peak_rss={peak_rss_gb:.2f}GB "
+        f"std={result.final_state_std:.4f} peak_mem={peak_gb:.2f}GB "
         f"elapsed={result.elapsed:.1f}s",
         err=True,
     )
