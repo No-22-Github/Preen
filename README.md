@@ -12,8 +12,10 @@
 当前进度:核心引擎与 CLI 已就绪,`.pth` 导出与 RWKV Runner 挂载都已验证,SwiftUI 外壳待建。
 
 - P0 技术验证:梯度穿透、收敛、泛化、ops/kernel 等价,见 [实验报告](experiments/p0_translate/实验报告.md)
-- P1 产品化:训练循环、`.pth` 导出器、回归测试,见 [实验报告](docs/P1-实验报告.md)
-- P2 命令行:train / eval / preview / chat / export 全流程打通,见 [收尾报告](docs/P2-CLI收尾报告.md)
+- P1 产品化:训练循环、`.pth` 导出器、回归测试
+- P2 命令行:train / eval / preview / chat / export 全流程打通
+
+P1/P2 的实测数据与技术裁决汇总在 [工程实测数据](docs/工程实测数据.md)。
 
 ---
 
@@ -86,8 +88,7 @@ docs/                           文档
 ├── 快速上手.md                    ★ 分步教程 (首次微调必读)
 ├── RWKV-StateTuner-Roadmap.md    落地路线图
 ├── P0-理论指南.md                 state tuning 原理
-├── P1-实验报告.md                 P1 产品化落地记录
-├── P2-CLI收尾报告.md              CLI 收尾 (eval/chat 编排下沉)
+├── 工程实测数据.md                 P1/P2 实测数据 + 技术裁决汇总
 ├── 转换器零依赖化报告.md           转换器 fixture + tokenizer vendor
 ├── g1g-decode-alignment.md        g1g prompt 格式 token 级对齐
 ├── decision-precision.md          精度方案 + 内存红线标定 (裁决)

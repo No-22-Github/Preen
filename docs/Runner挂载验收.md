@@ -34,7 +34,8 @@ else:                                  # v5/v6
 默认 `x070=True`)。官方 roleplay state 也是原样存储,同链路验证正常。
 
 > ⚠️ 历史教训:初版导出器误按 v5/v6 假设做了 swapaxes,导致 x070 模型在 Runner 上注入转置方向
-> 的 state,输出碎渣。已修正。详见 [P1-任务①收尾报告.md](P1-任务①收尾报告.md)。
+> 的 state,输出碎渣。已修正。导出方向裁决与依据见
+> [工程实测数据 §三](工程实测数据.md#三pth-导出方向裁决)。
 
 Runner 的检测逻辑:加载 state 时校验层数和 `n_embd`,含 `.time_state` 键即启用 tuned-state 路径。
 
@@ -72,8 +73,8 @@ statetuner export --state experiments/p0_translate/checkpoints_v3/ep04.npz --out
 - state 加载前后行为有明显差异(证明 state 生效)
 
 **已知限制(训练质量,非导出问题)**:
-- 当前 ep04 state 的翻译质量不达翻译水准,表现为"英文单词硬凑+关键词命中但语义不完整"。
-  这是训练侧问题,详见 [P1-已知问题.md](P1-已知问题.md)。
+- 早期翻译路径(已废弃)的 ep04 state 达不到翻译水准,表现为"英文单词硬凑 + 关键词命中但语义不完整"。
+  这是训练侧/任务边界问题,不是导出方向问题——state tuning 学风格不学事实,内容映射本就不可靠。
 
 ### 4. 对照:无 state 基线
 
@@ -101,4 +102,4 @@ uv run python -c "import torch; d=torch.load('translate_state.pth', map_location
 ```
 
 **Q: 输出是英文但语义不通(单词硬凑)**
-→ 方向正确,但训练质量不足。这是训练侧问题,非导出问题。见 [P1-已知问题.md](P1-已知问题.md)。
+→ 方向正确,但训练质量不足,属训练侧/任务边界问题,非导出问题。state tuning 学风格不学事实。
