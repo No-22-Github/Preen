@@ -18,6 +18,7 @@ from typing import Callable, Optional
 
 from .core import StateInput
 from .inference import (
+    AbortChecker,
     GenerationConfig,
     InferenceEngine,
     render_prompt,
@@ -85,6 +86,9 @@ class ChatSession:
         self.state_label = state_label
         self.state_loader = state_loader or engine.load_state
         self.ab = ab
+        # abort 钩子(§3.3):serve 协议设此项,handle 内部 generate 透传给引擎,
+        # 每步检查 → GenerationAborted。默认 None,CLI/chat 命令零影响。
+        self.abort_checker: Optional[AbortChecker] = None
         # Phase 3 §2 多轮状态
         self.history: list[Turn] = []
         self.cache: object = None  # running cache,None=需从 S₀ 新建(重放)
@@ -160,6 +164,7 @@ class ChatSession:
                 cache=None,
                 config=self.config,
                 on_text=stream_cb,
+                should_abort=self.abort_checker,
             )
         elif is_continuation:
             prompt = self._build_continuation_prompt(user_text)
@@ -169,6 +174,7 @@ class ChatSession:
                 cache=self.cache,
                 config=self.config,
                 on_text=stream_cb,
+                should_abort=self.abort_checker,
             )
         else:
             # 重放:先把本轮 user 追加进 history,再渲染完整历史
@@ -180,6 +186,7 @@ class ChatSession:
                 cache=None,
                 config=self.config,
                 on_text=stream_cb,
+                should_abort=self.abort_checker,
             )
 
         display = self._display_text(result.text)

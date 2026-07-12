@@ -20,7 +20,7 @@ class FakeEngine:
     def load_state(self, state):
         return {0: str(state)}
 
-    def generate(self, prompt, *, state=None, config=None, cache=_sentinel, on_text=None):
+    def generate(self, prompt, *, state=None, config=None, cache=_sentinel, on_text=None, should_abort=None):
         self.calls.append({"prompt": prompt, "state": state, "cache": cache})
         text = "tuned" if state is not None else "baseline"
         if on_text is not None:
@@ -363,7 +363,7 @@ def test_display_text_think_on_end_to_end_in_history():
     # 让 FakeEngine.generate 返回含 think 段的文本
     original_generate = engine.generate
 
-    def think_generate(prompt, *, state=None, config=None, cache=FakeEngine._sentinel, on_text=None):
+    def think_generate(prompt, *, state=None, config=None, cache=FakeEngine._sentinel, on_text=None, should_abort=None):
         result = original_generate(
             prompt, state=state, config=config, cache=cache, on_text=on_text
         )

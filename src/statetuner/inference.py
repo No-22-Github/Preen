@@ -32,6 +32,15 @@ ThinkSuffix = {
 }
 StopReason = Literal["eos", "stop_sequence", "max_tokens"]
 TextCallback = Callable[[str], None]
+AbortChecker = Callable[[], bool]
+
+
+class GenerationAborted(Exception):
+    """生成被外部中断(serve abort 协议指令触发,§3.3)。
+
+    InferenceEngine.generate 每步检查 should_abort 回调,True 则抛此异常。
+    serve 层 ServeProtocol 捕获并发 error{code:aborted} 终结事件。
+    """
 
 
 @dataclass(frozen=True)
@@ -264,6 +273,7 @@ class InferenceEngine:
         cache=None,
         config: Optional[GenerationConfig] = None,
         on_text: Optional[TextCallback] = None,
+        should_abort: Optional[AbortChecker] = None,
     ) -> GenerationResult:
         """单次生成。
 
@@ -272,6 +282,9 @@ class InferenceEngine:
           cache=<obj> → 续传:复用传入的 cache,只 prefill 新 prompt
         返回的 GenerationResult.cache 是前向结束后的 cache,供下轮续传。
         cache_clean(§2.2):eos/max_tokens 干净可续传;stop_sequence 脏需重放。
+
+        should_abort(§3.3 abort 机制):每步前检查,True 则抛 GenerationAborted。
+        默认 None → 不检查(所有现有调用方:CLI/ChatSession/service 零改动)。
         """
         cfg = config or GenerationConfig()
         cfg.validate()
@@ -352,6 +365,10 @@ class InferenceEngine:
         prompt_token_count = len(prompt_ids)
 
         for step in range(cfg.max_tokens):
+            # abort 检查(§3.3):serve 协议中断信号,每步前检查一次。
+            # 默认 None 时短路,零开销。延迟到下一 step 边界(MLX 前向 ~50-200ms)。
+            if should_abort is not None and should_abort():
+                raise GenerationAborted()
             t_step_start = time.time()
             logits = self.model(input_ids, caches)[0, -1]
             # 重复惩罚(ChatRWKV 官方语义):对已出现 token 施加

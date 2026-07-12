@@ -1,0 +1,4 @@
+{"question": "什么是 RWKV?", "answer": "RWKV 是一种结合 RNN 和 Transformer 优点的架构。"}
+{"prompt": "解释 state tuning", "completion": "冻结模型权重只训练初始状态矩阵。"}
+{"query": "猫娘怎么说话?", "response": "喵~主人好可爱喵~"}
+{"q": "1+1=?", "a": "2"}

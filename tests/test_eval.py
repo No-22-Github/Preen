@@ -28,7 +28,7 @@ class _RecordingEngine:
     def __init__(self):
         self.calls: list[tuple[str, GenerationConfig]] = []
 
-    def generate(self, prompt, *, state=None, config=None, on_text=None):
+    def generate(self, prompt, *, state=None, config=None, on_text=None, should_abort=None):
         self.calls.append((prompt, config))
         return GenerationResult(
             text="reply",

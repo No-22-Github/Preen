@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Tuple, Union
 
-from .templates import QA
+from .templates import INSTRUCTION, QA
 
 PathLike = Union[str, Path]
 
@@ -152,6 +152,55 @@ def load_qa_dataset(
         if not a:
             continue  # 跳过无回答的条目
         s = encode_template_sample(tokenizer, template, max_len=max_len, q=q, a=a)
+        samples.append(s)
+    return samples
+
+
+def load_standard_jsonl(
+    path: PathLike,
+    tokenizer,
+    *,
+    template: str = "qa",
+    max_len: int = 512,
+) -> List[Sample]:
+    """读取内部标准 jsonl(importer.py 产物)→ 编码为 Sample 列表。
+
+    字段契约(Spec §1.3,与 importer.py write_import 产物一致):
+      - qa 模板:        {"prompt": ..., "response": ...}
+      - instruction 模板: {"instruction": ..., "input": ..., "response": ...}
+
+    与 load_qa_dataset 的区别:后者按 instruction/output 键读现有 NekoQA 数据文件
+    (数据文件不改名);本函数读 importer 产出的标准字段名。
+
+    template 决定字段名 + 用哪个 TaskTemplate 编码(qa→QA, instruction→INSTRUCTION)。
+    跳过 response 为空的条目;超长按 max_len 截断(不丢弃)。
+    """
+    if template == "qa":
+        tmpl = QA
+    elif template == "instruction":
+        tmpl = INSTRUCTION
+    else:
+        raise ValueError(f"标准 jsonl 只支持 qa / instruction 模板, 收到 {template!r}")
+
+    items = load_jsonl(Path(path))
+    samples = []
+    for item in items:
+        if template == "qa":
+            q = (item.get("prompt") or "").strip()
+            a = (item.get("response") or "").strip()
+            if not a:
+                continue
+            s = encode_template_sample(tokenizer, tmpl, max_len=max_len, q=q, a=a)
+        else:  # instruction
+            instruction = (item.get("instruction") or "").strip()
+            inp = item.get("input") or ""
+            a = (item.get("response") or "").strip()
+            if not a:
+                continue
+            s = encode_template_sample(
+                tokenizer, tmpl, max_len=max_len,
+                instruction=instruction, input=inp, a=a,
+            )
         samples.append(s)
     return samples
 

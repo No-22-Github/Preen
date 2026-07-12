@@ -1,0 +1,5 @@
+{"instruction": "计算 2+2 等于多少", "input": "", "output": "2+2 等于 4。"}
+{"instruction": "把以下句子翻译成英文", "input": "今天天气很好", "output": "The weather is nice today."}
+{"instruction": "给三毛的句子分类", "input": "我是一只猫", "output": "这是第一人称陈述句。"}
+{"instruction": "解释什么是 state tuning", "input": "", "output": "冻结权重只训练初始状态。"}
+{"instruction": "总结这段话", "input": "RWKV 是线性 RNN,推理恒定内存。", "output": "RWKV 推理内存恒定。"}

@@ -1,0 +1,3 @@
+{"prompt": "你好", "chosen": [{"role": "assistant", "content": "你好!"}], "rejected": [{"content": "滚", "role": "assistant"}]}
+{"prompt": "再见", "chosen": [{"content": "再见!", "role": "assistant"}], "rejected": [{"content": "...", "role": "assistant"}]}
+{"prompt": "谢谢", "chosen": [{"role": "assistant", "content": "不客气!"}], "rejected": [{"role": "assistant", "content": "..."}]}

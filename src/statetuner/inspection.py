@@ -147,6 +147,94 @@ def inspect_data(path: Path, tokenizer, *, ctx_len: int = 512) -> DataInspection
     )
 
 
+def inspect_standard_jsonl(
+    path: Path, tokenizer, *, template: str = "qa", ctx_len: int = 512
+) -> DataInspection:
+    """检查 importer 标准产物(prompt/response 或 instruction/input/response)。
+
+    与 inspect_data 的区别:字段名契约不同(见 data.load_standard_jsonl)。
+    两条数据路径共存:遗留 instruction/output 走 inspect_data,
+    importer 产物走本函数。截断/长度统计逻辑一致。
+    """
+    from .templates import INSTRUCTION, QA
+
+    if ctx_len <= 0:
+        raise ValueError("ctx_len 必须 > 0")
+    if template not in ("qa", "instruction"):
+        raise ValueError(f"标准 jsonl 检查只支持 qa / instruction, 收到 {template!r}")
+    tmpl = QA if template == "qa" else INSTRUCTION
+
+    items = _read_items(path)
+    lengths: list[int] = []
+    empty_q = empty_a = truncated = target_lost = 0
+
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise ValueError(f"第 {index + 1} 条必须是 JSON 对象")
+        if template == "qa":
+            q_raw = item.get("prompt")
+            a_raw = item.get("response")
+            if q_raw is not None and not isinstance(q_raw, str):
+                raise ValueError(f"第 {index + 1} 条 prompt 必须是字符串")
+            if a_raw is not None and not isinstance(a_raw, str):
+                raise ValueError(f"第 {index + 1} 条 response 必须是字符串")
+            q = (q_raw or "").strip()
+            a = (a_raw or "").strip()
+            if not q:
+                empty_q += 1
+                continue
+            if not a:
+                empty_a += 1
+                continue
+            prefix_len = len(tokenizer.encode(tmpl.format_prefix(q=q)))
+        else:  # instruction
+            instruction_raw = item.get("instruction")
+            input_raw = item.get("input")
+            a_raw = item.get("response")
+            if instruction_raw is not None and not isinstance(instruction_raw, str):
+                raise ValueError(f"第 {index + 1} 条 instruction 必须是字符串")
+            if a_raw is not None and not isinstance(a_raw, str):
+                raise ValueError(f"第 {index + 1} 条 response 必须是字符串")
+            q = (instruction_raw or "").strip()
+            inp = input_raw or ""
+            a = (a_raw or "").strip()
+            if not q:
+                empty_q += 1
+                continue
+            if not a:
+                empty_a += 1
+                continue
+            prefix_len = len(tokenizer.encode(
+                tmpl.format_prefix(instruction=q, input=inp)
+            ))
+        target_len = len(tokenizer.encode(tmpl.format_target(a=a)))
+        length = prefix_len + target_len
+        lengths.append(length)
+        if length > ctx_len:
+            truncated += 1
+        if ctx_len < prefix_len:
+            target_lost += 1
+
+    if not lengths:
+        raise ValueError("没有有效训练样本")
+    arr = np.asarray(lengths, dtype=np.float64)
+    return DataInspection(
+        path=str(path),
+        total=len(items),
+        valid=len(lengths),
+        skipped_empty_question=empty_q,
+        skipped_empty_answer=empty_a,
+        truncated=truncated,
+        target_fully_truncated=target_lost,
+        min_tokens=int(arr.min()),
+        mean_tokens=round(float(arr.mean()), 1),
+        p95_tokens=round(float(np.percentile(arr, 95)), 1),
+        max_tokens=int(arr.max()),
+        ctx_len=ctx_len,
+        template=template,
+    )
+
+
 def inspect_state(path: Path) -> StateInspection:
     """读取 npz/pth 并检查层号、shape、dtype 与数值摘要。"""
     from .export import load_npz_as_numpy, load_pth_as_numpy

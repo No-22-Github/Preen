@@ -769,5 +769,87 @@ def preview(
             typer.echo(result.summary_line())
 
 
+@app.command("import")
+def import_data(
+    data: Path = typer.Option(..., "--data", "-d", help="源数据文件(jsonl/json/csv)"),
+    out: Path = typer.Option(..., "--out", "-o", help="输出标准 jsonl 路径"),
+    turn_policy: str = typer.Option(
+        "first", "--turn-policy",
+        help="多轮拆分策略(ShareGPT/Messages): first(只取首对) | all(每对独立成样本)",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="stdout 输出结构化 JSON"),
+):
+    """导入外部数据集 → 探测格式 → 转内部标准 jsonl(Spec §4)。
+
+    支持 Alpaca / ShareGPT / Messages(ChatML)/ 裸 QA 四类格式自动探测。
+    parquet 不支持(pyarrow 伤 bundle),报错给转换提示。
+    产物:标准 jsonl + sidecar <name>.import.json(来源 hash + 探测结果,可追溯)。
+
+    UI 与 CLI 共用同一 service 层(statetuner.importer)。
+    """
+    if not data.is_file():
+        _bad_input(ValueError(f"数据文件不存在: {data}"))
+    if turn_policy not in ("first", "all"):
+        _bad_input(ValueError("--turn-policy 只支持 first / all"))
+
+    from .importer import import_dataset
+
+    try:
+        artifact, result = import_dataset(data, out, turn_policy=turn_policy)  # type: ignore[arg-type]
+    except (OSError, ValueError, TypeError) as exc:
+        _bad_input(exc)
+
+    if json_output:
+        typer.echo(json.dumps({
+            "jsonl_path": str(artifact.jsonl_path),
+            "sidecar_path": str(artifact.sidecar_path),
+            "sha256": artifact.sha256,
+            "record_count": artifact.record_count,
+            "result": result.to_dict(),
+        }, ensure_ascii=False))
+        return
+
+    typer.echo(f"# 探测: {result.detection.schema} (confidence={result.detection.confidence:.2f})", err=True)
+    typer.echo(f"# 模板: {result.template}, 策略: {turn_policy}", err=True)
+    typer.echo(f"# 产物: {len(result.records)} 条 → {artifact.jsonl_path}", err=True)
+    typer.echo(f"# sidecar: {artifact.sidecar_path}", err=True)
+    typer.echo(f"# 源文件 sha256: {artifact.sha256}", err=True)
+    if result.dropped_system:
+        typer.echo(f"# 丢弃 system 消息: {result.dropped_system} 条", err=True)
+    if result.dropped_other:
+        typer.echo(f"# 丢弃无法归类: {result.dropped_other} 条", err=True)
+    if result.qa_degradation_hint:
+        typer.echo(
+            "# 提示: 所有 input 字段为空,可选降级为 qa 模板(instruction→prompt)",
+            err=True,
+        )
+    typer.echo(f"✓ {artifact.jsonl_path} ({artifact.record_count} 条)")
+
+
+@app.command()
+def serve(
+    model: Path = typer.Option(..., "--model", "-m", help="HF 模型目录(常驻)"),
+    cache_limit_gb: Optional[str] = typer.Option(
+        "auto", "--cache-limit-gb",
+        help="MLX buffer cache 上限;auto=物理内存×25%(默认,16G机≈4.3G),或直接给 GB 数。",
+    ),
+):
+    """常驻推理进程:stdin 收 JSON 指令行,stdout 发 JSON 事件行(Spec §3)。
+
+    单进程单模型,启动加载一个模型常驻。SwiftUI/SidecarClient 通过 stdin/stdout
+    JSON lines 协议会话。换模型 = 重启 serve 进程。
+
+    协议见 docs/Phase3-总体Spec.md §3(指令集 + 错误语义 + abort 机制)。
+    启动后先发 ready 事件(模型加载完毕),随后逐行处理 stdin 指令。
+    """
+    if not model.is_dir():
+        _bad_input(ValueError(f"模型目录不存在: {model}"))
+
+    from .serve import run_serve
+
+    typer.echo(f"# serve 启动: {model}(stdin/stdout JSON lines 协议)", err=True)
+    run_serve(str(model), cache_limit_spec=cache_limit_gb)
+
+
 if __name__ == "__main__":
     app()

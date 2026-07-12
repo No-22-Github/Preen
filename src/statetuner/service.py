@@ -78,13 +78,27 @@ def run_training(
     model, tokenizer = load_model(str(request.model), patch=True)
     model.freeze()
 
-    data_summary = inspect_data(request.data, tokenizer, ctx_len=cfg.ctx_len)
-    if data_summary.target_fully_truncated:
-        raise ValueError(
-            f"有 {data_summary.target_fully_truncated} 条样本的 target 被 ctx_len 完全截断"
-        )
-    samples = load_qa_dataset(request.data, tokenizer, max_len=cfg.ctx_len)
-    notify(f"训练样本: {len(samples)} 条 (template={request.template})")
+    # 数据分流(§4.3):importer 产物(带 .import.json sidecar)走标准 loader,
+    # 遗留数据(instruction/output 字段)走 load_qa_dataset。两条路径都有截断检查。
+    sidecar = request.data.with_name(request.data.stem + request.data.suffix + ".import.json")
+    if sidecar.exists():
+        from .data import load_standard_jsonl
+        from .inspection import inspect_standard_jsonl as _inspect_std
+        data_summary = _inspect_std(request.data, tokenizer, template=request.template, ctx_len=cfg.ctx_len)
+        if data_summary.target_fully_truncated:
+            raise ValueError(
+                f"有 {data_summary.target_fully_truncated} 条样本的 target 被 ctx_len 完全截断"
+            )
+        samples = load_standard_jsonl(request.data, tokenizer, template=request.template, max_len=cfg.ctx_len)
+        notify(f"训练样本: {len(samples)} 条 (importer 产物, template={request.template})")
+    else:
+        data_summary = inspect_data(request.data, tokenizer, ctx_len=cfg.ctx_len)
+        if data_summary.target_fully_truncated:
+            raise ValueError(
+                f"有 {data_summary.target_fully_truncated} 条样本的 target 被 ctx_len 完全截断"
+            )
+        samples = load_qa_dataset(request.data, tokenizer, max_len=cfg.ctx_len)
+        notify(f"训练样本: {len(samples)} 条 (template={request.template})")
 
     held_out = None
     if cfg.early_stop:
