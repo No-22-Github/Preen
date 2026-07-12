@@ -417,13 +417,31 @@ def export(
     typer.echo(f"✓ {out}")
 
 
+def _render_reply_lines(ui_console, lines: list[str]) -> None:
+    """渲染 ChatReply.lines:A/B 标题行原样,内容行走 markdown。
+
+    A/B 输出格式("=== 有 state ===" / text / summary / "=== 无 state ===" / ...):
+      - 以 === 开头的分隔行 → dim 原样打印(不渲染 markdown)。
+      - 以 [stop= 开头的摘要行 → dim。
+      - 其余 → markdown 渲染(助手回复正文)。
+    """
+    from . import console as ui
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("===") or stripped.startswith("[stop="):
+            ui_console.print(line, style="dim")
+        else:
+            ui_console.print(ui.render_markdown(line))
+
+
 @app.command()
 def chat(
     model: Path = typer.Option(..., "--model", "-m", help="HF 模型目录"),
     state: Optional[Path] = typer.Option(None, "--state", "-s", help="初始 state(npz/pth)"),
-    max_tokens: int = typer.Option(200, "--max-tokens", help="单轮最大生成 token"),
-    temperature: float = typer.Option(0.6, "--temperature", help="采样温度;0=贪心"),
-    top_p: float = typer.Option(0.7, "--top-p"),
+    max_tokens: int = typer.Option(300, "--max-tokens", help="单轮最大生成 token"),
+    temperature: float = typer.Option(1.2, "--temperature", help="采样温度;0=贪心"),
+    top_p: float = typer.Option(0.5, "--top-p"),
     seed: int = typer.Option(42, "--seed"),
     presence_penalty: float = typer.Option(
         0.4, "--presence",
@@ -498,10 +516,18 @@ def chat(
         except (OSError, ValueError, TypeError, KeyError) as exc:
             _bad_input(exc)
 
+    # think=on 时 G1 系列思考段实测 ~400 token,默认 300 撑不到 </think> 闭合
+    # 就被截断(渲染兜底会把已生成内容当思考 dim 显示,但 answer 会缺失)。
+    # 启发式:think=on 且用户未显式调过 max_tokens(仍是默认 300)→ 抬到 800。
+    # 用户显式传 --max-tokens(即便传 300)即视为知情,不覆盖。
+    effective_max_tokens = max_tokens
+    if reasoning and think == "on" and max_tokens == 300:
+        effective_max_tokens = 800
+
     session = ChatSession(
         engine,
         config=GenerationConfig(
-            max_tokens=max_tokens,
+            max_tokens=effective_max_tokens,
             temperature=temperature,
             top_p=top_p,
             seed=seed,
@@ -518,33 +544,111 @@ def chat(
         ab=ab,
     )
 
-    typer.echo("交互模式已启动。qa 模板多轮走 cache 续传;输入 /help 查看命令。")
+    from . import console as ui
+
+    ui_console = ui.make_console()
+    ui_console.print(
+        "交互模式已启动。qa 模板多轮走 cache 续传;输入 [bold]/help[/bold] 查看命令。"
+    )
     if not reasoning and template == "qa":
-        typer.echo(
-            "# 提示: 若使用 G1 系列 reasoning 模型,加 --reasoning --think fast"
-            " 避免降智(详见 docs/g1g-decode-alignment.md)",
-            err=True,
+        ui_console.print(
+            "[dim]# 提示: 若使用 G1 系列 reasoning 模型,加 --reasoning --think fast"
+            " 避免降智(详见 docs/g1g-decode-alignment.md)[/dim]",
+            style=None,
         )
-    typer.echo(session.config_line())
+    # 启动横幅用紧凑两行(· 分隔);/config 命令仍走详尽表格。
+    ui_console.print(ui.render_config_compact(session.config_groups(brief=True)))
+
     while True:
         try:
-            line = input("You> ")
+            ui_console.print(ui.user_prompt_label(), end="")
+            line = input()
         except (EOFError, KeyboardInterrupt):
-            typer.echo("\n会话结束。")
+            ui_console.print("\n会话结束。")
             break
         use_stream = stream and not session.ab and not line.lstrip().startswith("/")
+
         if use_stream:
-            typer.echo("Neko> ", nl=False)
+            # 流式:Live 内增量显示纯文本(不逐 token 解析 markdown,避免闪烁),
+            # 结束后用 payload 里的完整文本一次性渲染 markdown 面板 + dim 摘要。
+            # 前导换行清洗(reasoning 方言)由 ChatSession._wrap_stream_callback 负责。
+            from rich.live import Live
+            from rich.text import Text
 
-            def _on_text(chunk: str) -> None:
-                typer.echo(chunk, nl=False)
+            think_on = reasoning and think == "on"
 
-            reply = session.handle(line, on_text=_on_text)
-            typer.echo()
+            if think_on:
+                # think=on phase 状态机:思考段实时以 dim italic 流,
+                # </think> 闭合后切正常风格继续流 answer。
+                # 用累积 buffer + split_thinking 判断当前是否已越过闭合标签;
+                # tokenizer 可能把 </think> 拆多 token,基于累积文本判断保证正确
+                # (切换最多延迟 1-2 token,可接受)。
+                view = Text()
+                accum = [""]  # 已生成文本总累积(含 think 段)
+
+                def _on_text(chunk: str) -> None:
+                    accum[0] += chunk
+                    thinking, answer = ui.split_thinking(accum[0])
+                    if "</think>" in accum[0]:
+                        # 已越过闭合:think 段已全部确定,显示 thinking(dim)+ answer 增量
+                        # 重建 view(thinking 一次 + answer 当前累积),简单且无 phase 漏切。
+                        view.truncate(0)
+                        if thinking:
+                            view.append(thinking, style="dim italic")
+                            view.append("\n\n", style="dim italic")
+                        view.append(answer)
+                    else:
+                        # 还在 think 段:增量全以 dim italic 流
+                        view.append(chunk, style="dim italic")
+                    live.update(view, refresh=True)
+
+                with Live(
+                    Text(""), console=ui_console, refresh_per_second=15, transient=True
+                ) as live:
+                    reply = session.handle(line, on_text=_on_text)
+                full_text = (reply.payload or {}).get("text", accum[0])
+                thinking, answer = ui.split_thinking(full_text)
+                if thinking:
+                    ui_console.print(ui.render_thinking_panel(thinking))
+                if answer:
+                    ui_console.print(ui.render_assistant_panel(answer))
+                elif thinking:
+                    # think 段未闭合(被 max_tokens 截断):思考显示出来了但没有正式回答。
+                    ui_console.print(
+                        "[dim]⚠ 思考未完成(被 max_tokens 截断,未输出 </think>);"
+                        "可用 /max-tokens 调大后重试。[/dim]"
+                    )
+            else:
+                buf = [""]
+
+                def _on_text(chunk: str) -> None:
+                    buf[0] += chunk
+                    live.update(Text(buf[0]), refresh=True)
+
+                # transient=True:流式预览在 Live 退出时清掉,避免和最终 markdown 面板重复。
+                with Live(
+                    Text(""), console=ui_console, refresh_per_second=15, transient=True
+                ) as live:
+                    reply = session.handle(line, on_text=_on_text)
+                full_text = (reply.payload or {}).get("text", buf[0])
+                ui_console.print(ui.render_assistant_panel(full_text))
+            for output_line in reply.lines:
+                ui_console.print(ui.dim_summary(output_line))
         else:
             reply = session.handle(line)
-        for output_line in reply.lines:
-            typer.echo(output_line)
+            # 命令输出:/help → 表格;/config → 表格;A/B → markdown 分段;其他 → 原样
+            if line.lstrip().startswith("/help"):
+                table = ui.render_help_table(reply.lines)
+                if table is not None:
+                    ui_console.print(table)
+                else:
+                    for output_line in reply.lines:
+                        ui_console.print(output_line)
+            elif line.lstrip().startswith("/config"):
+                ui_console.print(ui.render_config_table(session.config_groups()))
+            else:
+                # A/B 或普通命令:逐行渲染(A/B 标题行原样,内容走 markdown)
+                _render_reply_lines(ui_console, reply.lines)
         if reply.exit:
             break
 

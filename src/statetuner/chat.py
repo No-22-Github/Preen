@@ -8,6 +8,7 @@ Phase 3 §2 多轮改造(2026-07-12):
       续传会偏离训练分布)。continuation_safe = (template=="qa" and not reasoning)。
   脏 cache(stop_sequence 停止)、/rewind、/state 切换 → 触发重放。
 """
+
 from __future__ import annotations
 
 import shlex
@@ -70,7 +71,11 @@ class ChatSession:
         ab: bool = False,
     ):
         self.engine = engine
-        base_config = config or GenerationConfig(max_tokens=200, temperature=0.6, top_p=0.7)
+        # 默认值(高创造力档):temp=1.2 + top_p=0.5 是 RWKV 聊天的实测好档,
+        # max_tokens=300 给多轮对话足够回旋空间。
+        base_config = config or GenerationConfig(
+            max_tokens=300, temperature=1.2, top_p=0.5
+        )
         self.config = with_template_stops(base_config, template)
         self.config.validate()
         self.template = template
@@ -82,8 +87,8 @@ class ChatSession:
         self.ab = ab
         # Phase 3 §2 多轮状态
         self.history: list[Turn] = []
-        self.cache: object = None       # running cache,None=需从 S₀ 新建(重放)
-        self.cache_clean: bool = True   # 上一轮结束时 cache 是否干净可续传
+        self.cache: object = None  # running cache,None=需从 S₀ 新建(重放)
+        self.cache_clean: bool = True  # 上一轮结束时 cache 是否干净可续传
 
     @property
     def _has_reasoning_dialect(self) -> bool:
@@ -92,7 +97,9 @@ class ChatSession:
         旧实现硬判某旧模板字符串;新世界 reasoning 是正交开关,
         且仅与 qa 模板组合(instruction/raw 不与 reasoning 组合,由 render_prompt 拒绝)。
         """
-        return self.reasoning and self.think in ("fast", "on") and self.template != "raw"
+        return (
+            self.reasoning and self.think in ("fast", "on") and self.template != "raw"
+        )
 
     @property
     def _continuation_safe(self) -> bool:
@@ -113,9 +120,7 @@ class ChatSession:
             and len(self.history) >= 1
         )
 
-    def handle(
-        self, text: str, *, on_text: Optional[TextCallback] = None
-    ) -> ChatReply:
+    def handle(self, text: str, *, on_text: Optional[TextCallback] = None) -> ChatReply:
         text = text.strip()
         if not text:
             return ChatReply([])
@@ -150,19 +155,31 @@ class ChatSession:
                 user_text, self.template, reasoning=self.reasoning, think=self.think
             )
             result = self.engine.generate(
-                prompt, state=self.state, cache=None, config=self.config, on_text=stream_cb
+                prompt,
+                state=self.state,
+                cache=None,
+                config=self.config,
+                on_text=stream_cb,
             )
         elif is_continuation:
             prompt = self._build_continuation_prompt(user_text)
             result = self.engine.generate(
-                prompt, state=self.state, cache=self.cache, config=self.config, on_text=stream_cb
+                prompt,
+                state=self.state,
+                cache=self.cache,
+                config=self.config,
+                on_text=stream_cb,
             )
         else:
             # 重放:先把本轮 user 追加进 history,再渲染完整历史
             self.history.append(Turn(role="user", text=user_text))
             prompt = self._build_replay_prompt()
             result = self.engine.generate(
-                prompt, state=self.state, cache=None, config=self.config, on_text=stream_cb
+                prompt,
+                state=self.state,
+                cache=None,
+                config=self.config,
+                on_text=stream_cb,
             )
 
         display = self._display_text(result.text)
@@ -235,8 +252,10 @@ class ChatSession:
         # 首轮 user turn → prefix 模板
         parts = [
             render_prompt(
-                self.history[0].text, self.template,
-                reasoning=self.reasoning, think=self.think,
+                self.history[0].text,
+                self.template,
+                reasoning=self.reasoning,
+                think=self.think,
             )
         ]
         # 后续 turns:assistant 裸文本 + user continuation 胶水交替
@@ -248,7 +267,23 @@ class ChatSession:
         return "".join(parts)
 
     def _display_text(self, text: str) -> str:
-        """模板相关的显示清洗。reasoning 方言去掉前导换行(</think> 后的自然换行)。"""
+        """模板相关的显示清洗,统一用于 history 记录与 ChatReply.lines。
+
+        - think=on:只保留 ``</think>`` 之后的 answer(品类铁律:reasoning 模型
+          重放时历史 assistant 必须是裸 answer,think 标签只在当前生成轮。
+          docs/g1g-decode-alignment.md §8.4 实测 + 官方 chat_template 同惯例)。
+          无 ``</think>``(max_tokens 截断等)→ 返回空 answer:半截思考不该当
+          历史回答重放(展示层 cli.py 会把已生成内容 dim 显示为思考 + 标注截断)。
+        - think=fast/off + reasoning:去掉前导换行(空 think 标签后的自然换行)。
+
+        注意:GenerationResult.text 保留完整 raw(含 think),供展示层(cli.py)
+        拆两段做双 panel;这里剥出的 answer 才是进 history 的文本。
+        """
+        if self.reasoning and self.think == "on":
+            idx = text.rfind("</think>")
+            if idx >= 0:
+                return text[idx + len("</think>"):].lstrip("\n")
+            return ""  # 未闭合:思考不完整,无有效 answer
         if self._has_reasoning_dialect:
             return text.lstrip("\n")
         return text
@@ -302,7 +337,9 @@ class ChatSession:
         if command in ("/temperature", "/temp"):
             return self._set_float("temperature", args, minimum=0.0)
         if command == "/top-p":
-            return self._set_float("top_p", args, minimum=0.0, maximum=1.0, strict_min=True)
+            return self._set_float(
+                "top_p", args, minimum=0.0, maximum=1.0, strict_min=True
+            )
         if command == "/max-tokens":
             return self._set_int("max_tokens", args, minimum=1)
         if command == "/seed":
@@ -311,6 +348,10 @@ class ChatSession:
             return self._set_float("presence_penalty", args, minimum=0.0)
         if command == "/frequency":
             return self._set_float("frequency_penalty", args, minimum=0.0)
+        if command == "/penalty-decay":
+            return self._set_float(
+                "penalty_decay", args, minimum=0.0, maximum=1.0, strict_min=True
+            )
         if command == "/config":
             return ChatReply([self.config_line()])
         return ChatReply([f"未知命令: {command}；输入 /help 查看帮助。"])
@@ -348,7 +389,11 @@ class ChatSession:
         # 历史被改 → cache 失效,下一轮重放
         self.cache = None
         self.cache_clean = False
-        return ChatReply([f"已撤销 {rounds_removed} 轮;下一轮将重放剩余历史({len(self.history)} 条记录)。"])
+        return ChatReply(
+            [
+                f"已撤销 {rounds_removed} 轮;下一轮将重放剩余历史({len(self.history)} 条记录)。"
+            ]
+        )
 
     def _state_command(self, args: list[str]) -> ChatReply:
         if not args:
@@ -407,7 +452,9 @@ class ChatSession:
         self.config = replace(self.config, **{field: value})
         return ChatReply([self.config_line()])
 
-    def _set_int(self, field: str, args: list[str], *, minimum: Optional[int] = None) -> ChatReply:
+    def _set_int(
+        self, field: str, args: list[str], *, minimum: Optional[int] = None
+    ) -> ChatReply:
         if len(args) != 1:
             return ChatReply([f"用法: /{field.replace('_', '-')} VALUE"])
         try:
@@ -419,35 +466,82 @@ class ChatSession:
         self.config = replace(self.config, **{field: value})
         return ChatReply([self.config_line()])
 
+    def config_groups(self, *, brief: bool = False) -> list[tuple[str, list[tuple[str, str]]]]:
+        """当前配置,按语义分组(供 console.render_config_table 渲染)。
+
+        三组:模板/状态、采样、重复惩罚(ChatRWKV 官方语义)。
+        重复惩罚组标注官方默认值,让用户知道基准和当前偏移。
+        brief=True 时去掉默认值注解,用于启动横幅的紧凑显示。
+        """
+        reasoning_note = (
+            f"on (think={self.think})" if self.reasoning else "off"
+        )
+        def _penalty(value, default):
+            return f"{value}" if brief else f"{value}  (ChatRWKV 默认 {default})"
+        return [
+            ("模板", [
+                ("template", self.template),
+                ("reasoning", reasoning_note),
+                ("state", self.state_label or "off"),
+                ("ab", "on" if self.ab else "off"),
+            ]),
+            ("采样", [
+                ("temperature", f"{self.config.temperature}"),
+                ("top_p", f"{self.config.top_p}"),
+                ("max_tokens", f"{self.config.max_tokens}"),
+                ("seed", f"{self.config.seed}"),
+            ]),
+            ("重复惩罚", [
+                ("presence", _penalty(self.config.presence_penalty, "0.4")),
+                ("frequency", _penalty(self.config.frequency_penalty, "0.4")),
+                ("decay", _penalty(self.config.penalty_decay, "0.996")),
+            ]),
+        ]
+
     def config_line(self) -> str:
+        """当前配置单行摘要(纯文本降级路径;表格渲染走 config_groups)。
+
+        保留单行格式供 ChatReply(纯文本)和轻量日志;rich 表格用 config_groups。
+        """
         reasoning_part = (
             f" reasoning=on think={self.think}" if self.reasoning else ""
         )
         return (
             f"template={self.template}{reasoning_part} "
-            f"state={self.state_label or 'off'} ab={'on' if self.ab else 'off'} "
-            f"temperature={self.config.temperature} top_p={self.config.top_p} "
-            f"max_tokens={self.config.max_tokens} seed={self.config.seed} "
-            f"presence={self.config.presence_penalty} "
+            f"state={self.state_label or 'off'} ab={'on' if self.ab else 'off'} | "
+            f"采样: temp={self.config.temperature} top_p={self.config.top_p} "
+            f"max_tokens={self.config.max_tokens} seed={self.config.seed} | "
+            f"重复惩罚: presence={self.config.presence_penalty} "
             f"frequency={self.config.frequency_penalty} "
             f"decay={self.config.penalty_decay}"
         )
 
     @staticmethod
     def help_lines() -> list[str]:
+        """命令帮助。每行 "命令  说明"(≥2 空格分界,供表格解析)。
+
+        分组标题行不以 / 开头,渲染时作为分隔/标题显示。
+        重复惩罚组标注官方默认值,降低调参认知门槛。
+        """
         return [
+            "会话控制",
             "/state PATH       动态加载 npz/pth(重置会话,换 S₀=换人设)",
             "/state off        关闭 state(重置会话)",
             "/state            查看当前 state",
             "/ab [on|off]      切换 A/B 输出",
-            "/temperature N    调整温度（0=贪心）",
-            "/top-p N          调整 top-p",
-            "/presence N       调整 presence 重复惩罚(0=关)",
-            "/frequency N      调整 frequency 重复惩罚(0=关)",
-            "/max-tokens N     调整单轮生成上限",
-            "/seed N           调整采样 seed",
             "/rewind [n]       撤销最后 n 轮(默认 1),触发重放",
             "/clear            清空历史与 cache,回到 S₀",
             "/config           查看当前配置",
             "/quit             退出",
+            "",
+            "采样参数",
+            "/temperature N    调整温度(0=贪心;越高越随机)",
+            "/top-p N          调整 top-p(0-1;越小越聚焦)",
+            "/max-tokens N     调整单轮生成上限",
+            "/seed N           调整采样 seed(同 seed 可复现)",
+            "",
+            "重复惩罚(ChatRWKV 官方默认 0.4/0.4/0.996)",
+            "/presence N       presence 惩罚:对已出现 token 固定惩罚(0=关)",
+            "/frequency N      frequency 惩罚:按出现次数累加(0=关)",
+            "/penalty-decay N  历史计数衰减率(接近 1=记忆长,默认 0.996)",
         ]

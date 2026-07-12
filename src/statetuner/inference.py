@@ -362,7 +362,8 @@ class InferenceEngine:
             if sampler is None:
                 next_token = int(mx.argmax(logits, axis=-1))
             else:
-                logprobs = nn.log_softmax(logits, axis=-1)
+                # logsumexp 替 nn.log_softmax(mlx_lm 做法,更轻量:减一次 max)
+                logprobs = logits - mx.logsumexp(logits, keepdims=True)
                 next_token = int(sampler(logprobs))
             t_step = time.time() - t_step_start
             if step == 0:

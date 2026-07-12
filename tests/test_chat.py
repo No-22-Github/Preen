@@ -83,6 +83,26 @@ def test_chat_runtime_sampling_configuration():
     )
 
 
+def test_chat_runtime_penalty_configuration():
+    """/presence /frequency /penalty-decay 运行中调重复惩罚(ChatRWKV 官方语义)。"""
+    session = ChatSession(FakeEngine())
+    session.handle("/presence 0.5")
+    session.handle("/frequency 0.3")
+    session.handle("/penalty-decay 0.99")
+    # 只断言重复惩罚三参被正确设置(其他默认值见 GenerationConfig)。
+    assert session.config.presence_penalty == 0.5
+    assert session.config.frequency_penalty == 0.3
+    assert session.config.penalty_decay == 0.99
+    assert session.config.stop_sequences == NEKO_QA.inference_stop_sequences
+
+
+def test_penalty_decay_rejects_out_of_range():
+    """/penalty-decay 范围 (0, 1](strict_min + maximum=1)。"""
+    session = ChatSession(FakeEngine())
+    assert "超出范围" in session.handle("/penalty-decay 0").lines[0]
+    assert "超出范围" in session.handle("/penalty-decay 1.5").lines[0]
+
+
 def test_chat_failed_state_load_preserves_current_state():
     def fail(path: Path):
         raise ValueError("bad state")
@@ -272,3 +292,91 @@ def test_continuation_prefix_used_on_second_turn_qa():
     # 关键: prompt 只是胶水,不含上一轮回答(FakeEngine 返回 'tuned')
     assert "tuned" not in turn2_prompt
     assert turn2_prompt == "\n\nUser: Q2\n\nAssistant:"
+
+
+# ────────────────────────────────────────────────────────────────
+# think=on 显示清洗:_display_text 剥 think 段(history 重放安全)
+# ────────────────────────────────────────────────────────────────
+
+
+def _make_bare_session(**kwargs):
+    """造一个不触发 engine 的 ChatSession(只测 _display_text 展示清洗)。
+
+    _display_text 只依赖 self.reasoning / self.think / self.template,
+    无需真实 engine 或完整 __init__。
+    """
+    s = ChatSession.__new__(ChatSession)
+    s.template = kwargs.get("template", "qa")
+    s.reasoning = kwargs.get("reasoning", False)
+    s.think = kwargs.get("think", "off")
+    return s
+
+
+def test_display_text_think_on_strips_thinking_section():
+    """think=on 时 _display_text 只保留 </think> 之后的 answer。
+
+    品类铁律(docs §8.4):reasoning 模型重放时历史 assistant 必须是裸 answer,
+    think 标签只在当前生成轮。这里验证进 history 的文本已剥 think。
+    """
+    s = _make_bare_session(reasoning=True, think="on")
+    assert s._display_text("思考内容</think>正式回答") == "正式回答"
+
+
+def test_display_text_think_on_strips_leading_newlines_after_close():
+    """think=on 的 answer 段也去掉 </think> 后的前导换行(reasoning 方言一致性)。"""
+    s = _make_bare_session(reasoning=True, think="on")
+    assert s._display_text("思考</think>\n\n正式回答") == "正式回答"
+
+
+def test_display_text_think_on_no_close_tag_returns_empty_answer():
+    """think=on 但无 </think>(max_tokens 截断等)→ 空 answer(思考未完成,无有效回答)。
+
+    兜底语义:半截思考不该当历史回答重放(品类铁律 + 重放安全)。
+    展示层(cli.py)会单独把 raw 文本的思考段 dim 显示 + 标注截断。
+    """
+    s = _make_bare_session(reasoning=True, think="on")
+    assert s._display_text("未闭合的半截思考") == ""
+
+
+def test_display_text_think_fast_preserves_lstrip_newline():
+    """回归保护:think=fast 仍走 lstrip('\\n')(空 think 标签后的自然换行)。
+
+    确保加 think=on 分支没改坏 fast 档的既有清洗逻辑。
+    """
+    s = _make_bare_session(reasoning=True, think="fast")
+    assert s._display_text("\n\n带前导换行的回答") == "带前导换行的回答"
+
+
+def test_display_text_think_off_passthrough():
+    """回归保护:非 reasoning + think=off 原样返回(不受新分支影响)。"""
+    s = _make_bare_session(reasoning=False, think="off")
+    assert s._display_text("原样文本") == "原样文本"
+
+
+def test_display_text_think_on_end_to_end_in_history():
+    """端到端:think=on 会话,assistant turn 进 history 的是纯 answer。
+
+    用真实 ChatSession + FakeEngine,把 FakeEngine 返回值改成含 </think> 的文本,
+    验证 session.history 里的 assistant turn.text 不含 think 段。
+    """
+    engine = FakeEngine()
+    # 让 FakeEngine.generate 返回含 think 段的文本
+    original_generate = engine.generate
+
+    def think_generate(prompt, *, state=None, config=None, cache=FakeEngine._sentinel, on_text=None):
+        result = original_generate(
+            prompt, state=state, config=config, cache=cache, on_text=on_text
+        )
+        from dataclasses import replace as _replace
+        # 覆盖 text 为 think=on 形态的输出
+        return _replace(result, text="我的思考过程</think>可见的回答")
+
+    engine.generate = think_generate
+    session = ChatSession(engine, template="qa", reasoning=True, think="on", state={0: "s"})
+    session.handle("Q1")
+    # assistant turn(第 2 个)的 text 应只含 answer,不含 think 段
+    assistant_turn = session.history[1]
+    assert assistant_turn.role == "assistant"
+    assert assistant_turn.text == "可见的回答"
+    assert "我的思考过程" not in assistant_turn.text
+    assert "</think>" not in assistant_turn.text

@@ -211,8 +211,19 @@ def load_model(model_path: Union[str, Path], *, patch: bool = False):
 
     patch=True 时 patch ops 路径(训练用);False 时走默认 kernel(推理用)。
     返回 (model, tokenizer)。trust_remote_code=True(World tokenizer)。
+
+    抑制 transformers 的 "model of type" 警告:HF 把 rwkv7 config 的 model_type
+    与加载器基类对不上(我们走 mlx-lm 自己的 RWKV7 模型类,不经 HF AutoModel),
+    这条警告对用户纯噪声,压到 ERROR 级。
     """
     from mlx_lm import load
+
+    try:
+        from transformers.utils import logging as hf_logging
+
+        hf_logging.set_verbosity_error()
+    except ImportError:
+        pass  # transformers 不可用时无警告可压
 
     if patch:
         patch_rwkv7_for_train()

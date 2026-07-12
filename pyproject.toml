@@ -17,6 +17,9 @@ dependencies = [
     # 转换器读原始权重、导出器写 Runner 可挂载的 state,全程纯 Python,无需 torch。
     "ml_dtypes",
     "typer>=0.12",
+    # rich: chat 命令的展示层(console.py)— 标签/面板/markdown/表格渲染。
+    # 已通过 typer 传递可用,这里显式声明因为我们直接 import 它(防上游 typer 换实现)。
+    "rich>=13",
 ]
 
 [project.scripts]
