@@ -1,10 +1,10 @@
 """
 RWKV-7 原生 .pth → fla HF (safetensors) 独立转换器。
 
-不依赖 fla/triton —— 直接读 pth 权重,按官方 convert_from_rwkv7.py 的键名
-映射规则搬运,用仓库内置 fixture(从同架构 0.1B fla 模型生成的 ndim 模板)
-做 ground truth 维度校验,最后存 safetensors + config.json。
-tokenizer 文件也已 vendor 进 assets/,转换时无需任何外部下载。
+不依赖 fla/triton/torch —— 用纯 Python 读 pth 权重(statetuner.pth_io.read_pth,
+与 torch.load 逐字节等价),按官方 convert_from_rwkv7.py 的键名映射规则搬运,
+用仓库内置 fixture(从同架构 0.1B fla 模型生成的 ndim 模板)做 ground truth 维度校验,
+最后存 safetensors + config.json。tokenizer 文件也已 vendor 进 assets/,转换时无需任何外部下载。
 
 映射规则 (与 fla-org/flash-linear-attention 的 convert_from_rwkv7.py 等价):
   - 顶层:  emb.weight→model.embeddings.weight
