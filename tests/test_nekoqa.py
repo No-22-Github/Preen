@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from statetuner.data import load_qa_dataset, train_test_split
-from statetuner.templates import NEKO_QA
+from statetuner.templates import QA as NEKO_QA  # tests 局部别名
 
 
 class _DummyTokenizer:
@@ -51,7 +51,7 @@ def test_load_qa_dataset_json_array(tmp_path):
         assert s.mask[-1] == 1
         # prefix 段不含 target
         assert s.full_ids[: s.prefix_len] == _DummyTokenizer().encode(
-            NEKO_QA.format_prefix(q=s.cn)
+            NEKO_QA.format_prefix(q=s.prompt_text)
         )
 
 
@@ -65,7 +65,7 @@ def test_load_qa_dataset_skips_empty_answer(tmp_path):
     p = _write_json_array(tmp_path, items)
     samples = load_qa_dataset(p, _DummyTokenizer())
     assert len(samples) == 1
-    assert samples[0].cn == "有回答"
+    assert samples[0].prompt_text == "有回答"
 
 
 def test_load_qa_dataset_nekoqa_prefix_structure(tmp_path):
@@ -91,7 +91,7 @@ def test_load_qa_dataset_custom_keys(tmp_path):
         p, _DummyTokenizer(), question_key="question", answer_key="answer"
     )
     assert len(samples) == 1
-    assert samples[0].cn == "Q1"
+    assert samples[0].prompt_text == "Q1"
 
 
 def test_load_qa_dataset_jsonl_format(tmp_path):
@@ -104,7 +104,7 @@ def test_load_qa_dataset_jsonl_format(tmp_path):
     )
     samples = load_qa_dataset(p, _DummyTokenizer())
     assert len(samples) == 2
-    assert [s.cn for s in samples] == ["你好", "再见"]
+    assert [s.prompt_text for s in samples] == ["你好", "再见"]
 
 
 # ── prefix/target 同构(验收 c 同款精神,用真实模板)──────────
@@ -136,5 +136,5 @@ def test_nekoqa_train_test_split(tmp_path):
 
     tr1, te1 = train_test_split(samples, test_ratio=0.2, seed=42)
     tr2, te2 = train_test_split(samples, test_ratio=0.2, seed=42)
-    assert [s.cn for s in tr1] == [s.cn for s in tr2]  # 可复现
+    assert [s.prompt_text for s in tr1] == [s.prompt_text for s in tr2]  # 可复现
     assert len(te1) == 4 and len(tr1) == 16

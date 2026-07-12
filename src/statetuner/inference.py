@@ -13,9 +13,23 @@ import mlx.core as mx
 import mlx.nn as nn
 
 from .core import StateInput, _load_state_dict, build_state_cache
-from .templates import G1G, NEKO_QA
+from .templates import INSTRUCTION, QA
 
-TemplateName = Literal["raw", "nekoqa", "g1g"]
+TemplateName = Literal["raw", "qa", "instruction"]
+# think 档位:仅 reasoning 模型生效,只影响 prompt 尾部渲染(Spec §1.1)。
+#   off  → Assistant: 后追加 ""            (直答)
+#   fast → Assistant: 后追加 " <think>\n</think>"  (空 think 标签,跳过思考)
+#   on   → Assistant: 后追加 " <think"     (模型续写思考段)
+ThinkMode = Literal["off", "fast", "on"]
+# reasoning 方言前缀(World tokenizer bos,= token 0):RWKV 训练每轮以此起始。
+# 旧 API 把这层打包进整包模板,新世界拆出来(参数语义 = "reasoning 模型需要 bos+think 外壳",
+# 不写死模型版本号:G1 是版本号会迭代)。
+REASONING_BOS = "<|rwkv_tokenizer_end_of_text|>"
+ThinkSuffix = {
+    "off": "",
+    "fast": " <think>\n</think>",
+    "on": " <think",
+}
 StopReason = Literal["eos", "stop_sequence", "max_tokens"]
 TextCallback = Callable[[str], None]
 
@@ -110,27 +124,83 @@ class ABResult:
         }
 
 
-def render_prompt(prompt: str, template: TemplateName = "raw") -> str:
-    """按训练同源模板渲染推理 prompt。"""
+def render_prompt(
+    prompt: str,
+    template: TemplateName = "raw",
+    *,
+    reasoning: bool = False,
+    think: ThinkMode = "off",
+    instruction_input: str = "",
+) -> str:
+    """按训练同源模板 + reasoning 方言 + think 档位渲染推理 prompt。
+
+    单一事实源(验收 a/b/c)。
+
+    Args:
+        prompt: 用户问题(qa)或指令(instruction)或裸文本(raw)。
+        template: 训练/推理模板。
+        reasoning: 是否套 reasoning 方言(前缀加 REASONING_BOS + 尾部按 think 追加)。
+                   仅对 qa 模板有意义;raw/instruction 传 True 报错(v1 不做)。
+        think: think 档位。仅当 reasoning=True 时合法(reasoning=False 时强制 off)。
+
+    Kwargs:
+        instruction_input: instruction 模板的 Input 字段(空则自动降级)。
+
+    渲染规则(对齐 RWKV 官方文档,Spec §1.1):
+      raw        → prompt 原样(reasoning/think 对 raw 无意义,传了报错)
+      qa         → "User: {prompt}\\n\\nAssistant:"
+        + reasoning=True: "{BOS}User: {prompt}\\n\\nAssistant:{think_suffix}"
+      instruction→ INSTRUCTION.format_prefix(instruction=prompt, input=instruction_input)
+                   (空 input 自动降级,验收 d)
+    """
+    if think != "off" and not reasoning:
+        raise ValueError(
+            f"--think 仅在 reasoning 模型上生效(reasoning=False 时 think 必须 off),收到 think={think!r}"
+        )
+    if reasoning and think not in ThinkSuffix:
+        raise ValueError(f"不支持的 think 档位: {think!r}(合法: off/fast/on)")
+
     if template == "raw":
+        if reasoning or think != "off":
+            raise ValueError(
+                "raw 模板不与 reasoning/think 组合(裸文本无 Assistant: 锚点)"
+            )
         return prompt
-    if template == "nekoqa":
-        return NEKO_QA.format_prefix(q=prompt)
-    if template == "g1g":
-        return G1G.format_prefix(q=prompt)
+
+    if template == "qa":
+        prefix = QA.format_prefix(q=prompt)
+        if reasoning:
+            prefix = REASONING_BOS + prefix + ThinkSuffix[think]
+        return prefix
+
+    if template == "instruction":
+        if reasoning or think != "off":
+            raise ValueError(
+                "instruction 模板不与 reasoning/think 组合(v1 不做 reasoning 指令)"
+            )
+        return INSTRUCTION.format_prefix(
+            instruction=prompt, input=instruction_input
+        )
+
     raise ValueError(f"不支持的模板: {template!r}")
 
 
 def with_template_stops(
     config: GenerationConfig, template: TemplateName
 ) -> GenerationConfig:
-    """把模板定义的角色边界加入生成配置。"""
+    """把模板定义的角色边界加入生成配置。
+
+    reasoning 方言不改 stop 边界(只是 prompt 外壳),所以旧 reasoning 整包模板的
+    ("\\nUser:", "\\nSystem:") 合并到 QA 的 stops 里——历史实测只用
+    "\\nUser:" 触发停,"\\nSystem:" 是冗余兜底;新世界 qa + reasoning 复用
+    QA.inference_stop_sequences。
+    """
     if template == "raw":
         return config
-    if template == "nekoqa":
-        return replace(config, stop_sequences=NEKO_QA.inference_stop_sequences)
-    if template == "g1g":
-        return replace(config, stop_sequences=G1G.inference_stop_sequences)
+    if template == "qa":
+        return replace(config, stop_sequences=QA.inference_stop_sequences)
+    if template == "instruction":
+        return replace(config, stop_sequences=INSTRUCTION.inference_stop_sequences)
     raise ValueError(f"不支持的模板: {template!r}")
 
 

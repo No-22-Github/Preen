@@ -16,7 +16,7 @@ class TrainingRequest:
     data: Path
     out: Path
     train_config: object
-    template: str = "nekoqa"
+    template: str = "qa"
     test_data: Optional[Path] = None
     test_ratio: float = 0.1
     export_pth: bool = False
@@ -37,8 +37,10 @@ class TrainingJobResult:
 def validate_training_request(request: TrainingRequest) -> None:
     """应用层校验；sidecar/其他客户端不依赖 CLI 也能得到同样保护。"""
     cfg = request.train_config
-    if request.template != "nekoqa":
-        raise ValueError(f"当前只支持 nekoqa 模板，收到 {request.template!r}")
+    if request.template not in ("qa", "instruction"):
+        raise ValueError(
+            f"训练模板只支持 qa / instruction，收到 {request.template!r}"
+        )
     if not request.model.is_dir():
         raise ValueError(f"模型目录不存在: {request.model}")
     if not request.data.is_file():
@@ -161,8 +163,9 @@ def run_training(
 # ── 评估用例 ────────────────────────────────────────────────
 
 # 缺省示例 prompt：无 --data 时的内置演示用例。
-# 属于用例（非 CLI），故放在 service 层；猫娘风格默认对齐 nekoqa 训练分布。
-# 注：模板渲染交给 run_evaluation 按传入 template 统一处理，这里只存原始问题。
+# 属于用例（非 CLI），故放在 service 层；猫娘风格默认对齐 qa 训练分布。
+# 注：模板渲染交给 run_evaluation 按传入 template + reasoning + think 统一处理，
+# 这里只存原始问题。
 DEFAULT_EVAL_QUESTIONS: tuple[tuple[str, str], ...] = (
     ("你好呀，宝宝！今天想做什么？", ""),
     ("主人要出门了，你会怎么做？", ""),
@@ -180,6 +183,10 @@ class EvaluationRequest:
     config: object  # GenerationConfig
     data: Optional[Path] = None
     limit: int = 5
+    # 推理方言(Phase 3 §1.1)：reasoning 模型前缀 bos + think 档位。
+    # 仅与 qa 模板组合;instruction/raw 传 True 会在 render_prompt 报错。
+    reasoning: bool = False
+    think: str = "off"
 
 
 @dataclass(frozen=True)
@@ -212,8 +219,14 @@ class EvaluationResult:
 
 def validate_evaluation_request(request: EvaluationRequest) -> None:
     """应用层校验；sidecar/其他客户端不依赖 CLI 也能得到同样保护。"""
-    if request.template not in ("nekoqa", "g1g"):
-        raise ValueError(f"评估模板只支持 nekoqa / g1g，收到 {request.template!r}")
+    if request.template not in ("qa", "instruction", "raw"):
+        raise ValueError(
+            f"评估模板只支持 qa / instruction / raw，收到 {request.template!r}"
+        )
+    if request.think not in ("off", "fast", "on"):
+        raise ValueError(f"think 档位只支持 off / fast / on，收到 {request.think!r}")
+    if request.think != "off" and not request.reasoning:
+        raise ValueError("think 仅在 reasoning 模型上生效(reasoning=False 时必须 off)")
     if request.data is not None and not request.data.is_file():
         raise ValueError(f"评估数据不存在: {request.data}")
     if request.limit <= 0:
@@ -240,9 +253,15 @@ def run_evaluation(request: EvaluationRequest) -> EvaluationResult:
 
     items: list[EvaluationItem] = []
     # 同一 template 同时驱动 prompt 渲染与 stop sequences（已在 config 构造时注入），
-    # 保证渲染与 stops 同源（历史 bug：render_prompt 硬编码 nekoqa）。
+    # 保证渲染与 stops 同源（历史 bug：render_prompt 硬编码某模板）。
+    # reasoning/think 透传给 render_prompt(仅 qa 模板合法)。
     for i, (question, reference) in enumerate(pairs[: request.limit]):
-        prompt = render_prompt(question, request.template)
+        prompt = render_prompt(
+            question,
+            request.template,
+            reasoning=request.reasoning,
+            think=request.think,
+        )
         generated = request.engine.generate(
             prompt, state=request.state, config=request.config
         )

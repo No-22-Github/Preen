@@ -191,8 +191,8 @@ def train(
     export_pth: bool = typer.Option(False, "--export-pth", help="训完顺手导出 .pth"),
     pth_out: Optional[Path] = typer.Option(None, "--pth-out", help="导出 pth 路径(默认 out 同名 .pth)"),
     template: str = typer.Option(
-        "nekoqa", "--template",
-        help="任务模板: nekoqa(角色扮演 QA,默认)",
+        "qa", "--template",
+        help="任务模板: qa(角色扮演 QA,默认) | instruction(指令问答)",
     ),
     seed: int = typer.Option(42, "--seed"),
     cache_limit_gb: Optional[str] = typer.Option(
@@ -200,7 +200,12 @@ def train(
         help="MLX buffer cache 上限;auto=物理内存×25%(默认,16G机≈4.3G),或直接给 GB 数。设小降 RSS,必须在模型加载前生效。",
     ),
 ):
-    """训练 state tuning。事件流输出到 stdout(JSON lines)。"""
+    """训练 state tuning。事件流输出到 stdout(JSON lines)。
+
+    训练只接受 qa / instruction 模板;reasoning 方言与 think 档位是推理侧概念,
+    在 train 命令中不存在(不是忽略,是没有这些参数)。训练侧 target 永远不含
+    think 内容(Spec §1.2)。
+    """
     if not model.is_dir():
         _bad_input(ValueError(f"模型目录不存在: {model}"))
     if not data.is_file():
@@ -219,6 +224,11 @@ def train(
         _bad_input(ValueError("--patience 和 --checkpoint-every 必须 > 0"))
     if pth_out is not None and not export_pth:
         _bad_input(ValueError("--pth-out 必须配合 --export-pth"))
+    if template not in ("qa", "instruction"):
+        _bad_input(ValueError(
+            f"--template 只支持 qa / instruction, 收到 {template!r}"
+            " (reasoning/think 是推理侧参数, 训练不接受)"
+        ))
 
     # cache_limit 必须在 load_model 前生效(mem_probe 验证过的时序)。
     _apply_cache_limit(cache_limit_gb)
@@ -228,14 +238,6 @@ def train(
     from . import events
     from .service import TrainingRequest, run_training
     from .train import TrainConfig
-
-    # TODO(产品决策): 是否开放 g1g 训练模板未定。g1g 是 reasoning 模板，
-    # state tuning 是否能稳定注入风格/格式而非破坏推理链路，尚未验证。
-    # 当前只支持 nekoqa；若开放需在 templates/service/data 全链路同步。
-    if template != "nekoqa":
-        raise typer.BadParameter(
-            f"--template 当前只支持 nekoqa, 收到 {template!r}"
-        )
 
     cfg = TrainConfig(
         lr=lr, lr_floor=lr_floor, warmup=warmup, ctx_len=ctx_len, epochs=epochs,
@@ -295,8 +297,16 @@ def eval(
     top_p: float = typer.Option(0.9, "--top-p", help="nucleus sampling 阈值"),
     seed: int = typer.Option(42, "--seed", help="采样随机种子"),
     template: str = typer.Option(
-        "nekoqa", "--template",
-        help="任务模板: nekoqa(角色扮演 QA,默认) | g1g(RWKV7-G1 原生)",
+        "qa", "--template",
+        help="任务模板: qa(角色扮演 QA,默认) | instruction(指令) | raw(原样)",
+    ),
+    reasoning: bool = typer.Option(
+        False, "--reasoning",
+        help="reasoning 模型(G1 系列)前缀加 bos + 按 --think 追加标签。仅 qa 模板合法。",
+    ),
+    think: str = typer.Option(
+        "off", "--think",
+        help="思考档位(仅 --reasoning 时合法): off(直答) | fast(跳过思考) | on(完整思考)",
     ),
     limit: int = typer.Option(5, "--limit", help="最多输出条数(默认 5)"),
     json_output: bool = typer.Option(False, "--json", help="stdout 输出结构化 JSON"),
@@ -309,11 +319,18 @@ def eval(
 
     prompt 从 templates 派生(与训练 encode 路径同源,保证编码同构);
     --template 同时驱动 prompt 渲染与 stop sequences(同源,不分裂)。
+    --reasoning + --think 仅在 qa 模板下生效(reasoning 模型前缀 bos + think 标签)。
     """
-    if template not in ("nekoqa", "g1g"):
+    if template not in ("qa", "instruction", "raw"):
         raise typer.BadParameter(
-            f"--template 当前只支持 nekoqa / g1g, 收到 {template!r}"
+            f"--template 只支持 qa / instruction / raw, 收到 {template!r}"
         )
+    if think not in ("off", "fast", "on"):
+        raise typer.BadParameter(
+            f"--think 只支持 off / fast / on, 收到 {think!r}"
+        )
+    if think != "off" and not reasoning:
+        raise typer.BadParameter("--think 仅在 --reasoning 时合法")
     if not model.is_dir():
         _bad_input(ValueError(f"模型目录不存在: {model}"))
     if not state.is_file():
@@ -339,7 +356,10 @@ def eval(
         template,
     )
 
-    typer.echo(f"# 加载模型 {model} (kernel 路径, template={template})", err=True)
+    typer.echo(
+        f"# 加载模型 {model} (kernel 路径, template={template}"
+        f"{' reasoning=' + think if reasoning else ''})", err=True
+    )
     mdl, tok = load_model(model, patch=False)
     engine = InferenceEngine(mdl, tok)
 
@@ -350,6 +370,8 @@ def eval(
         config=cfg,
         data=data,
         limit=limit,
+        reasoning=reasoning,
+        think=think,
     )
     try:
         result = run_evaluation(request)
@@ -405,7 +427,20 @@ def chat(
     seed: int = typer.Option(42, "--seed"),
     ab: bool = typer.Option(False, "--ab", help="启动时开启 A/B"),
     stream: bool = typer.Option(True, "--stream/--no-stream", help="逐步输出生成文本"),
-    template: str = typer.Option("g1g", "--template", help="g1g(RWKV7-G1 原生,默认) | raw | nekoqa"),
+    template: str = typer.Option(
+        "qa", "--template",
+        help="任务模板: qa(角色扮演 QA,默认) | instruction(指令) | raw(原样)",
+    ),
+    reasoning: bool = typer.Option(
+        False, "--reasoning",
+        help="reasoning 模型(G1 系列)前缀加 bos + 按 --think 追加标签。仅 qa 模板合法。"
+             "G1 系列 reasoning 模型若不加此项会降智(实测铁证)。",
+    ),
+    think: str = typer.Option(
+        "off", "--think",
+        help="思考档位(仅 --reasoning 时生效): off(直答,默认) | fast(跳过思考) | on(完整思考)。"
+             "G1 系列推荐 --reasoning --think fast。",
+    ),
     cache_limit_gb: Optional[str] = typer.Option(
         "auto", "--cache-limit-gb",
         help="MLX buffer cache 上限;auto=物理内存×25%(默认,16G机≈4.3G),或直接给 GB 数。设小降 RSS,必须在模型加载前生效。",
@@ -416,8 +451,12 @@ def chat(
         _bad_input(ValueError(f"模型目录不存在: {model}"))
     if state is not None and not state.is_file():
         _bad_input(ValueError(f"state 文件不存在: {state}"))
-    if template not in ("raw", "nekoqa", "g1g"):
-        _bad_input(ValueError("--template 只支持 raw / nekoqa / g1g"))
+    if template not in ("raw", "qa", "instruction"):
+        _bad_input(ValueError("--template 只支持 raw / qa / instruction"))
+    if think not in ("off", "fast", "on"):
+        _bad_input(ValueError("--think 只支持 off / fast / on"))
+    if think != "off" and not reasoning:
+        _bad_input(ValueError("--think 仅在 --reasoning 时合法"))
     if max_tokens <= 0 or temperature < 0 or not 0 < top_p <= 1:
         _bad_input(ValueError("max-tokens/temperature/top-p 参数范围非法"))
     if ab and state is None:
@@ -456,6 +495,8 @@ def chat(
             seed=seed,
         ),
         template=template,
+        reasoning=reasoning,
+        think=think,
         state=loaded_state,
         state_label=str(state) if state else None,
         state_loader=_load_checked,
@@ -463,6 +504,12 @@ def chat(
     )
 
     typer.echo("交互模式已启动。每轮从当前 S₀ 重新开始；输入 /help 查看命令。")
+    if not reasoning and template == "qa":
+        typer.echo(
+            "# 提示: 若使用 G1 系列 reasoning 模型,加 --reasoning --think fast"
+            " 避免降智(详见 docs/g1g-decode-alignment.md)",
+            err=True,
+        )
     typer.echo(session.config_line())
     while True:
         try:
@@ -501,7 +548,15 @@ def preview(
     ab: bool = typer.Option(False, "--ab", help="A/B 对比:有 state vs 无 state 双输出"),
     template: str = typer.Option(
         "raw", "--template",
-        help="包装 prompt 的模板: raw(原样,默认) | nekoqa | g1g(RWKV7-G1 原生)",
+        help="包装 prompt 的模板: raw(原样,默认) | qa(角色扮演) | instruction(指令)",
+    ),
+    reasoning: bool = typer.Option(
+        False, "--reasoning",
+        help="reasoning 模型(G1 系列)前缀加 bos + 按 --think 追加标签。仅 qa 模板合法。",
+    ),
+    think: str = typer.Option(
+        "off", "--think",
+        help="思考档位(仅 --reasoning 时合法): off(直答,默认) | fast(跳过思考) | on(完整思考)",
     ),
     json_output: bool = typer.Option(False, "--json", help="stdout 输出结构化 JSON"),
     stream: bool = typer.Option(False, "--stream", help="逐步输出单路生成文本"),
@@ -509,13 +564,20 @@ def preview(
     """预览:注入 state 生成。--ab 做 A/B 对比，temperature=0 时为贪心。
 
     --template 决定 prompt 包装与 stop sequences(同源,不分裂):
-      raw 原样传入;nekoqa 包成 "User: {prompt}\\n\\nAssistant:";
-      g1g 包成带 bos + 空 think 标签的 RWKV7-G1 格式。
+      raw 原样传入;qa 包成 "User: {prompt}\\n\\nAssistant:";
+      instruction 包成 "Instruction: ...\\n\\nInput: ...\\n\\nResponse:"(空 input 降级)。
+    --reasoning + --think 仅在 qa 模板下生效:前缀加 bos + 按 think 档位追加标签。
     """
-    if template not in ("raw", "nekoqa", "g1g"):
+    if template not in ("raw", "qa", "instruction"):
         raise typer.BadParameter(
-            f"--template 只支持 raw / nekoqa / g1g, 收到 {template!r}"
+            f"--template 只支持 raw / qa / instruction, 收到 {template!r}"
         )
+    if think not in ("off", "fast", "on"):
+        raise typer.BadParameter(
+            f"--think 只支持 off / fast / on, 收到 {think!r}"
+        )
+    if think != "off" and not reasoning:
+        raise typer.BadParameter("--think 仅在 --reasoning 时合法")
     if ab and state is None:
         raise typer.BadParameter("--ab 必须同时提供 --state")
     if stream and (ab or json_output):
@@ -542,9 +604,12 @@ def preview(
     )
 
     # 按模板包装 prompt(与训练/eval 同源)
-    wrapped = render_prompt(prompt, template)
+    wrapped = render_prompt(prompt, template, reasoning=reasoning, think=think)
 
-    typer.echo(f"# 加载模型 {model} (template={template})", err=True)
+    typer.echo(
+        f"# 加载模型 {model} (template={template}"
+        f"{' reasoning=' + think if reasoning else ''})", err=True
+    )
     mdl, tok = load_model(model, patch=False)
     engine = InferenceEngine(mdl, tok)
 

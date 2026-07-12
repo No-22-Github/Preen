@@ -5,6 +5,11 @@
 格式一律从 templates.TaskTemplate 派生。
 
 loss mask 只算 target 段(prefix 是条件,不是学习目标)。
+
+内部标准 jsonl 字段名(Spec §1.3,导入器 §4 的产物契约):
+  - qa 模板:    {"prompt": ..., "response": ...}
+  - instruction: {"instruction": ..., "input": ..., "response": ...}
+  load_qa_dataset 仍按 instruction/output 字段读现有数据集(数据文件不改名)。
 """
 from __future__ import annotations
 
@@ -14,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Tuple, Union
 
-from .templates import NEKO_QA
+from .templates import QA
 
 PathLike = Union[str, Path]
 
@@ -27,7 +32,8 @@ class Sample:
                  验收 b/c 断言拿这个。input_ids = full_ids[:-1]。
     input_ids / labels: 偏移一位的 token 序列(下一个 token 预测)
     mask[i]=1 → labels[i](= full[i+1])落在 target 段或终止符,算 loss
-    cn / en:    原文中英文,debug/eval 用
+    prompt_text / target_text:  原文 prompt 与 target,debug/eval 用
+                 (历史字段 cn/en 已重命名,Spec §1.3 内部命名清债)
     prefix_len: prefix 段 token 长度(= len(encode(prefix)),含 \\n)。
                 mask 边界:label 落在 [prefix_len, len(full)) 区间才算 loss。
     """
@@ -36,8 +42,8 @@ class Sample:
     input_ids: List[int]
     labels: List[int]
     mask: List[int]
-    cn: str
-    en: str
+    prompt_text: str
+    target_text: str
     prefix_len: int
 
     @property
@@ -77,7 +83,7 @@ def encode_template_sample(
 
     tokenizer: 需有 .encode(str)->list[int] / .decode(ids)->str。
     template:  TaskTemplate 实例(prefix/target/stop_token 同源)。
-    **fields:  模板占位符的值(如 cn=..., en=... 或 q=..., a=...)。
+    **fields:  模板占位符的值(如 q=..., a=... 或 instruction=..., input=..., a=...)。
     """
     prefix_text = template.format_prefix(**fields)
     target_text = template.format_target(**fields)
@@ -96,17 +102,18 @@ def encode_template_sample(
         labels = labels[:max_len]
         mask = mask[:max_len]
 
-    # cn/en 仅用于 debug/eval 展示;通用模板无此概念时取 fields 里的近似值
-    cn = fields.get("cn", fields.get("q", ""))
-    en = fields.get("en", fields.get("a", ""))
-    return Sample(full_ids, input_ids, labels, mask, cn, en, prefix_len)
+    # prompt_text/target_text 仅用于 debug/eval 展示;通用模板无 cn/en 概念,
+    # 取 fields 里的近似值(兼容 q/a 与 instruction/input/a 占位符)。
+    prompt_text = fields.get("prompt_text", fields.get("q", fields.get("instruction", "")))
+    target_text_dbg = fields.get("target_text", fields.get("a", ""))
+    return Sample(full_ids, input_ids, labels, mask, prompt_text, target_text_dbg, prefix_len)
 
 
 def load_qa_dataset(
     path: PathLike,
     tokenizer,
     *,
-    template=NEKO_QA,
+    template=QA,
     max_len: int = 512,
     question_key: str = "instruction",
     answer_key: str = "output",
@@ -118,11 +125,14 @@ def load_qa_dataset(
       - .json:一个数组 [{...}, {...}](如 NekoQA-10K.json)
 
     每条 → encode_template_sample(template, q=..., a=..., max_len)。
-    默认模板 NEKO_QA(prefix="User: {q}\\n\\nAssistant:", target=" {a}")。
+    默认模板 QA(prefix="User: {q}\\n\\nAssistant:", target=" {a}")。
     跳过 answer 为空的条目;超长样本按 max_len 截断(不丢弃)。
 
-    question_key / answer_key 默认对齐 NekoQA 的 instruction/output 字段;
+    question_key / answer_key 默认对齐 NekoQA 数据集的 instruction/output 字段;
     其他 QA 数据集可显式传 question_key="..." / answer_key="..."。
+
+    内部标准 jsonl(Spec §1.3,导入器产物)字段名为 prompt/response,
+    那条路径由 §4 导入器实现时新增专用 loader;本函数仍服务现有数据文件。
     """
     path = Path(path)
     items = []
@@ -170,8 +180,8 @@ def verify_boundary(samples: List[Sample], tokenizer, n: int = 3) -> None:
     """打印前 n 条样本的 mask 边界,人工确认切对了(CLI preview 用)。"""
     for i, s in enumerate(samples[:n]):
         print(f"--- 样本 {i} ---")
-        print(f"  中文: {s.cn}")
-        print(f"  英文: {s.en}")
+        print(f"  prompt: {s.prompt_text}")
+        print(f"  target: {s.target_text}")
         print(f"  prefix_len(边界): {s.prefix_len}, 总长: {s.length}")
         before = tokenizer.decode(s.input_ids[: s.prefix_len])
         at_boundary = (

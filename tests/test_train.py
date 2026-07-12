@@ -52,7 +52,7 @@ def test_encode_template_stop_and_mask():
     target=" Hi",stop=0。
     """
     from statetuner.data import encode_template_sample
-    from statetuner.templates import NEKO_QA
+    from statetuner.templates import QA as NEKO_QA  # tests 局部别名
 
     tok = _DummyTokenizer()
     s = encode_template_sample(tok, NEKO_QA, q="你好", a="Hi")
@@ -80,7 +80,7 @@ def test_encode_template_prefix_isomorphism():
     在 test_inference / 慢测里由 golden 逐字断言兜底。
     """
     from statetuner.data import encode_template_sample
-    from statetuner.templates import NEKO_QA
+    from statetuner.templates import QA as NEKO_QA  # tests 局部别名
 
     tok = _DummyTokenizer()
 
@@ -106,14 +106,14 @@ def test_train_test_split_reproducible():
     samples = [
         Sample(
             full_ids=[1, 2, 3], input_ids=[1, 2], labels=[2, 3],
-            mask=[0, 1], cn=f"cn{i}", en=f"en{i}", prefix_len=1,
+            mask=[0, 1], prompt_text=f"p{i}", target_text=f"t{i}", prefix_len=1,
         )
         for i in range(20)
     ]
     tr1, te1 = train_test_split(samples, test_ratio=0.2, seed=42)
     tr2, te2 = train_test_split(samples, test_ratio=0.2, seed=42)
-    assert [s.cn for s in tr1] == [s.cn for s in tr2]
-    assert [s.cn for s in te1] == [s.cn for s in te2]
+    assert [s.prompt_text for s in tr1] == [s.prompt_text for s in tr2]
+    assert [s.prompt_text for s in te1] == [s.prompt_text for s in te2]
     assert len(te1) == 4
     assert len(tr1) == 16
 
@@ -346,10 +346,10 @@ def test_full_train_nekoqa(model_tokenizer):
     )
     # 3. 产出非空回答(state 注入后应能生成内容)
     from statetuner.core import generate
-    from statetuner.templates import NEKO_QA
+    from statetuner.templates import QA as NEKO_QA  # tests 局部别名
     from statetuner.train import save_state_npz
 
-    q = samples[0].cn  # Sample.cn 存的是 question
+    q = samples[0].prompt_text  # Sample.prompt_text 存的是 question
     import tempfile
 
     with tempfile.NamedTemporaryFile(suffix=".npz", delete=False) as f:

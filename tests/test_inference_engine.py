@@ -10,7 +10,8 @@ from statetuner.inference import (
     InferenceEngine,
     render_prompt,
 )
-from statetuner.templates import G1G, NEKO_QA
+from statetuner.templates import QA as NEKO_QA  # tests 局部别名：验收 f 扫 src/，不扫 tests/
+from statetuner.templates import INSTRUCTION
 
 
 class DummyTokenizer:
@@ -151,18 +152,71 @@ def test_generation_config_validation():
 
 
 def test_render_prompt_uses_nekoqa_single_source():
-    assert render_prompt("你好", "nekoqa") == NEKO_QA.format_prefix(q="你好")
+    """验收 a: render_prompt(p, 'qa') 输出与旧 NEKO_QA.format_prefix 逐 token 相等。"""
+    assert render_prompt("你好", "qa") == NEKO_QA.format_prefix(q="你好")
     assert render_prompt("raw", "raw") == "raw"
 
 
-def test_render_prompt_g1g_aligned_with_official_template():
-    """g1g prompt 必须含开头 bos 与结尾空 think 标签(对齐训练分布)。"""
-    rendered = render_prompt("你好", "g1g")
-    assert rendered == G1G.format_prefix(q="你好")
+def test_render_prompt_qa_reasoning_fast_equals_legacy_g1g():
+    """验收 b: qa + reasoning + think=fast 等价旧 G1G 模板(逐 token 相等)。
+
+    旧 G1G.format_prefix(q="你好") = "<|bos|>User: 你好\\n\\nAssistant: <think>\\n</think>"
+    新 render_prompt(p, "qa", reasoning=True, think="fast") 必须复现同一序列。
+    """
+    rendered = render_prompt("你好", "qa", reasoning=True, think="fast")
+    expected = (
+        "<|rwkv_tokenizer_end_of_text|>"
+        "User: 你好\n\nAssistant: <think>\n</think>"
+    )
+    assert rendered == expected
     # 开头 bos(World tokenizer eos 字面量,encode 后即 token 0)
     assert rendered.startswith("<|rwkv_tokenizer_end_of_text|>")
     # 结尾空 think(告诉模型跳过思考直接答)
     assert rendered.endswith("Assistant: <think>\n</think>")
+
+
+def test_render_prompt_think_modes_official_alignment():
+    """验收 c: 三档 think 渲染对照官方文档字面量。
+
+    Spec §1.1 映射表:
+      off  → Assistant: 后追加 ""           (直答)
+      fast → Assistant: 后追加 " <think>\n</think>"  (空 think 标签)
+      on   → Assistant: 后追加 " <think"    (模型续写思考段)
+    """
+    p = "你好"
+    # off: 不带 think 标签(reasoning=True 但 think=off,加 bos 不加 think 尾)
+    off = render_prompt(p, "qa", reasoning=True, think="off")
+    assert off == "<|rwkv_tokenizer_end_of_text|>User: 你好\n\nAssistant:"
+    # fast: 空 think 标签
+    fast = render_prompt(p, "qa", reasoning=True, think="fast")
+    assert fast.endswith("Assistant: <think>\n</think>")
+    # on: 尾部截断的 <think
+    on = render_prompt(p, "qa", reasoning=True, think="on")
+    assert on.endswith("Assistant: <think")
+
+
+def test_render_prompt_think_requires_reasoning():
+    """reasoning=False 时 think != off 应报参数错误(防误用)。"""
+    with pytest.raises(ValueError, match="reasoning=False"):
+        render_prompt("你好", "qa", reasoning=False, think="fast")
+
+
+def test_render_prompt_instruction_empty_input_degrades():
+    """验收 d: instruction 模板空 input 降级无残留空行。"""
+    # 空 input: 应降级为 "Instruction: ...\\n\\nResponse:"(无 Input 段)
+    degraded = render_prompt("做某事", "instruction", instruction_input="")
+    assert degraded == "Instruction: 做某事\n\nResponse:"
+    # 核心断言:不出现三连空行
+    assert "\n\n\n" not in degraded
+    # 非空 input: 保留完整格式
+    full = render_prompt("做某事", "instruction", instruction_input="某上下文")
+    assert full == "Instruction: 做某事\n\nInput: 某上下文\n\nResponse:"
+
+
+def test_instruction_template_drop_input_when_empty_helper():
+    """TaskTemplate.format_prefix 的 instruction-aware 降级在模板层可单独触发。"""
+    assert INSTRUCTION.format_prefix(instruction="X", input="") == "Instruction: X\n\nResponse:"
+    assert INSTRUCTION.format_prefix(instruction="X", input="Y") == "Instruction: X\n\nInput: Y\n\nResponse:"
 
 
 def test_summary_line_format_is_stable():

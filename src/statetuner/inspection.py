@@ -25,7 +25,7 @@ class DataInspection:
     p95_tokens: float
     max_tokens: int
     ctx_len: int
-    template: str = "nekoqa"
+    template: str = "qa"
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -91,8 +91,8 @@ def load_qa_pairs(path: Path, *, require_answer: bool = False) -> list[tuple[str
 
 
 def inspect_data(path: Path, tokenizer, *, ctx_len: int = 512) -> DataInspection:
-    """检查 NekoQA instruction/output 数据并统计真实 tokenizer 长度。"""
-    from .templates import NEKO_QA
+    """检查 QA instruction/output 数据并统计真实 tokenizer 长度。"""
+    from .templates import QA
 
     if ctx_len <= 0:
         raise ValueError("ctx_len 必须 > 0")
@@ -118,8 +118,8 @@ def inspect_data(path: Path, tokenizer, *, ctx_len: int = 512) -> DataInspection
             empty_a += 1
             continue
 
-        prefix_len = len(tokenizer.encode(NEKO_QA.format_prefix(q=q)))
-        target_len = len(tokenizer.encode(NEKO_QA.format_target(a=a)))
+        prefix_len = len(tokenizer.encode(QA.format_prefix(q=q)))
+        target_len = len(tokenizer.encode(QA.format_target(a=a)))
         length = prefix_len + target_len  # input_ids 长度(full 还会追加 eos)
         lengths.append(length)
         if length > ctx_len:

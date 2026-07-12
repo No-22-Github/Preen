@@ -40,5 +40,5 @@ def test_validate_training_request_rejects_pth_out_without_export(tmp_path):
 
 def test_validate_training_request_rejects_unknown_template(tmp_path):
     request = _request(tmp_path, template="raw")
-    with pytest.raises(ValueError, match="nekoqa"):
+    with pytest.raises(ValueError, match="qa / instruction"):
         validate_training_request(request)

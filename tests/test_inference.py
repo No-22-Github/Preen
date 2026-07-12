@@ -13,7 +13,7 @@ import json
 
 from conftest import GOLDEN_DIR
 from statetuner.core import generate
-from statetuner.templates import NEKO_QA
+from statetuner.templates import QA as NEKO_QA  # tests 局部别名
 
 
 def load_golden(name):

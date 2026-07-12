@@ -2,7 +2,7 @@ from pathlib import Path
 
 from statetuner.chat import ChatSession
 from statetuner.inference import ABResult, GenerationConfig, GenerationResult
-from statetuner.templates import NEKO_QA
+from statetuner.templates import QA as NEKO_QA  # tests 局部别名
 
 
 class FakeEngine:

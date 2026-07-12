@@ -15,7 +15,7 @@ from statetuner.service import (
     run_evaluation,
     validate_evaluation_request,
 )
-from statetuner.templates import G1G, NEKO_QA
+from statetuner.templates import QA as NEKO_QA  # tests 局部别名
 
 
 class _RecordingEngine:
@@ -43,12 +43,12 @@ class _RecordingEngine:
 # ── ① 回归：prompt 渲染与 stops 同源 ────────────────────────
 
 def test_eval_nekoqa_prompt_and_stops_share_template():
-    """nekoqa：render_prompt 的格式与 config.stop_sequences 都来自 NEKO_QA。"""
+    """qa：render_prompt 的格式与 config.stop_sequences 都来自 QA 模板（旧 NEKO_QA）。"""
     engine = _RecordingEngine()
-    cfg = with_template_stops(GenerationConfig(max_tokens=5), "nekoqa")
+    cfg = with_template_stops(GenerationConfig(max_tokens=5), "qa")
     run_evaluation(
         EvaluationRequest(
-            engine=engine, state="s.npz", template="nekoqa", config=cfg, limit=1
+            engine=engine, state="s.npz", template="qa", config=cfg, limit=1
         )
     )
     prompt, used_cfg = engine.calls[0]
@@ -57,18 +57,24 @@ def test_eval_nekoqa_prompt_and_stops_share_template():
 
 
 def test_eval_g1g_prompt_and_stops_share_template():
-    """g1g：render_prompt 与 stops 都来自 G1G（防 render_prompt 硬编码 nekoqa 的 bug）。"""
+    """qa + reasoning + think=fast：等价旧 G1G 渲染（防 render_prompt 硬编码的 bug）。
+
+    Spec §1.2：旧 G1G 模板已拆解为 qa + reasoning 方言 + think 档位。
+    stops 来自 QA.inference_stop_sequences（reasoning 不改 stop 边界）。
+    """
     engine = _RecordingEngine()
-    cfg = with_template_stops(GenerationConfig(max_tokens=5), "g1g")
+    cfg = with_template_stops(GenerationConfig(max_tokens=5), "qa")
     run_evaluation(
         EvaluationRequest(
-            engine=engine, state="s.npz", template="g1g", config=cfg, limit=1
+            engine=engine, state="s.npz", template="qa", config=cfg, limit=1,
+            reasoning=True, think="fast",
         )
     )
     prompt, used_cfg = engine.calls[0]
-    assert prompt == G1G.format_prefix(q=DEFAULT_EVAL_QUESTIONS[0][0])
+    # 等价旧 G1G.format_prefix：bos 前缀 + qa prefix + 空 think 标签
     assert prompt.startswith("<|rwkv_tokenizer_end_of_text|>")
-    assert used_cfg.stop_sequences == G1G.inference_stop_sequences
+    assert prompt.endswith("Assistant: <think>\n</think>")
+    assert used_cfg.stop_sequences == NEKO_QA.inference_stop_sequences
 
 
 # ── ② service 层单测 ────────────────────────────────────────
@@ -78,9 +84,9 @@ def test_run_evaluation_data_load_failure_raises(tmp_path):
     bad = tmp_path / "bad.json"
     bad.write_text('[{"instruction": ""}]', encoding="utf-8")
     engine = _RecordingEngine()
-    cfg = with_template_stops(GenerationConfig(max_tokens=5), "nekoqa")
+    cfg = with_template_stops(GenerationConfig(max_tokens=5), "qa")
     request = EvaluationRequest(
-        engine=engine, state="s.npz", template="nekoqa", config=cfg, data=bad, limit=3
+        engine=engine, state="s.npz", template="qa", config=cfg, data=bad, limit=3
     )
     with pytest.raises(ValueError, match="非空字符串"):
         run_evaluation(request)
@@ -93,10 +99,10 @@ def test_run_evaluation_limit_truncates(tmp_path):
     data = tmp_path / "data.json"
     data.write_text(json.dumps(items, ensure_ascii=False), encoding="utf-8")
     engine = _RecordingEngine()
-    cfg = with_template_stops(GenerationConfig(max_tokens=5), "nekoqa")
+    cfg = with_template_stops(GenerationConfig(max_tokens=5), "qa")
     result = run_evaluation(
         EvaluationRequest(
-            engine=engine, state="s.npz", template="nekoqa",
+            engine=engine, state="s.npz", template="qa",
             config=cfg, data=data, limit=2,
         )
     )
@@ -108,10 +114,10 @@ def test_run_evaluation_limit_truncates(tmp_path):
 def test_run_evaluation_uses_default_questions_without_data():
     """无 --data 时使用内置示例（DEFAULT_EVAL_QUESTIONS）。"""
     engine = _RecordingEngine()
-    cfg = with_template_stops(GenerationConfig(max_tokens=5), "nekoqa")
+    cfg = with_template_stops(GenerationConfig(max_tokens=5), "qa")
     result = run_evaluation(
         EvaluationRequest(
-            engine=engine, state="s.npz", template="nekoqa",
+            engine=engine, state="s.npz", template="qa",
             config=cfg, limit=10,
         )
     )
@@ -122,10 +128,10 @@ def test_run_evaluation_uses_default_questions_without_data():
 def test_run_evaluation_result_structure():
     """结果结构：index 从 1 起，text 已 strip，generation 字段完整。"""
     engine = _RecordingEngine()
-    cfg = with_template_stops(GenerationConfig(max_tokens=5), "nekoqa")
+    cfg = with_template_stops(GenerationConfig(max_tokens=5), "qa")
     result = run_evaluation(
         EvaluationRequest(
-            engine=engine, state="s.npz", template="nekoqa", config=cfg, limit=2
+            engine=engine, state="s.npz", template="qa", config=cfg, limit=2
         )
     )
     payload = result.to_dict()
@@ -140,10 +146,11 @@ def test_run_evaluation_result_structure():
 def test_validate_evaluation_request_rejects_bad_template(tmp_path):
     engine = _RecordingEngine()
     cfg = GenerationConfig()
-    with pytest.raises(ValueError, match="nekoqa / g1g"):
+    with pytest.raises(ValueError, match="qa / instruction / raw"):
         validate_evaluation_request(
             EvaluationRequest(
-                engine=engine, state="s.npz", template="raw", config=cfg
+                # 用已废弃的旧模板名触发拒绝（nekoqa 在新世界不再合法）
+                engine=engine, state="s.npz", template="nekoqa", config=cfg
             )
         )
 
@@ -154,6 +161,6 @@ def test_validate_evaluation_request_rejects_missing_state():
     with pytest.raises(ValueError, match="state"):
         validate_evaluation_request(
             EvaluationRequest(
-                engine=engine, state=None, template="nekoqa", config=cfg
+                engine=engine, state=None, template="qa", config=cfg
             )
         )

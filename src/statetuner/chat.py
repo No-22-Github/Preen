@@ -33,7 +33,9 @@ class ChatSession:
         engine: InferenceEngine,
         *,
         config: Optional[GenerationConfig] = None,
-        template: str = "nekoqa",
+        template: str = "qa",
+        reasoning: bool = False,
+        think: str = "off",
         state: StateInput = None,
         state_label: Optional[str] = None,
         state_loader: Optional[StateLoader] = None,
@@ -44,10 +46,21 @@ class ChatSession:
         self.config = with_template_stops(base_config, template)
         self.config.validate()
         self.template = template
+        self.reasoning = reasoning
+        self.think = think
         self.state = state
         self.state_label = state_label
         self.state_loader = state_loader or engine.load_state
         self.ab = ab
+
+    @property
+    def _has_reasoning_dialect(self) -> bool:
+        """是否需要 reasoning 方言的显示清洗(前导 \\n 是空 think 标签后的自然换行)。
+
+        旧实现硬判某旧模板字符串;新世界 reasoning 是正交开关,
+        且仅与 qa 模板组合(instruction/raw 不与 reasoning 组合,由 render_prompt 拒绝)。
+        """
+        return self.reasoning and self.think in ("fast", "on") and self.template != "raw"
 
     def handle(
         self, text: str, *, on_text: Optional[TextCallback] = None
@@ -58,7 +71,9 @@ class ChatSession:
         if text.startswith("/"):
             return self._command(text)
 
-        wrapped = render_prompt(text, self.template)
+        wrapped = render_prompt(
+            text, self.template, reasoning=self.reasoning, think=self.think
+        )
         if self.ab:
             if self.state is None:
                 return ChatReply(["A/B 已开启，但当前没有 state；请先使用 /state PATH。"])
@@ -73,7 +88,7 @@ class ChatSession:
             ]
             return ChatReply(lines, payload=result.to_dict())
 
-        # g1g 输出开头常有 \n(</think> 后的自然换行)，stream 首个非空 chunk 去掉它。
+        # reasoning 方言输出开头常有 \n(</think> 后的自然换行)，stream 首个非空 chunk 去掉它。
         stream_callback = self._wrap_stream_callback(on_text) if on_text else None
         result = self.engine.generate(
             wrapped, state=self.state, config=self.config, on_text=stream_callback
@@ -86,8 +101,8 @@ class ChatSession:
         )
 
     def _display_text(self, text: str) -> str:
-        """模板相关的显示清洗。g1g 去掉前导换行(</think> 后的自然换行)。"""
-        if self.template == "g1g":
+        """模板相关的显示清洗。reasoning 方言去掉前导换行(</think> 后的自然换行)。"""
+        if self._has_reasoning_dialect:
             return text.lstrip("\n")
         return text
 
@@ -95,9 +110,10 @@ class ChatSession:
         """包装 stream 回调：首个非空 chunk 去掉模板前导换行。
 
         inference.generate 的 emit_safe_text 只发增量 delta，首个 delta 通常就是
-        开头的 \\n（g1g）。这里一次性消费掉它，后续 chunk 原样透传。
+        开头的 \\n（reasoning 方言空 think 标签后的自然换行）。这里一次性消费掉它，
+        后续 chunk 原样透传。
         """
-        if self.template != "g1g":
+        if not self._has_reasoning_dialect:
             return callback
         stripped = False
 
@@ -208,7 +224,11 @@ class ChatSession:
         return ChatReply([self.config_line()])
 
     def config_line(self) -> str:
+        reasoning_part = (
+            f" reasoning=on think={self.think}" if self.reasoning else ""
+        )
         return (
+            f"template={self.template}{reasoning_part} "
             f"state={self.state_label or 'off'} ab={'on' if self.ab else 'off'} "
             f"temperature={self.config.temperature} top_p={self.config.top_p} "
             f"max_tokens={self.config.max_tokens} seed={self.config.seed}"

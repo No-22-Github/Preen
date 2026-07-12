@@ -12,7 +12,7 @@ def test_write_state_metadata(tmp_path):
         state,
         model_path=tmp_path / "model",
         data_path=data,
-        template="nekoqa",
+        template="qa",
         config={"lr": 0.01},
         data_stats={"valid": 2},
         result={"final_loss": 1.0},

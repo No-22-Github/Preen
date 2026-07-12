@@ -73,7 +73,7 @@ src/statetuner/                 训练/推理引擎 + CLI 入口
 ├── core.py                       patch ops 路径 + 可训练 state + generate
 ├── inference.py                  独立推理引擎 (采样/A-B/结构化结果)
 ├── data.py                       数据集 (jsonl → tokenize + loss mask)
-├── templates.py                  ★ 格式模板单一事实源 (NEKO_QA / G1G)
+├── templates.py                  ★ 格式模板单一事实源 (QA / INSTRUCTION;Phase 3 §1 重构后)
 ├── chat.py                       交互式会话 (动态 state 切换 / A-B / 流式)
 ├── inspection.py                 环境/数据/state 预检 + 校验
 ├── metadata.py                   训练产物旁挂元数据
@@ -153,7 +153,7 @@ uv run python tools/convert_rwkv7_to_hf.py \
 # 2. 训练 state tuning, 训完直接导出 RWKV Runner 可挂载的 .pth
 uv run statetuner train \
     --model models/converted/rwkv7-g1d-0.4b \
-    --data train_data/NekoQA_10k/nekoqa_smoke_200.json --template nekoqa \
+    --data train_data/NekoQA_10k/nekoqa_smoke_200.json --template qa \
     --out state.npz \
     --lr 0.01 --epochs 3 --ctx-len 512 --no-early-stop --seed 42 \
     --export-pth --pth-out state.pth
@@ -161,7 +161,7 @@ uv run statetuner train \
 # 3. A/B 预览: 有 state vs 无 state, 直观看风格注入效果
 uv run statetuner preview \
     --model models/converted/rwkv7-g1d-0.4b --state state.npz \
-    --prompt "你好呀，今天想做什么？" --template nekoqa --ab
+    --prompt "你好呀，今天想做什么？" --template qa --ab
 ```
 
 > **`--cache-limit-gb`**(train/eval/chat 通用):默认 `auto`,取物理内存的 25%
@@ -171,15 +171,16 @@ uv run statetuner preview \
 ### 其他常用命令
 
 ```bash
-# 模型常驻交互;运行中可用 /state 动态切换 state (默认 template=g1g, 猫娘风格迁移用 --template nekoqa)
+# 模型常驻交互;运行中可用 /state 动态切换 state
+# (默认裸 qa 模板;G1 系列 reasoning 模型加 --reasoning --think fast 避免降智)
 uv run statetuner chat \
     --model models/converted/rwkv7-g1d-0.4b --state state.npz \
-    --template nekoqa --max-tokens 200 --temperature 0.6 --top-p 0.7
+    --template qa --max-tokens 200 --temperature 0.6 --top-p 0.7
 # /state PATH | /state off | /ab on | /config | /help | /quit
 
 # held-out 评估
 uv run statetuner eval \
-    --model models/converted/rwkv7-g1d-0.4b --state state.npz --template nekoqa \
+    --model models/converted/rwkv7-g1d-0.4b --state state.npz --template qa \
     --data train_data/NekoQA_10k/nekoqa_smoke_200.json --limit 5
 
 # 单独导出 npz → pth (也可在 train 时 --export-pth 一步完成)
