@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="Preen_title.png" alt="Preen — RWKV Fine-Tuning Studio" width="720">
+  <img src="assets/preen_title.png" alt="Preen — RWKV Fine-Tuning Studio" width="720">
 </p>
 
 # Preen — RWKV-7 State Tuning for Mac
