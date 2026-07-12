@@ -40,41 +40,17 @@ def _bad_input(exc: Exception) -> None:
 
 
 def _apply_cache_limit(spec: Optional[str]) -> None:
-    """load_model 前设 MLX buffer cache 上限(GB 口径)。
+    """CLI 包装(T2):runtime.apply_cache_limit 出错 → _bad_input(typer.Exit 2)。
 
-    必须在任何 MLX 加载/分配前调用才有效(mem_probe 验证过的时序)。
-    spec 解析:
-      "auto"     — 物理内存 × 25%(16GB 机器 ≈ 4.3G,c4G 同档)
-      "<number>" — 直接当 GB,如 "4" → 4G
-    全仓 GB 口径(÷1e9),禁止 /1024³。
+    逻辑下沉到 runtime.py,cli/serve 共用;本函数只负责把 ValueError 翻译成
+    CLI 的退出码(serve 走 ProtocolError,不经过这里)。
     """
-    if spec is None:
-        # 调用方未传 spec(理论上不会触发:CLI 默认是 "auto")。
-        # 见 review T2 / P3:不再保留"理论上不会被触发"的薛定谔分支,
-        # 一旦出现说明调用方漏传 —— 直接断言,别让默认值静默走偏。
-        assert False, "_apply_cache_limit 收到 None(spec 缺省应为 'auto')"
-    import mlx.core as mx
+    from .runtime import apply_cache_limit
 
-    if spec == "auto":
-        # memory_size 用 .get 兜底:Linux MLX / 部分版本 device_info 可能缺该键,
-        # 与 doctor_report 保持同一防御口径(否则裸下标 KeyError)。
-        mem_bytes = mx.device_info().get("memory_size", 0)
-        if mem_bytes <= 0:
-            _bad_input(ValueError(
-                "MLX device_info 未报告 memory_size,无法走 auto;"
-                "请显式 --cache-limit-gb <GB>"
-            ))
-        gb = mem_bytes / 1e9 * 0.25
-    else:
-        try:
-            gb = float(spec)
-        except ValueError:
-            _bad_input(ValueError(
-                f"--cache-limit-gb 只接受 'auto' 或正数, 收到 {spec!r}"
-            ))
-    if gb <= 0:
-        _bad_input(ValueError("--cache-limit-gb 必须 > 0"))
-    mx.set_cache_limit(int(gb * 1e9))
+    try:
+        apply_cache_limit(spec)
+    except ValueError as exc:
+        _bad_input(exc)
 
 
 @app.command("doctor")
@@ -414,15 +390,37 @@ def export(
     state: Path = typer.Option(..., "--state", "-s", help="state npz(P0 内部格式)"),
     out: Path = typer.Option(..., "--out", "-o", help="输出 .pth 路径"),
     verify: bool = typer.Option(True, "--verify/--no-verify", help="导出后 round-trip 验证"),
+    deep: bool = typer.Option(
+        False, "--deep",
+        help="深度校验:用 pth 挂载后 MLX generate 的输出 == 原始 state 注入的输出。"
+             "端到端语义证明(强于 round-trip 的容器证明)。需 --model。",
+    ),
+    model: Optional[Path] = typer.Option(
+        None, "--model", "-m",
+        help="深度校验用的模型目录(--deep 时必需,与训练/推理同模型)。",
+    ),
+    prompt: str = typer.Option(
+        "User: 你好\n\nAssistant:", "--prompt",
+        help="深度校验用的探测 prompt(默认 QA 前缀)。",
+    ),
 ):
-    """npz → RWKV Runner 可挂载的 .pth。"""
+    """npz → RWKV Runner 可挂载的 .pth。
+
+    --deep(T6):接上 export.verify_mount_equivalence —— 端到端证明 pth 挂载后的
+    输出 == 训练时 state 注入的输出(语义正确)。区别于 round-trip 只证明
+    torch.load 能读(容器正确)。需 --model + tokenizer;会短暂加载模型。
+    """
     if not state.is_file():
         _bad_input(ValueError(f"state 文件不存在: {state}"))
     if state.suffix.lower() != ".npz":
         _bad_input(ValueError("export 的 --state 必须是 .npz"))
+    if deep and not model:
+        _bad_input(ValueError("--deep 必须同时提供 --model(端到端校验需要加载模型)"))
+    if deep and model is not None and not model.is_dir():
+        _bad_input(ValueError(f"模型目录不存在: {model}"))
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    from .export import export_pth as _export, load_npz_as_numpy, verify_roundtrip
+    from .export import export_pth as _export, load_npz_as_numpy, verify_mount_equivalence, verify_roundtrip
 
     typer.echo(f"# 读取 {state}", err=True)
     states = load_npz_as_numpy(state)
@@ -434,6 +432,20 @@ def export(
         typer.echo(f"# round-trip: {'✓' if ok else '✗'} {msg}", err=True)
         if not ok:
             raise typer.Exit(1)
+
+    if deep:
+        # T6:接通此前无调用方的 verify_mount_equivalence(本仓库最强的正确性证明)。
+        # 清死代码 + 给 State 库的"深度校验"勾选项一个 CLI 对应物。
+        _apply_cache_limit("auto")  # 模型加载前生效(时序铁律)
+        from .core import load_model
+
+        typer.echo(f"# 深度校验: 加载 {model}(端到端 mount 等价)", err=True)
+        mdl, tok = load_model(model, patch=False)
+        ok, msg = verify_mount_equivalence(mdl, tok, states, out, prompt)
+        typer.echo(f"# deep mount: {'✓' if ok else '✗'} {msg}", err=True)
+        if not ok:
+            raise typer.Exit(1)
+
     typer.echo(f"✓ {out}")
 
 

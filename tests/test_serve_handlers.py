@@ -149,6 +149,16 @@ def test_hello_returns_capabilities():
     assert "fast" in term["capabilities"]["think"]
 
 
+def test_hello_returns_protocol_version():
+    """T1:hello 带 protocol_version(协议冻结点,UI 据此判断兼容性)。"""
+    from statetuner.serve import PROTOCOL_VERSION
+    cap = CaptureProtocol()
+    events, term = _send_and_collect(cap, {"id": "pv", "cmd": "hello"})
+    assert term["protocol_version"] == PROTOCOL_VERSION
+    assert isinstance(term["protocol_version"], int)
+    assert term["protocol_version"] >= 1
+
+
 def test_new_session_returns_id():
     cap = CaptureProtocol()
     events, term = _send_and_collect(cap, {
@@ -184,7 +194,10 @@ def test_new_session_rejects_think_without_reasoning():
 # ── send:流式 + 终结 + id 透传 ──────────────────────────────
 
 def test_send_emits_text_chunks_turn_end_and_ok():
-    """§3.3 send:text_chunk* → turn_end → ok。每个事件带回 id + session_id。"""
+    """§3.3 send:text_chunk* → turn_end → ok。每个事件带回 id + session_id。
+
+    T1:text_chunk 带 phase 字段(非 think=on 恒 "answer")。
+    """
     cap = CaptureProtocol()
     # 先建 session
     _, ns_term = _send_and_collect(cap, {"id": "s1", "cmd": "new_session", "template": "qa"})
@@ -200,13 +213,54 @@ def test_send_emits_text_chunks_turn_end_and_ok():
     assert term["id"] == "s2"
     # 所有事件都透传 id
     assert all(e["id"] == "s2" for e in events)
-    # text_chunk 带 delta
+    # text_chunk 带 delta + phase(T1:非 think=on 恒 "answer")
     chunk = next(e for e in events if e["type"] == "text_chunk")
     assert chunk["delta"]
-    # turn_end 带 result
+    assert chunk["phase"] == "answer"
+    # turn_end 带 result;非 think=on 不带 thinking/answer 顶层字段
     turn_end = next(e for e in events if e["type"] == "turn_end")
     assert "result" in turn_end
     assert turn_end["session_id"] == sid
+    assert "thinking" not in turn_end  # T1:非 think=on 不拆
+
+
+def test_send_think_on_emits_phase_and_split_turn_end():
+    """T1:think=on session 的 send → text_chunk.phase 区分 think/answer,
+    turn_end 带 thinking/answer 顶层字段(从 result.text 拆出)。
+
+    FakeEngine 默认返回 'tuned'(无 think 标签);这里把它换成返回
+    含 </think> 的文本,验证拆分 + phase 切换。
+    """
+    cap = CaptureProtocol()
+    _, ns = _send_and_collect(cap, {
+        "id": "n", "cmd": "new_session", "template": "qa",
+        "reasoning": True, "think": "on",
+    })
+    sid = ns["session_id"]
+
+    # 让 engine 返回带 think 标签的文本(模拟 reasoning think=on 输出)
+    from dataclasses import replace as _replace
+    orig = cap.engine.generate
+
+    def think_generate(prompt, *, state=None, config=None, cache=None,
+                       on_text=None, should_abort=None):
+        result = orig(
+            prompt, state=state, config=config, cache=cache,
+            on_text=on_text, should_abort=should_abort,
+        )
+        return _replace(result, text="我的思考过程</think>可见的回答")
+
+    cap.engine.generate = think_generate  # patch 同一实例,session 持有的就是它
+
+    events, term = _send_and_collect(cap, {
+        "id": "t1", "cmd": "send", "session_id": sid, "text": "你好",
+    })
+    # turn_end 应带 thinking + answer(T1)
+    turn_end = next(e for e in events if e["type"] == "turn_end")
+    assert turn_end["thinking"] == "我的思考过程"
+    assert turn_end["answer"] == "可见的回答"
+    # result.text 仍是原始全文(展示层兜底用)
+    assert "</think>" in turn_end["result"]["text"]
 
 
 def test_send_unknown_session_returns_not_found():
@@ -575,9 +629,9 @@ def test_detect_import_then_import_workflow(tmp_path):
 def test_internal_error_surfaces_traceback_summary():
     """未预期异常 → internal + traceback 摘要(§3.5)。
 
-    构造:set_config 传一个无法转 float 的值,GenerationConfig.validate 报错。
-    实际上 _apply_gen_config 用 replace + validate,非数值会抛 TypeError/ValueError,
-    被 handle_line 兜成 internal。
+    构造:set_config 传一个无法转 float 的值。
+    T4 修复后:这类参数解析错误 → bad_request(而非 internal);
+    真正的 internal 留给未预期异常(如 model 内部抛错)。
     """
     cap = CaptureProtocol()
     _, ns = _send_and_collect(cap, {"id": "n", "cmd": "new_session", "template": "qa"})
@@ -587,5 +641,19 @@ def test_internal_error_surfaces_traceback_summary():
         "gen_config": {"temperature": "not-a-number"},
     })
     assert term["type"] == "error"
-    # temperature 非数值 → validate 抛 ValueError → internal
-    assert term["code"] in ("internal", "bad_request")
+    # T4:temperature 非数值 → bad_request(UI 画红边,而非报 bug)
+    assert term["code"] == "bad_request", (
+        f"参数解析错误应为 bad_request(T4), 实际 {term['code']}"
+    )
+
+
+def test_bad_gen_config_in_new_session_returns_bad_request():
+    """T4:new_session 的 gen_config 字段类型错误 → bad_request(而非 internal)。"""
+    cap = CaptureProtocol()
+    events, term = _send_and_collect(cap, {
+        "id": "ns", "cmd": "new_session", "template": "qa",
+        "gen_config": {"temperature": "hot"},  # 非数值
+    })
+    assert term["type"] == "error"
+    assert term["code"] == "bad_request"
+    assert "gen_config" in term["message"] or "类型" in term["message"]

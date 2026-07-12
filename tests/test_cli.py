@@ -123,6 +123,39 @@ def test_train_rejects_pth_out_without_export(tmp_path):
     assert "--export-pth" in result.output
 
 
+def test_export_deep_requires_model(tmp_path):
+    """T6:export --deep 必须同时提供 --model(端到端 mount 校验需加载模型)。"""
+    # 造一个合法的 npz(3 层,满足 load_npz_as_numpy)
+    state = tmp_path / "state.npz"
+    arrays = {f"layer_{i}": np.zeros((4, 8, 8), dtype=np.float32) for i in range(3)}
+    np.savez(state, **arrays)
+    out = tmp_path / "out.pth"
+    result = runner.invoke(
+        app,
+        ["export", "--state", str(state), "--out", str(out), "--deep"],
+    )
+    # --deep 缺 --model → 拒绝(exit 2),不应进到模型加载
+    assert result.exit_code == 2
+    assert "--deep" in result.output and "--model" in result.output
+
+
+def test_export_deep_rejects_missing_model_dir(tmp_path):
+    """T6:export --deep --model <不存在> 在模型加载前拒绝。"""
+    state = tmp_path / "state.npz"
+    arrays = {f"layer_{i}": np.zeros((4, 8, 8), dtype=np.float32) for i in range(3)}
+    np.savez(state, **arrays)
+    out = tmp_path / "out.pth"
+    result = runner.invoke(
+        app,
+        [
+            "export", "--state", str(state), "--out", str(out),
+            "--deep", "--model", str(tmp_path / "no-such-model"),
+        ],
+    )
+    assert result.exit_code == 2
+    assert "模型目录不存在" in result.output
+
+
 def _make_train_doubles(monkeypatch, received):
     """搭 train 测试用的 MLX + service 双桩,不加载真实模型。
 

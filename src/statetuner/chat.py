@@ -346,12 +346,14 @@ class ChatSession:
 
         注意:GenerationResult.text 保留完整 raw(含 think),供展示层(cli.py)
         拆两段做双 panel;这里剥出的 answer 才是进 history 的文本。
+
+        T1:think=on 拆分走 thinking.py 单一事实源(旧实现 rfind 与 console 的 find
+        不一致;现统一 find,reasoning 模型 think 段内部不会合法出现闭合标签)。
         """
         if self.reasoning and self.think == "on":
-            idx = text.rfind("</think>")
-            if idx >= 0:
-                return text[idx + len("</think>"):].lstrip("\n")
-            return ""  # 未闭合:思考不完整,无有效 answer
+            from .thinking import split_thinking
+            _thinking, answer = split_thinking(text)
+            return answer.lstrip("\n")
         if self._has_reasoning_dialect:
             return text.lstrip("\n")
         return text

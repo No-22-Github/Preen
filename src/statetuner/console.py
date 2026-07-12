@@ -63,40 +63,12 @@ THINK_CLOSE = "</think>"
 def split_thinking(raw: str) -> tuple[str, str]:
     """把 think=on 的原始输出拆成 (thinking, answer)。
 
-    think=on 时 prompt 以 `` <think`` 结尾(开标签在 prompt 里),模型续写出
-    ``思考内容</think>回答``。**开标签不在模型输出里**,所以这里只认 ``</think>``:
-      - 找到 ``</think>`` → 前段(去首尾空白)= thinking,后段 = answer
-      - 找不到(max_tokens 截断未闭合等)→ 已生成内容当 thinking(它确实是
-        未写完的思考),answer=""。展示层据此 dim 显示思考 + 标注被截断;
-        history 层据此存空 answer(半截思考不该当历史回答重放)。
-      - ``</think>`` 紧开头(空思考)→ thinking="",answer=剩余
-
-    返回的 thinking 已 strip(前后的自然换行/空白);answer 原样,由调用方按
-    需要再做模板相关清洗(chat._display_text 的 lstrip('\\n'))。
-
-    仅对 think=on 有意义;off/fast 调用方不会进来。
+    T1:拆分逻辑的单一事实源已下沉到 thinking.py(UI 中立层,serve/chat 共用)。
+    本函数保留为 console 的薄包装(向后兼容 cli.py 的 ui.split_thinking 调用),
+    避免下游代码同时 import 两个模块。
     """
-    idx = raw.find(THINK_CLOSE)
-    if idx < 0:
-        # 未闭合:已生成内容是未写完的思考,answer 为空。
-        return _clean_thinking(raw), ""
-    return _clean_thinking(raw[:idx]), raw[idx + len(THINK_CLOSE):]
-
-
-def _clean_thinking(text: str) -> str:
-    """清洗 think 段文本:strip + 去掉开头的残余 ``>``。
-
-    think=on 的 prompt 以 ``<think`` 结尾,模型续写时把它补全成 ``<think>``,
-    所以 raw 输出常以 ``>\\n`` 开头(标签闭合的机械副产品)。这个 ``>`` 不是
-    思考内容,显示出来突兀,清掉。只删开头 ``>`` + 紧跟换行的固定形态,
-    不影响思考正文里合法的 ``>``。
-    """
-    cleaned = text.strip()
-    if cleaned.startswith(">\n"):
-        cleaned = cleaned[2:].lstrip("\n")
-    elif cleaned == ">":
-        cleaned = ""
-    return cleaned
+    from .thinking import split_thinking as _split
+    return _split(raw)
 
 
 def render_thinking_panel(text: str) -> Panel:

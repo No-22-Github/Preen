@@ -49,6 +49,12 @@ CAPABILITIES = {
     "reasoning": True,
 }
 
+# 协议版本(T1,协议冻结点)。
+# 主版本号:turn_end / text_chunk / hello 的字段结构有破坏性变更时 +1。
+# 当前 1:首版含 thinking/answer/phase 字段(本次 commit 引入)。
+# 此后改协议字段结构必须先 bump 此号,UI 据此拒绝不兼容的 serve。
+PROTOCOL_VERSION = 1
+
 
 # ── 事件构造助手(§3.4)──────────────────────────────────────
 
@@ -126,8 +132,15 @@ class ServeSessionManager:
         self._lock = threading.Lock()
 
     def hello(self) -> dict:
-        """进程级能力声明(§3.3 hello 指令 / §3.4 ready 事件共用)。"""
+        """进程级能力声明(§3.3 hello 指令 / §3.4 ready 事件共用)。
+
+        T1:protocol_version 是协议冻结点(本次引入)。UI 据此判断兼容性。
+        model 字段当前是字符串(单进程单模型);design.md §10.2 模型广场预留:
+        将来多模型可能变成 models: [...] + active_model,现在留字符串口子
+        近乎零成本,事后加是破坏性变更(protocol_version 会 bump)。
+        """
         return {
+            "protocol_version": PROTOCOL_VERSION,
             "version": __version__,
             "model": self.model_path,
             "capabilities": CAPABILITIES,
@@ -147,15 +160,20 @@ class ServeSessionManager:
         self._validate_session_params(template, reasoning, think, gen_config_params)
 
         # gen_config:缺省走 ChatSession 的高创造力档,允许 serve 调用方覆盖部分字段。
-        base_config = GenerationConfig(
-            max_tokens=int(gen_config_params.get("max_tokens", 300)),
-            temperature=float(gen_config_params.get("temperature", 1.2)),
-            top_p=float(gen_config_params.get("top_p", 0.5)),
-            seed=int(gen_config_params.get("seed", 42)),
-            presence_penalty=float(gen_config_params.get("presence_penalty", 0.4)),
-            frequency_penalty=float(gen_config_params.get("frequency_penalty", 0.4)),
-            penalty_decay=float(gen_config_params.get("penalty_decay", 0.996)),
-        )
+        # T4:int/float 转换可能抛 ValueError(如 temperature="hot"),统一转
+        # ProtocolError(bad_request),否则会被 handle_line 兜成 internal。
+        try:
+            base_config = GenerationConfig(
+                max_tokens=int(gen_config_params.get("max_tokens", 300)),
+                temperature=float(gen_config_params.get("temperature", 1.2)),
+                top_p=float(gen_config_params.get("top_p", 0.5)),
+                seed=int(gen_config_params.get("seed", 42)),
+                presence_penalty=float(gen_config_params.get("presence_penalty", 0.4)),
+                frequency_penalty=float(gen_config_params.get("frequency_penalty", 0.4)),
+                penalty_decay=float(gen_config_params.get("penalty_decay", 0.996)),
+            )
+        except (ValueError, TypeError) as exc:
+            raise ProtocolError(f"gen_config 字段类型错误: {exc}") from exc
 
         # state 加载(若提供路径)
         state = None
@@ -242,27 +260,43 @@ class ServeSessionManager:
         if ab and not state_path:
             raise ProtocolError("ab=True 需要 state_path")
 
-        cfg = with_template_stops(
-            GenerationConfig(
-                max_tokens=int(gen_config_params.get("max_tokens", 80)),
-                temperature=float(gen_config_params.get("temperature", 0.0)),
-                top_p=float(gen_config_params.get("top_p", 0.9)),
-                seed=int(gen_config_params.get("seed", 42)),
-            ),
-            template,
-        )
+        # T4:gen_config 类型转换错误 → bad_request(而非 internal)
+        try:
+            cfg = with_template_stops(
+                GenerationConfig(
+                    max_tokens=int(gen_config_params.get("max_tokens", 80)),
+                    temperature=float(gen_config_params.get("temperature", 0.0)),
+                    top_p=float(gen_config_params.get("top_p", 0.9)),
+                    seed=int(gen_config_params.get("seed", 42)),
+                ),
+                template,
+            )
+        except (ValueError, TypeError) as exc:
+            raise ProtocolError(f"gen_config 字段类型错误: {exc}") from exc
         wrapped = render_prompt(prompt, template, reasoning=reasoning, think=think)
         state = str(state_path) if state_path else None
+
+        # T1:preview 的 turn_end 也带 thinking/answer(think=on 时)。
+        track_think = reasoning and think == "on" and template != "raw"
+
+        def _turn_end_fields(result_dict: dict) -> dict:
+            fields = {"result": result_dict}
+            if track_think:
+                from .thinking import split_thinking
+                thinking, answer = split_thinking(result_dict.get("text", ""))
+                fields["thinking"] = thinking
+                fields["answer"] = answer.lstrip("\n")
+            return fields
 
         events: List[dict] = []
         if ab:
             result = self.engine.compare(wrapped, state=state, config=cfg)
-            events.append(_event("turn_end", side="with_state", result=result.with_state.to_dict()))
-            events.append(_event("turn_end", side="baseline", result=result.baseline.to_dict()))
+            events.append(_event("turn_end", side="with_state", **_turn_end_fields(result.with_state.to_dict())))
+            events.append(_event("turn_end", side="baseline", **_turn_end_fields(result.baseline.to_dict())))
             return events, True
         # 单路:无 on_text 流式(preview 是一次性,不建 session);事件只含 turn_end
         result = self.engine.generate(wrapped, state=state, config=cfg)
-        events.append(_event("turn_end", result=result.to_dict()))
+        events.append(_event("turn_end", **_turn_end_fields(result.to_dict())))
         return events, False
 
     def detect_import(self, params: dict) -> dict:
@@ -563,6 +597,12 @@ class ServeProtocol:
 
         busy 锁:同时只允许一个 in-flight send。
         abort:_abort_event 传给 generate 的 should_abort,中断则发 error{aborted}。
+
+        T1 协议字段:
+          - text_chunk 带 phase: "think"|"answer"(仅 reasoning+think=on 有意义;
+            其他档位恒 "answer")。UI 据此 dim/正常渲染增量,不用自己再写拆分。
+          - turn_end 带 thinking/answer(从 result.text 用 thinking.py 拆出,
+            单一事实源)。非 think=on 时两者都为 None,text 仍是原始全文。
         """
         sid = params.get("session_id")
         text = params.get("text")
@@ -583,10 +623,25 @@ class ServeProtocol:
             # 读线程读 abort 指令 → set event → generate 下一步抛 GenerationAborted。
             session.abort_checker = self._abort_event.is_set
 
-            # 流式回调:每个 delta → text_chunk 事件(带 id + session_id)
+            # think=on 才需要 phase 跟踪(其他档位恒 answer)。
+            track_phase = (
+                session.reasoning and session.think == "on"
+                and session.template != "raw"
+            )
+            # 累积文本用于 phase 分类(thinking.py.classify_phase);
+            # 非流式时 on_text=None,phase 跟踪仍可用于 turn_end 拆分(基于 result.text)。
+            accum = [""]
+
             def on_text(delta: str) -> None:
+                if track_phase:
+                    accum[0] += delta
+                    from .thinking import classify_phase
+                    phase = classify_phase(accum[0])
+                else:
+                    phase = "answer"
                 self._emit(_event(
-                    "text_chunk", id_=id_, session_id=sid, delta=delta,
+                    "text_chunk", id_=id_, session_id=sid,
+                    delta=delta, phase=phase,
                 ))
 
             try:
@@ -602,8 +657,17 @@ class ServeProtocol:
 
             # turn_end:result = GenerationResult.to_dict()(§3.4)
             result = reply.payload or {}
+            turn_end_fields: dict = {"result": result}
+            # T1:think=on 拆出 thinking/answer 顶层字段(供 UI 直接消费,
+            # 不用再从 result.text 自己拆)。非 think=on 不加(保持 None/缺省)。
+            if track_phase:
+                from .thinking import split_thinking
+                full_text = result.get("text", "")
+                thinking, answer = split_thinking(full_text)
+                turn_end_fields["thinking"] = thinking
+                turn_end_fields["answer"] = answer.lstrip("\n")
             self._emit(_event(
-                "turn_end", id_=id_, session_id=sid, result=result,
+                "turn_end", id_=id_, session_id=sid, **turn_end_fields,
             ))
             self._emit(_ok(id_))
         finally:
@@ -695,6 +759,9 @@ class ServeProtocol:
         支持字段:max_tokens / temperature / top_p / seed /
                   presence_penalty / frequency_penalty / penalty_decay。
         用 dataclasses.replace 重建 frozen config。
+
+        T4:类型/取值错误 → ProtocolError(bad_request),而非 internal。
+        UI 对两者处理完全不同(internal=报 bug;bad_request=输入框画红边)。
         """
         from dataclasses import replace
         allowed = {
@@ -704,9 +771,12 @@ class ServeProtocol:
         updates = {k: v for k, v in gen_config.items() if k in allowed}
         if not updates:
             return
-        # 类型校验(粗):非数值直接让 internal error 接住
-        session.config = replace(session.config, **updates)
-        session.config.validate()
+        try:
+            new_config = replace(session.config, **updates)
+            new_config.validate()
+        except (ValueError, TypeError) as exc:
+            raise ProtocolError(f"gen_config 参数非法: {exc}") from exc
+        session.config = new_config
 
 
 # ── 进程入口辅助 ────────────────────────────────────────────
@@ -715,11 +785,18 @@ def run_serve(model_path: str, *, cache_limit_spec: Optional[str] = None) -> Non
     """CLI serve 命令的进程入口。
 
     cache_limit_spec 必须在 load_model 前生效(时序铁律,见 AGENTS.md 内存事实)。
+    T2:不再从 cli 导 _apply_cache_limit(会把 typer 拖进 sidecar 进程);
+    改用 runtime.apply_cache_limit,错误走 ProtocolError/ValueError。
     """
-    from .cli import _apply_cache_limit
     from .core import load_model
+    from .runtime import apply_cache_limit
 
-    _apply_cache_limit(cache_limit_spec)
+    try:
+        apply_cache_limit(cache_limit_spec)
+    except ValueError as exc:
+        # serve 进程启动期:错误发到 stderr 后退出(协议尚未就绪,无法发 error 事件)
+        sys.stderr.write(f"# cache-limit 错误: {exc}\n")
+        sys.exit(2)
     model, tok = load_model(model_path, patch=False)
     engine = InferenceEngine(model, tok)
     ServeProtocol(engine, model_path=model_path).run()
