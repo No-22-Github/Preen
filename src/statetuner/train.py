@@ -48,7 +48,6 @@ class TrainConfig:
     lr_floor: float = 1e-4  # cosine 衰减终点
     warmup: int = 10  # warmup 步数
     ctx_len: int = 512
-    bsz: int = 1
     epochs: int = 20  # 配 early_stop 后是上限
     grad_clip: float = 1.0  # value clipping(mx.clip(g,-c,c));注意是逐元素 clip
                             # 而非 global norm clip —— 改变梯度方向(非等比缩放)。
@@ -106,21 +105,21 @@ def cosine_lr(step: int, total_steps: int, cfg: TrainConfig) -> float:
     return cfg.lr_floor + (cfg.lr - cfg.lr_floor) * cosine
 
 
-def _to_mx_batch(sample: Sample, bsz: int = 1):
-    """单样本 → (input_ids(B,L), labels(B,L), mask(B,L))。bsz>1 时重复。"""
+def _to_mx_batch(sample: Sample):
+    """单样本 → (input_ids(1,L), labels(1,L), mask(1,L))。
+
+    TR1:删 bsz 参数。旧实现的 bsz>1 是"把同一条样本复制 N 份"(非真 batch),
+    且训练循环从没传过 cfg.bsz、CLI 也没暴露,却进了 events.start 的 config
+    快照和 metadata.json —— 在产物元数据里写假话。state tuning 对 16G 是负收益,
+    直接删字段(整个 batch 维恒为 1)。
+    """
     inp = sample.input_ids
     lab = sample.labels
     msk = sample.mask
-    if bsz == 1:
-        return (
-            mx.array([inp]),
-            mx.array([lab]),
-            mx.array([[float(x) for x in msk]], dtype=mx.float32),
-        )
     return (
-        mx.array([inp] * bsz),
-        mx.array([lab] * bsz),
-        mx.array([[float(x) for x in msk]] * bsz, dtype=mx.float32),
+        mx.array([inp]),
+        mx.array([lab]),
+        mx.array([[float(x) for x in msk]], dtype=mx.float32),
     )
 
 
@@ -334,34 +333,40 @@ class Trainer:
         patience_left: int,
         name: Optional[str] = None,
     ) -> Path:
-        """存 checkpoint: state(npz) + meta(json)。
+        """存 checkpoint: state(npz) + optimizer 状态(npz) + meta(json)。
 
-        原子写(TR5):npz 先写 .tmp 再 replace,与 save_state_npz 同一纪律;
-        meta json 同样 tmp+replace。中途被打断不会留下半截文件让 resume 读错。
-        optimizer 状态在 P0-1 修复后随 npz 一起存(本 commit 仅做原子化)。
+        原子写(TR5):npz/meta 先写 .tmp 再 replace,中途被打断不留半截文件。
+
+        optimizer 状态(P0-1 修复):
+          MLX Adam._state 的层键是 **int**(层号),不是 tuple —— 旧实现的
+          `isinstance(k, tuple)` 永假,导致 m/v 从没存进 npz,resume 拿到的是
+          刚构造、未 apply_gradients 的空 opt。
+          现在显式存 _optm_{i} / _optv_{i} / _optstep(step 漏存会让续训第一步
+          的 Adam bias correction 按 step=1 算 → 一个超大步)。
         """
         ckpt_dir.mkdir(parents=True, exist_ok=True)
         fname = name or f"epoch{epoch:03d}.npz"
         npz_path = ckpt_dir / fname
 
-        # state
-        state_arrays = {f"layer_{k}": np.array(states[k]) for k in sorted(states)}
-        # optimizer state(Adam: m + v, key 是参数名)
-        opt_m = {}
-        opt_v = {}
-        if hasattr(opt, "_state"):
-            for k, st in opt._state.items():
-                if isinstance(k, tuple) and len(k) == 2:
-                    param_key = k[1]
-                    if "m" in st:
-                        opt_m[f"layer_{param_key}"] = np.array(st["m"])
-                    if "v" in st:
-                        opt_v[f"layer_{param_key}"] = np.array(st["v"])
+        arrays: dict = {f"layer_{k}": np.array(states[k]) for k in sorted(states)}
 
-        # TR5: tmp + replace 原子写(对齐 save_state_npz)
-        tmp_npz = npz_path.with_name(npz_path.name + ".tmp")
-        np.savez(tmp_npz, **state_arrays, **{f"_optm_{k}": v for k, v in opt_m.items()},
-                 **{f"_optv_{k}": v for k, v in opt_v.items()})
+        # optimizer state(P0-1):层键是 int。step 必存(否则续训第一步爆冲)。
+        if hasattr(opt, "_state"):
+            st = opt._state
+            for k, layer_st in st.items():
+                if isinstance(k, int):
+                    if "m" in layer_st:
+                        arrays[f"_optm_{k}"] = np.array(layer_st["m"])
+                    if "v" in layer_st:
+                        arrays[f"_optv_{k}"] = np.array(layer_st["v"])
+            if "step" in st:
+                arrays["_optstep"] = np.array(np.uint64(st["step"]))
+
+        # TR5: tmp + Replace 原子写(对齐 save_state_npz)。
+        # tmp 路径必须以 .npz 结尾 —— np.savez 会在非 .npz 路径后再加 .npz,
+        # 导致 replace 找不到刚写的文件(save_state_npz 用 ".tmp.npz" 同此理)。
+        tmp_npz = npz_path.with_name(npz_path.name + ".tmp.npz")
+        np.savez(tmp_npz, **arrays)
         tmp_npz.replace(npz_path)
 
         # meta
@@ -385,22 +390,29 @@ class Trainer:
     def _load_checkpoint(
         self, path: Path, states: Dict[int, "mx.array"], opt: optim.Optimizer
     ) -> Tuple[int, Dict[int, "mx.array"], optim.Optimizer, float, int]:
-        """从 checkpoint 恢复: state + optimizer + 进度。"""
+        """从 checkpoint 恢复: state + optimizer(含 m/v/step)+ 进度。
+
+        P0-1 关键:必须先 opt.init(states) 让 _state 长出层键,再灌 m/v/step。
+        旧实现的 opt 是刚构造、未 apply_gradients 的,_state 里只有
+        {'step','learning_rate'},连层键都不存在 —— 键判断改对了也是空转。
+        """
         data = np.load(path)
         n_layers = len(states)
         for i in range(n_layers):
             states[i] = mx.array(data[f"layer_{i}"])
 
-        # 恢复 optimizer 状态
+        # 恢复 optimizer 状态(P0-1):先 init 让层键出现,再逐层灌 m/v + step。
         if hasattr(opt, "_state"):
-            for k in list(opt._state.keys()):
-                if isinstance(k, tuple) and len(k) == 2:
-                    param_key = k[1]
-                    m_key = f"_optm_layer_{param_key}"
-                    v_key = f"_optv_layer_{param_key}"
-                    if m_key in data and v_key in data:
-                        opt._state[k]["m"] = mx.array(data[m_key])
-                        opt._state[k]["v"] = mx.array(data[v_key])
+            opt.init(states)
+            for i in range(n_layers):
+                m_key = f"_optm_{i}"
+                v_key = f"_optv_{i}"
+                if m_key in data and i in opt._state:
+                    opt._state[i]["m"] = mx.array(data[m_key])
+                if v_key in data and i in opt._state:
+                    opt._state[i]["v"] = mx.array(data[v_key])
+            if "_optstep" in data:
+                opt._state["step"] = mx.array(np.uint64(data["_optstep"]))
 
         meta_path = path.with_suffix(".meta.json")
         meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}

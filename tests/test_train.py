@@ -231,6 +231,141 @@ def test_cosine_lr_schedule():
     assert cosine_lr(total - 1, total, cfg) < cfg.lr_floor + (cfg.lr - cfg.lr_floor) * 0.05
 
 
+# ── checkpoint/resume 回归(P0-1 + Q4)────────────────────────
+
+
+def _dummy_model_like(n_layers=2, n_heads=2, head_dim=4):
+    """构造一个最小的 fake model,仅满足 make_state_params 的字段访问。
+
+    Trainer.train 内部用 make_state_params(model),但本测试只测 _save/_load
+    checkpoint,直接绕过 train(),传构造好的 states + opt。
+    """
+    return type(
+        "M",
+        (),
+        {
+            "args": type(
+                "A",
+                (),
+                {"hidden_size": n_heads * head_dim, "head_dim": head_dim},
+            )(),
+            "layers": [None] * n_layers,
+        },
+    )
+
+
+def test_checkpoint_persists_and_restores_optimizer_state(tmp_path):
+    """P0-1 + Q4:checkpoint 必须真正存/恢复 Adam 的 m/v/step。
+
+    回归重点(旧 bug):
+      - 旧存侧 `isinstance(k, tuple)` 永假(MLX Adam 层键是 int)→ m/v 没存进 npz。
+      - 旧取侧 opt 未 init,层键不存在 → 即使键判断对了也空转。
+      - step 漏存 → 续训第一步 Adam bias correction 按 step=1 → 一个超大步。
+
+    断言:存前 opt._state[0]['m'/'v'] 与 resume 后逐元素相等;step 也相等。
+    """
+    import mlx.core as mx
+    import mlx.optimizers as optim
+
+    from statetuner.train import Trainer, TrainConfig
+
+    n_layers = 2
+    states = {
+        i: mx.array(np.random.RandomState(i).randn(2, 4, 4).astype(np.float32) * 0.1)
+        for i in range(n_layers)
+    }
+    opt = optim.Adam(learning_rate=0.01, betas=[0.9, 0.99], eps=1e-8)
+    # 跑几步 apply_gradients,让 m/v/step 真正长出来
+    grads = {i: mx.ones((2, 4, 4)) * 0.3 for i in range(n_layers)}
+    for _ in range(5):
+        states = opt.apply_gradients(grads, states)
+    mx.eval(states)
+    step_before = int(opt._state["step"])
+    assert step_before == 5, f"apply_gradients 5 次后 step 应=5, 实际 {step_before}"
+    # 存侧断言:层键是 int(P0-1 证据)
+    assert all(isinstance(k, int) for k in opt._state if k not in ("step", "learning_rate"))
+
+    # 存 checkpoint
+    cfg = TrainConfig(lr=0.01, lr_floor=1e-4, warmup=10, epochs=2)
+    trainer = Trainer(_dummy_model_like(n_layers), cfg)  # emitter=None → quiet 默认
+    ckpt = trainer._save_checkpoint(
+        tmp_path, epoch=1, states=states, opt=opt,
+        best=0.5, patience_left=2,
+    )
+    assert ckpt.exists()
+
+    # 取 checkpoint:用一个全新的 opt(模拟进程重启)
+    opt_new = optim.Adam(learning_rate=0.01, betas=[0.9, 0.99], eps=1e-8)
+    states_new = {
+        i: mx.zeros((2, 4, 4), dtype=mx.float32) for i in range(n_layers)
+    }
+    epoch_back, states_back, opt_back, best_back, patience_back = trainer._load_checkpoint(
+        ckpt, states_new, opt_new
+    )
+
+    # epoch meta 恢复
+    assert epoch_back == 2, f"epoch 应=meta.epoch+1=2, 实际 {epoch_back}"
+    assert best_back == 0.5
+    assert patience_back == 2
+    # step 恢复(关键:漏存会让续训第一步爆冲)
+    assert int(opt_back._state["step"]) == step_before, "step 必须逐值恢复"
+
+    # m/v 逐元素相等(Q4 核心断言)
+    for i in range(n_layers):
+        m_old = np.array(opt._state[i]["m"])
+        m_new = np.array(opt_back._state[i]["m"])
+        v_old = np.array(opt._state[i]["v"])
+        v_new = np.array(opt_back._state[i]["v"])
+        np.testing.assert_allclose(m_new, m_old, atol=1e-6, err_msg=f"layer {i} m 不等")
+        np.testing.assert_allclose(v_new, v_old, atol=1e-6, err_msg=f"layer {i} v 不等")
+        # state 本身也恢复
+        np.testing.assert_allclose(
+            np.array(states_back[i]), np.array(states[i]), atol=1e-6,
+            err_msg=f"layer {i} state 不等",
+        )
+
+
+def test_resume_optimizer_state_actually_used_after_load(tmp_path):
+    """P0-1 进阶:resume 后再 apply_gradients 一步,m 应按续传语义更新
+    (= decay * restored_m + (1-b1) * grad),而不是从零重启。
+
+    证明恢复的 m/v 确实参与下一次更新(不是只存了不用)。
+    """
+    import mlx.core as mx
+    import mlx.optimizers as optim
+
+    from statetuner import events
+    from statetuner.train import Trainer, TrainConfig
+
+    n_layers = 1
+    states = {0: mx.zeros((2, 2, 2), dtype=mx.float32)}
+    opt = optim.Adam(learning_rate=0.01, betas=[0.9, 0.99], eps=1e-8)
+    # 跑两步,m[0,0,0] = 0.1*1 + 0.9*(0.1*1) = 0.19(grad=1)
+    grads = {0: mx.ones((2, 2, 2))}
+    opt.apply_gradients(grads, states)
+    opt.apply_gradients(grads, states)
+    mx.eval(states)
+    m_before = float(opt._state[0]["m"][0, 0, 0])
+
+    cfg = TrainConfig(lr=0.01, epochs=2)
+    trainer = Trainer(_dummy_model_like(n_layers), cfg, events.EventEmitter(quiet=True))
+    ckpt = trainer._save_checkpoint(tmp_path, epoch=0, states=states, opt=opt, best=1.0, patience_left=3)
+
+    # resume
+    opt_new = optim.Adam(learning_rate=0.01, betas=[0.9, 0.99], eps=1e-8)
+    states_new = {0: mx.zeros((2, 2, 2), dtype=mx.float32)}
+    _, _, opt_restored, _, _ = trainer._load_checkpoint(ckpt, states_new, opt_new)
+
+    # 再 apply 一步:m_new = b1*m_restored + (1-b1)*grad
+    #              = 0.9 * m_before + 0.1 * 1
+    expected_m = 0.9 * m_before + 0.1
+    opt_restored.apply_gradients(grads, states_new)
+    m_after = float(opt_restored._state[0]["m"][0, 0, 0])
+    assert m_after == pytest.approx(expected_m, abs=1e-6), (
+        f"resume 后 m 应按续传更新到 ~{expected_m:.4f}, 实际 {m_after:.4f}"
+    )
+
+
 # ── 依赖模型的训练测试(slow)──────────────────────────────
 
 @pytest.fixture(scope="module")
