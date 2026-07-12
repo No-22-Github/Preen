@@ -2,8 +2,9 @@
 RWKV-7 原生 .pth → fla HF (safetensors) 独立转换器。
 
 不依赖 fla/triton —— 直接读 pth 权重,按官方 convert_from_rwkv7.py 的键名
-映射规则搬运,用同架构的 0.1B fla 模型 (model.safetensors) 做 ground truth
-双重校验 (键名 + shape),最后存 safetensors + config.json。
+映射规则搬运,用仓库内置 fixture(从同架构 0.1B fla 模型生成的 ndim 模板)
+做 ground truth 维度校验,最后存 safetensors + config.json。
+tokenizer 文件也已 vendor 进 assets/,转换时无需任何外部下载。
 
 映射规则 (与 fla-org/flash-linear-attention 的 convert_from_rwkv7.py 等价):
   - 顶层:  emb.weight→model.embeddings.weight
@@ -18,13 +19,14 @@ RWKV-7 原生 .pth → fla HF (safetensors) 独立转换器。
            blocks.0.att.{v0,v1,v2} 被丢弃 (layer 0 无 v_lora)
   - shape: [1,1,hidden] 的非 x_ 键 squeeze; x_ 键保留 (copy_ 广播)
 
-用法:
+用法(最短形式,fixture + vendored tokenizer 已内置仓库):
   python convert_rwkv7_to_hf.py \
       --rwkv7 models/rwkv7-g1d-0.4b-20260210-ctx8192.pth \
-      --output models/converted/rwkv7-g1d-0.4b \
-      --reference models/fla-hub-rwkv7-0.1B-g1/model.safetensors \
-      --tokenizer-src models/fla-hub-rwkv7-0.1B-g1 \
-      --precision bf16
+      --output models/converted/rwkv7-g1d-0.4b --precision bf16
+
+可选覆盖(上游 schema 漂移时的逃生通道):
+  --reference <fla model.safetensors>   活模型校验,覆盖内置 fixture
+  --tokenizer-src <dir>                 指定 tokenizer 来源目录
 """
 import argparse
 import json
@@ -34,6 +36,15 @@ import shutil
 
 import torch
 from safetensors.torch import save_file
+
+
+def normalize_layer_key(k):
+    """键名归一化: model.layers.N.X → (True, 'model.layers.{N}.X');
+    其他 → (False, k)。供 load_reference_template 和 fixture 生成共用。"""
+    m = re.match(r"model\.layers\.(\d+)\.(.+)", k)
+    if m:
+        return True, "model.layers.{N}." + m.group(2)
+    return False, k
 
 
 def load_reference_template(ref_path):
@@ -47,16 +58,37 @@ def load_reference_template(ref_path):
     top_keys = {}      # 顶层键 → shape
     for k in sorted(f.keys()):
         t = f.get_tensor(k)
-        # 把 model.layers.N.X 规范化成 model.layers.{N}.X
-        m = re.match(r"model\.layers\.(\d+)\.(.+)", k)
-        if m:
-            rel = "model.layers.{N}." + m.group(2)
+        is_layer, rel = normalize_layer_key(k)
+        if is_layer:
             if rel not in template:
                 template[rel] = tuple(t.shape)
         else:
             if k not in top_keys:
                 top_keys[k] = tuple(t.shape)
     f.__exit__(None, None, None)
+    return template, top_keys
+
+
+# 仓库内置 fixture(从 fla-hub 0.1B model.safetensors 生成),作为活模型缺失时的
+# 默认校验模板。用相对脚本所在路径定位,不依赖 cwd。
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_DEFAULT_FIXTURE = os.path.join(_HERE, "fixtures", "rwkv7_hf_template.json")
+_DEFAULT_TOKENIZER_SRC = os.path.normpath(
+    os.path.join(_HERE, "..", "assets", "rwkv_world_tokenizer"))
+
+
+def load_template_from_fixture(fixture_path):
+    """从仓库内置 fixture JSON 加载校验模板。
+
+    fixture 只存 ndim(与现有校验逻辑一致——只比维度数,不比绝对 shape)。
+    返回与 load_reference_template 同构的 (template, top_keys):把每个 ndim
+    包装成 (0,) * ndim 的伪 shape,使校验判定处的 len(ref_shape) == weight.ndim
+    对 fixture 和活模型完全同构,无需改校验代码。
+    """
+    with open(fixture_path, "r", encoding="utf-8") as fh:
+        fx = json.load(fh)
+    template = {k: (0,) * v for k, v in fx["layer_keys"].items()}
+    top_keys = {k: (0,) * v for k, v in fx["top_keys"].items()}
     return template, top_keys
 
 
@@ -138,7 +170,7 @@ def translate(src_name, num_layers):
     return ".".join(parts), transposed
 
 
-def convert(rwkv7_path, output, ref_path, tokenizer_src, precision):
+def convert(rwkv7_path, output, ref_path=None, tokenizer_src=None, precision="bf16"):
     print(f"加载源权重: {rwkv7_path}")
     weights = torch.load(rwkv7_path, weights_only=True, map_location="cpu")
     config = infer_config(weights)
@@ -151,9 +183,20 @@ def convert(rwkv7_path, output, ref_path, tokenizer_src, precision):
              "fp16": torch.float16, "float16": torch.float16,
              "fp32": torch.float32, "float32": torch.float32}[precision]
 
-    # ground truth 模板
-    template, top_template = load_reference_template(ref_path)
-    print(f"参考模板: {len(template)} 个层内键 + {len(top_template)} 个顶层键")
+    # ground truth 模板: ref_path 显式提供则走活模型(上游 schema 漂移时的逃生通道),
+    # 否则用仓库内置 fixture(从 fla-hub 0.1B 生成,只存 ndim)。
+    if ref_path is not None:
+        template, top_template = load_reference_template(ref_path)
+        print(f"参考模板(活模型 {ref_path}): "
+              f"{len(template)} 个层内键 + {len(top_template)} 个顶层键")
+    else:
+        template, top_template = load_template_from_fixture(_DEFAULT_FIXTURE)
+        print(f"参考模板(内置 fixture): "
+              f"{len(template)} 个层内键 + {len(top_template)} 个顶层键")
+
+    # tokenizer 来源:显式提供则用之,否则用仓库 vendored 目录。
+    if tokenizer_src is None:
+        tokenizer_src = _DEFAULT_TOKENIZER_SRC
 
     new_weights = {}
     reported_layer0 = set()
@@ -278,10 +321,11 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--rwkv7", required=True)
     p.add_argument("--output", required=True)
-    p.add_argument("--reference", required=True,
-                   help="同架构 fla 模型的 safetensors,做 ground truth 校验")
-    p.add_argument("--tokenizer-src", required=True,
-                   help="tokenizer 来源目录 (fla-hub/rwkv7-0.1B-g1)")
+    p.add_argument("--reference", default=None,
+                   help="可选:同架构 fla 模型的 safetensors,做活模型 ground truth 校验"
+                        "(缺省用仓库内 tools/fixtures/rwkv7_hf_template.json)")
+    p.add_argument("--tokenizer-src", default=None,
+                   help="可选:tokenizer 来源目录(缺省用 assets/rwkv_world_tokenizer/)")
     p.add_argument("--precision", default="bf16",
                    choices=["bf16", "fp16", "fp32"])
     args = p.parse_args()

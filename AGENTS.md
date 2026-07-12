@@ -32,6 +32,12 @@ tests/                   回归测试(改 src 必跑)
 ├── fixtures/              NekoQA 基准 state(nekoqa_04b_s42.npz,产品 CLI 训练)
 └── golden/                推理 golden 快照(nekoqa_*.json)
 tools/                   模型转换(convert_rwkv7_to_hf.py)+ 内存探针
+├── fixtures/              转换校验模板(rwkv7_hf_template.json,从 fla-hub 0.1B 生成)
+│                          gen_convert_fixture.py = 一次性生成脚本(上游 schema 漂移时重跑)
+└── ...
+assets/
+└── rwkv_world_tokenizer/  vendor 的 World tokenizer 5 文件(转换器缺省 --tokenizer-src)
+                          + SOURCE.md(来源仓库 + 同步说明)
 experiments/p0_translate/  ★ P0 历史归档,不要动(含已废弃翻译路径,保留可复现性)
 train_data/NekoQA_10k/   NekoQA 数据集(Apache-2.0,见 NOTICE.md)
 ```

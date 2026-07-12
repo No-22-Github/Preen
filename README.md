@@ -105,20 +105,16 @@ train_data/NekoQA_10k/          NekoQA 数据集 (Apache-2.0, 见目录内 NOTIC
 | 文件 | 用途 | 大小 | 来源 |
 |---|---|---|---|
 | `rwkv7-g1d-0.4b-20260210-ctx8192.pth` | 0.4B 原始权重(待转换) | 902M | [魔搭 Blink_DL/rwkv7-g1](https://modelscope.cn/models/Blink_DL/rwkv7-g1/files) |
-| `fla-hub-rwkv7-0.1B-g1/model.safetensors` | 0.1B HF 权重(转换的 ground truth 校验) | 364M | [HuggingFace fla-hub/rwkv7-0.1B-g1](https://huggingface.co/fla-hub/rwkv7-0.1B-g1) |
 
-> tokenizer 文件已在本库 `models/fla-hub-rwkv7-0.1B-g1/`(体积小,转换必需)。
-> 0.1B 的 `model.safetensors` 需另外下载,仅用于转换时的键名校验。
+> 转换所需的 fixture(`tools/fixtures/rwkv7_hf_template.json`)和 tokenizer
+> 文件(`assets/rwkv_world_tokenizer/`)已 vendor 进仓库,无需额外下载。
 
 ### 2. 转换模型
 
 ```bash
 python tools/convert_rwkv7_to_hf.py \
     --rwkv7 models/rwkv7-g1d-0.4b-20260210-ctx8192.pth \
-    --output models/converted/rwkv7-g1d-0.4b \
-    --reference models/fla-hub-rwkv7-0.1B-g1/model.safetensors \
-    --tokenizer-src models/fla-hub-rwkv7-0.1B-g1 \
-    --precision bf16
+    --output models/converted/rwkv7-g1d-0.4b --precision bf16
 ```
 
 ### 3. 安装 statetuner CLI
@@ -233,6 +229,7 @@ kernel 路径快但无 VJP。两者已验证在容差内等价,详见
 - [fla-org/flash-linear-attention](https://github.com/fla-org/flash-linear-attention) — 转换规则参考
 - [Joluck/RWKV-PEFT](https://github.com/Joluck/RWKV-PEFT) — state tuning 超参配方参考
 - [BlinkDL/RWKV-LM](https://github.com/BlinkDL/RWKV-LM) — 原始权重与参考实现
+- [fla-hub/rwkv7-0.1B-g1](https://huggingface.co/fla-hub/rwkv7-0.1B-g1) — World tokenizer 文件与转换校验模板来源(vendor 自本仓库 `assets/rwkv_world_tokenizer/` 与 `tools/fixtures/`)
 
 本项目核心引擎是 Apple 的 mlx-lm,贡献在于 state tuning 的训练改造与工具链,
 未重新实现 RWKV-7 内核或反向传播。
