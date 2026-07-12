@@ -51,40 +51,55 @@ Python Sidecar (mlx-lm 训练/推理)  ← 本仓库当前实现
 ## 仓库结构
 
 ```
-src/statetuner/                 P1 正式包 (CLI 工具)
+src/statetuner/                 正式包 (CLI 工具)
 ├── core.py                       patch ops 路径 + 可训练 state + generate
 ├── inference.py                  独立推理引擎 (采样/A-B/结构化结果)
 ├── data.py                       数据集 (jsonl → tokenize + loss mask)
-├── inspection.py                 环境/数据/state 预检
+├── templates.py                  ★ 格式模板单一事实源 (NEKO_QA / G1G)
+├── chat.py                       交互式会话 (动态 state 切换 / A-B / 流式)
+├── inspection.py                 环境/数据/state 预检 + 校验
 ├── metadata.py                   训练产物旁挂元数据
 ├── service.py                    应用用例编排 (CLI/未来 sidecar 共用)
 ├── events.py                     结构化训练事件 (为 sidecar IPC 铺路)
 ├── train.py                      训练循环 (lr/std 监控/早停/checkpoint/恢复)
 ├── export.py                     .pth 导出器 (RWKV Runner 可挂载) + round-trip 验证
-└── cli.py                        CLI: 训练/推理/导出 + doctor/data-info/state-info
+└── cli.py                        CLI: train/eval/preview/chat/export + doctor/data-info/state-info
 
-tests/                          回归测试
-├── test_export.py                导出 round-trip (快, ~5s)
-├── test_inference.py             推理 golden (快, ~17s)
-├── test_train.py                 训练行为断言 (慢, --slow, ~4min)
-├── golden/                       golden 快照
-└── conftest.py
+tests/                          回归测试 (改 src 必跑)
+├── fixtures/                     NekoQA 基准 state (nekoqa_04b_s42.npz, 产品 CLI 训练)
+├── golden/                       推理 golden 快照
+└── ...                           10 个测试模块 (含 --slow 训练行为断言)
 
-docs/                           理论文档 (必读)
+docs/                           文档
+├── 快速上手.md                    ★ 分步教程 (首次微调必读)
 ├── RWKV-StateTuner-Roadmap.md    落地路线图
 ├── P0-理论指南.md                 state tuning 原理
-├── P1-实验报告.md                 P1 产品化落地记录 (导出器/训练/对比)
+├── P1-实验报告.md                 P1 产品化落地记录
+├── P2-CLI收尾报告.md              CLI 收尾 (eval/chat 编排下沉)
+├── 转换器零依赖化报告.md           转换器 fixture + tokenizer vendor
+├── g1g-decode-alignment.md        g1g prompt 格式 token 级对齐
+├── decision-precision.md          精度方案 + 内存红线标定 (裁决)
 ├── Runner挂载验收.md              Windows RWKV Runner 挂载步骤
 └── 参考仓库实现.md                依赖与参考来源
 
 tools/                          模型转换工具
-├── convert_rwkv7_to_hf.py        RWKV 原生 .pth → fla HF
-└── fla_cpu_bootstrap.py          macOS 无 triton 时短路 fla.ops
+├── convert_rwkv7_to_hf.py        RWKV 原生 .pth → fla HF (零依赖, 内置 fixture + tokenizer)
+├── gen_convert_fixture.py        一次性生成 fixture (上游 schema 漂移时重跑)
+├── fixtures/                     转换校验模板 (rwkv7_hf_template.json)
+├── fla_cpu_bootstrap.py          macOS 无 triton 时短路 fla.ops (历史保留)
+└── mem_probe*.py                 内存探针 (debug 用)
 
-experiments/p0_translate/        P0 实验 (历史归档, 保留不动)
-├── 实验报告.md                    完整实验记录
+assets/
+└── rwkv_world_tokenizer/         vendor 的 World tokenizer 5 文件 (转换器缺省 --tokenizer-src)
+                                  + SOURCE.md (来源仓库 + 同步说明)
 
-models/fla-hub-rwkv7-0.1B-g1/   World tokenizer (转换依赖, 提交进库)
+scripts/
+└── nekoqa_smoke.sh               NekoQA × 1.5B smoke 全流程脚本
+
+experiments/                     历史归档 (保留不动, 可复现性)
+├── p0_translate/                  P0 翻译实验 (已废弃路径)
+└── mixed_precision/               混合精度实验 (精度方案裁决依据)
+
 train_data/NekoQA_10k/          NekoQA 数据集 (Apache-2.0, 见目录内 NOTICE.md)
 ```
 
@@ -92,88 +107,59 @@ train_data/NekoQA_10k/          NekoQA 数据集 (Apache-2.0, 见目录内 NOTIC
 
 ## 快速开始
 
-### 环境要求
+> 完整分步教程(含参数解释、预期 loss 曲线、FAQ)见
+> **[docs/快速上手.md](docs/快速上手.md)**。
+
+### 环境
 
 - Apple Silicon Mac (M1+, 本项目在 M5 / 16GB 上验证)
 - Python 3.11 (uv 自动管理)
 - [uv](https://docs.astral.sh/uv/) 包管理器
 
-### 1. 获取模型
-
-本项目不包含大模型文件(被 gitignore)。需下载以下文件到 `models/`:
-
-| 文件 | 用途 | 大小 | 来源 |
-|---|---|---|---|
-| `rwkv7-g1d-0.4b-20260210-ctx8192.pth` | 0.4B 原始权重(待转换) | 902M | [魔搭 Blink_DL/rwkv7-g1](https://modelscope.cn/models/Blink_DL/rwkv7-g1/files) |
-
-> 转换所需的 fixture(`tools/fixtures/rwkv7_hf_template.json`)和 tokenizer
-> 文件(`assets/rwkv_world_tokenizer/`)已 vendor 进仓库,无需额外下载。
-
-### 2. 转换模型
-
-```bash
-python tools/convert_rwkv7_to_hf.py \
-    --rwkv7 models/rwkv7-g1d-0.4b-20260210-ctx8192.pth \
-    --output models/converted/rwkv7-g1d-0.4b --precision bf16
-```
-
-### 3. 安装 statetuner CLI
-
 ```bash
 uv sync                    # 安装依赖 (mlx-lm + torch + typer 等)
-uv run statetuner --help   # 训练/推理/导出 + 环境、数据、state 检查
+uv run statetuner --help   # 8 个子命令: train/eval/preview/chat/export + doctor/data-info/state-info
 ```
 
-### 4. 训练 + 导出
+### 转换 + 训练 + 预览(三步最小流程)
 
 ```bash
-# 训练 state tuning, 训完直接导出 RWKV Runner 可挂载的 .pth
+# 1. 转换: RWKV 原生 .pth → fla HF (零依赖, fixture + tokenizer 已内置仓库)
+uv run python tools/convert_rwkv7_to_hf.py \
+    --rwkv7 models/rwkv7-g1d-0.4b-20260210-ctx8192.pth \
+    --output models/converted/rwkv7-g1d-0.4b --precision bf16
+
+# 2. 训练 state tuning, 训完直接导出 RWKV Runner 可挂载的 .pth
 uv run statetuner train \
     --model models/converted/rwkv7-g1d-0.4b \
-    --data train_data/NekoQA_10k/nekoqa_smoke_200.json \
-    --template nekoqa \
+    --data train_data/NekoQA_10k/nekoqa_smoke_200.json --template nekoqa \
     --out state.npz \
     --lr 0.01 --epochs 3 --ctx-len 512 --no-early-stop --seed 42 \
     --export-pth --pth-out state.pth
 
-# 训练事件以 JSON lines 输出到 stdout (loss/std/lr/epoch),
-# 未来 sidecar 直接消费此事件流驱动进度面板
+# 3. A/B 预览: 有 state vs 无 state, 直观看风格注入效果
+uv run statetuner preview \
+    --model models/converted/rwkv7-g1d-0.4b --state state.npz \
+    --prompt "你好呀，今天想做什么？" --template nekoqa --ab
 ```
 
-### 5. 预览 + 评估
+> **`--cache-limit-gb`**(train/eval/chat):默认 `auto` = 物理内存 × 25%
+> (16G 机 ≈ 4.3G,c4G 同档)。可显式给 GB 数(如 `--cache-limit-gb 4`)
+> 或 `auto` 覆盖;设小可降 RSS。该参数在模型加载前生效。
+
+### 其他常用命令
 
 ```bash
-# A/B 预览: 有 state vs 无 state
-uv run statetuner preview \
-    --model models/converted/rwkv7-g1d-0.4b \
-    --state state.npz \
-    --prompt "你好呀，今天想做什么？" --template nekoqa --ab
-
-# 轻采样预览；temperature=0 仍是可复现贪心
-uv run statetuner preview \
-    --model models/converted/rwkv7-g1d-0.4b \
-    --state state.npz --prompt "你好" --template nekoqa \
-    --temperature 0.8 --top-p 0.9 --seed 42 --json
-
-# 模型常驻交互；运行中可用 /state 动态切换 state
+# 模型常驻交互;运行中可用 /state 动态切换 state (默认 template=g1g, 猫娘风格迁移用 --template nekoqa)
 uv run statetuner chat \
-    --model models/converted/rwkv7-g1g-1.5b \
-    --state experiments/mixed_precision/data/matrix/15b_s42_fp32/state.npz \
+    --model models/converted/rwkv7-g1d-0.4b --state state.npz \
     --template nekoqa --max-tokens 200 --temperature 0.6 --top-p 0.7
+# /state PATH | /state off | /ab on | /config | /help | /quit
 
-# chat 内置命令
-# /state PATH   动态加载 state，下一轮立即生效
-# /state off    切回零 state 基线
-# /ab on        同时输出 tuned state / baseline
-# /config       查看当前采样配置
-# /help         查看全部命令
-# /quit         退出
-
-NekoQA 推理除了 EOS，还会在模型开始生成下一轮 `User:` 角色标记时停止并剥离该标记，
-避免裸 generation 继续自问自答。输出中的 `stop_sequence` 即表示命中了该边界。
-边界按逐步解码后的文本检测，不依赖 `User:` 在上下文中被 tokenizer 合并成哪些 token。
-`chat` 默认流式输出；需要一次性输出时加 `--no-stream`。单轮 `preview` 可显式加
-`--stream`，但流式模式不与 `--ab` / `--json` 混用。
+# held-out 评估
+uv run statetuner eval \
+    --model models/converted/rwkv7-g1d-0.4b --state state.npz --template nekoqa \
+    --data train_data/NekoQA_10k/nekoqa_smoke_200.json --limit 5
 
 # 单独导出 npz → pth (也可在 train 时 --export-pth 一步完成)
 uv run statetuner export --state state.npz --out state.pth
@@ -185,21 +171,20 @@ uv run statetuner data-info --model models/converted/rwkv7-g1d-0.4b \
 uv run statetuner state-info --state state.npz
 ```
 
-### 6. 在 RWKV Runner 挂载 (Windows)
+### 在 RWKV Runner 挂载 (Windows)
 
 导出的 `.pth` 可直接在 RWKV Runner 中作为模型的初始 state 加载。
 Runner 检测到 `blocks.{i}.att.time_state` 键后自动启用 tuned-state 路径。
 详见 [RWKV Runner 挂载验收指南](docs/Runner挂载验收.md)。
 
-### 7. 回归测试
+### 回归测试
 
 ```bash
-uv run pytest -q                     # 快测 (导出 round-trip + 推理 golden + 单元, ~17s)
-uv run pytest --slow -q              # 全测 (含训练行为断言, ~4min)
+uv run pytest -q                     # 快测 (导出 round-trip + 推理 golden + 单元, ~22s)
+uv run pytest --slow -q              # 全测 (含训练行为断言, ~5min)
 ```
 
-- 快测:导出器 round-trip / 键名形状 / 转置方向 / 推理 golden / 数据与事件单元测试
-- 交互快测:模型常驻 session、动态 state 切换、A/B 与运行时采样配置
+- 快测:导出器 round-trip / 键名形状 / 转置方向 / 推理 golden / 数据与事件单元测试 / 交互 session
 - 慢测:梯度冒烟(24层 grad 非零)/ 过拟合(loss<0.5)/ 全量收敛 + NekoQA 风格注入
 
 模型或 state 缺失时相关测试自动 skip 并提示获取方式。
@@ -210,8 +195,10 @@ uv run pytest --slow -q              # 全测 (含训练行为断言, ~4min)
 
 **为什么脱离 fla 自己写转换器**:官方 `convert_from_rwkv7.py` 依赖
 `flash-linear-attention`,后者顶层 import 拉起 `fla.ops` → triton,而
-triton 无 macOS wheel。本项目用 0.1B safetensors 作 ground truth 模板,
-独立实现键名映射,脱离 fla 依赖。
+triton 无 macOS wheel。本项目独立实现键名映射,并用 0.1B safetensors
+生成的校验 fixture + vendor 的 World tokenizer 作为内置模板,
+**转换全程零外部下载**。详见
+[转换器零依赖化报告.md](docs/转换器零依赖化报告.md)。
 
 **为什么 lr=0.01 而非 RWKV-PEFT 的 1.0**:实测 lr=1.0 导致 state 数值
 爆炸(std 50~100 倍于正常值),变成无条件偏置。lr=0.01 让 state 温和
