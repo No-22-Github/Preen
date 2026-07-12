@@ -2,6 +2,9 @@
 name = "statetuner"
 version = "0.1.0"
 description = "RWKV-7 state tuning for Mac — train, export, and preview per-layer init states"
+authors = [{ name = "No-22-Github" }]
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "mlx>=0.22",
