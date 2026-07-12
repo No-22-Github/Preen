@@ -7,9 +7,10 @@
 
 ## 背景:为什么需要真实挂载验收
 
-本项目用 MLX(Apple)训练 state,用 torch 导出 `.pth`,但下游消费者(RWKV Runner)
-用的是 BlinkDL 的 CUDA/kernel 推理路径。Mac 侧的验证(round-trip / 挂载等价性)**只能证明
-内部自洽,不能证明与 Runner 兼容**。真实环境(Runner + Windows + CUDA)的挂载是最终验收。
+本项目用 MLX(Apple)训练 state,导出成 torch 格式的 `.pth`(纯 Python 生成,不依赖 torch),
+但下游消费者(RWKV Runner)用的是 BlinkDL 的 CUDA/kernel 推理路径。Mac 侧的验证
+(round-trip / 挂载等价性)**只能证明内部自洽,不能证明与 Runner 兼容**。真实环境
+(Runner + Windows + CUDA)的挂载是最终验收。
 
 ## 导出格式(对照 RWKV-Runner 源码确认)
 
@@ -98,7 +99,7 @@ state 加载前后的行为差异 = 训练效果。
 **Q: Runner 报错 "key not found" 或 state 未生效**
 → 检查 pth 的 key 是否为 `blocks.{i}.att.time_state`:
 ```bash
-uv run python -c "import torch; d=torch.load('translate_state.pth', map_location='cpu', weights_only=True); print(list(d.keys())[:3])"
+uv run python -c "from statetuner.pth_io import read_pth; d=read_pth('translate_state.pth'); print(list(d.keys())[:3])"
 ```
 
 **Q: 输出是英文但语义不通(单词硬凑)**

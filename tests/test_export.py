@@ -18,6 +18,7 @@ from statetuner.export import (
     load_pth_as_numpy,
     verify_roundtrip,
 )
+from statetuner.pth_io import read_pth
 
 
 @pytest.fixture
@@ -72,9 +73,7 @@ def test_roundtrip_exact_zero():
 def test_key_names(real_states, tmp_pth):
     """所有 key 必须是 blocks.{i}.att.time_state(RWKV-PEFT/Runner 约定)。"""
     export_pth(real_states, tmp_pth)
-    import torch
-
-    raw = torch.load(tmp_pth, map_location="cpu", weights_only=True)
+    raw = read_pth(tmp_pth)
     keys = list(raw.keys())
     assert len(keys) == 24  # 0.4B 是 24 层
     for k in keys:
@@ -88,12 +87,20 @@ def test_key_names(real_states, tmp_pth):
 def test_shapes_and_dtype(real_states, tmp_pth):
     """每层 shape (H, D, D) = (16, 64, 64),dtype fp32。"""
     export_pth(real_states, tmp_pth)
-    import torch
-
-    raw = torch.load(tmp_pth, map_location="cpu", weights_only=True)
+    raw = read_pth(tmp_pth)
     for k, v in raw.items():
         assert tuple(v.shape) == (16, 64, 64), f"{k} shape {v.shape}"
-        assert v.dtype == torch.float32, f"{k} dtype {v.dtype}"
+        assert v.dtype == np.float32, f"{k} dtype {v.dtype}"
+
+
+def test_torch_can_load(sample_states, tmp_pth):
+    """外部 oracle:torch 在场时,torch.load 能读回且逐字节等价(RWKV Runner 走 torch.load)。
+    torch 非项目依赖,缺席则 skip——writer 已在开发期对 torch 逐字节验证过。"""
+    torch = pytest.importorskip("torch")
+    export_pth(sample_states, tmp_pth)
+    raw = torch.load(tmp_pth, map_location="cpu", weights_only=True)
+    stored = raw["blocks.0.att.time_state"].numpy()
+    np.testing.assert_allclose(stored, sample_states[0], atol=1e-7)
 
 
 # ── 方向正确性(x070: Runner 不转置, 文件存原样)──────────────
@@ -105,10 +112,8 @@ def test_x070_no_swapaxes(sample_states, tmp_pth):
     所以导出器必须存原样 S, 而非 swapaxes(S)。
     """
     export_pth(sample_states, tmp_pth)  # 默认 x070=True
-    import torch
-
-    raw = torch.load(tmp_pth, map_location="cpu", weights_only=True)
-    stored = raw["blocks.0.att.time_state"].numpy()
+    raw = read_pth(tmp_pth)
+    stored = raw["blocks.0.att.time_state"]
     original = sample_states[0]
     # 文件里应该 == 原始训练方向 (x070 不转置)
     np.testing.assert_allclose(stored, original, atol=1e-7)
@@ -117,10 +122,8 @@ def test_x070_no_swapaxes(sample_states, tmp_pth):
 def test_v56_legacy_swapaxes(sample_states, tmp_pth):
     """v5/v6 兼容 (x070=False): 文件里存 swapaxes(S), Runner 转(1,2) 还原。"""
     export_pth(sample_states, tmp_pth, x070=False)
-    import torch
-
-    raw = torch.load(tmp_pth, map_location="cpu", weights_only=True)
-    stored = raw["blocks.0.att.time_state"].numpy()
+    raw = read_pth(tmp_pth)
+    stored = raw["blocks.0.att.time_state"]
     original = sample_states[0]
     expected = np.swapaxes(original, -2, -1)
     np.testing.assert_allclose(stored, expected, atol=1e-7)

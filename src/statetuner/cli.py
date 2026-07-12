@@ -80,7 +80,7 @@ def doctor(
     typer.echo(f"Python: {report['python']}")
     typer.echo(f"平台: {report['platform']} ({report['machine']})")
     typer.echo(f"Apple Silicon: {'✓' if report['apple_silicon'] else '✗'}")
-    for name in ("mlx", "mlx_lm", "torch", "numpy"):
+    for name in ("mlx", "mlx_lm", "ml_dtypes", "numpy"):
         info = report[name]
         typer.echo(f"{name}: {'✓ ' + info.get('version', '') if info['ok'] else '✗ ' + info['error']}")
     typer.echo(f"Metal: {'✓' if report.get('metal_available') else '✗'}")

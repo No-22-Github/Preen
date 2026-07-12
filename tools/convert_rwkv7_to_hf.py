@@ -34,8 +34,16 @@ import os
 import re
 import shutil
 
-import torch
-from safetensors.torch import save_file
+import numpy as np
+import ml_dtypes
+from safetensors.numpy import save_file
+
+# 纯 Python 的 .pth reader(无 torch)。tools/ 在 uv 环境下可 import 到已装的包。
+sys_path_added = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src")
+import sys
+if sys_path_added not in sys.path:
+    sys.path.insert(0, os.path.normpath(sys_path_added))
+from statetuner.pth_io import read_pth
 
 
 def normalize_layer_key(k):
@@ -53,7 +61,7 @@ def load_reference_template(ref_path):
     返回 dict[str, tuple]: 每层只取 layer 0 的相对键名 → shape (去掉层数)。
     """
     from safetensors import safe_open
-    f = safe_open(ref_path, framework="pt")
+    f = safe_open(ref_path, framework="np")
     template = {}      # 相对键名 (无 layer idx) → shape
     top_keys = {}      # 顶层键 → shape
     for k in sorted(f.keys()):
@@ -172,16 +180,16 @@ def translate(src_name, num_layers):
 
 def convert(rwkv7_path, output, ref_path=None, tokenizer_src=None, precision="bf16"):
     print(f"加载源权重: {rwkv7_path}")
-    weights = torch.load(rwkv7_path, weights_only=True, map_location="cpu")
+    weights = read_pth(rwkv7_path)  # {name: np.ndarray}, 纯 Python 读取
     config = infer_config(weights)
     print(f"推断配置: layers={config['num_hidden_layers']} "
           f"hidden={config['hidden_size']} vocab={config['vocab_size']} "
           f"ffn={config['intermediate_size']}")
 
     # dtype
-    dtype = {"bf16": torch.bfloat16, "bfloat16": torch.bfloat16,
-             "fp16": torch.float16, "float16": torch.float16,
-             "fp32": torch.float32, "float32": torch.float32}[precision]
+    dtype = {"bf16": ml_dtypes.bfloat16, "bfloat16": ml_dtypes.bfloat16,
+             "fp16": np.float16, "float16": np.float16,
+             "fp32": np.float32, "float32": np.float32}[precision]
 
     # ground truth 模板: ref_path 显式提供则走活模型(上游 schema 漂移时的逃生通道),
     # 否则用仓库内置 fixture(从 fla-hub 0.1B 生成,只存 ndim)。
@@ -211,17 +219,17 @@ def convert(rwkv7_path, output, ref_path=None, tokenizer_src=None, precision="bf
         else:
             li = -1
             fla_name = rel_name
-        weight = weights[src_name].clone()
+        weight = np.array(weights[src_name])  # copy
 
         if transposed:
-            weight.t_()
+            weight = weight.T
 
         shape_before = list(weight.shape)
         is_x = "attn.x_" in fla_name
         if shape_before == [1, 1, config["hidden_size"]]:
             # 非 x_ 键 squeeze; x_ 键保留 (与官方 copy_ 广播语义一致)
             if not is_x:
-                weight.squeeze_()
+                weight = weight.squeeze()
 
         # ground truth 校验: 同架构不同 hidden_size,只校验维度数一致
         # (0.1B hidden=768, 本模型 hidden=1024,绝对值不同但结构同)
@@ -246,7 +254,7 @@ def convert(rwkv7_path, output, ref_path=None, tokenizer_src=None, precision="bf
                     f"顶层维度数校验失败 {fla_name}: 参考={ref_shape} 实际={tuple(weight.shape)}"
                 )
 
-        new_weights[fla_name] = weight.to(dtype).contiguous()
+        new_weights[fla_name] = np.ascontiguousarray(weight.astype(dtype))
 
     # 报告: layer 0 模板里有没有没被源权重覆盖的键 (对应 possible_absent_weights)
     uncovered = set(template.keys()) - reported_layer0

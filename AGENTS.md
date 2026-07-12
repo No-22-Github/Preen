@@ -26,6 +26,7 @@ src/statetuner/          正式包(改这里)
 ├── train.py             训练循环(产品化)
 ├── events.py            结构化事件(JSON lines,为 IPC 铺路)
 ├── export.py            .pth 导出(RWKV Runner 挂载)
+├── pth_io.py            纯 Python torch .pth 读写(无 torch;convert 与 export 共用)
 └── cli.py               train/eval/export/preview,带 --template 开关
 
 tests/                   回归测试(改 src 必跑)
@@ -94,6 +95,7 @@ PYTHONPATH=src .venv/bin/python -m statetuner.cli preview \
 ### 导出
 - 键名 `blocks.{i}.att.time_state`,形状 (H,D,D) fp32,x070 原样不 swapaxes。
 - Windows RWKV Runner rwkv.py:843 version>=7 不 transpose。
+- **无 torch 依赖**(2026-07 移除)。读写 `.pth` 全在 `pth_io.py`:torch 的 `.pth` 是 zip+pickle+裸 storage,`read_pth` 拦 `persistent_load`/`_rebuild_tensor_v2` 复刻,`write_pth` 用纯 Python `pickle._Pickler`(非 C 版,才能覆写 `save` 手写 GLOBAL opcode)发 torch 符号引用。bf16 靠 `ml_dtypes`。改这块必跑 `test_pth_io.py`;有 torch 时 `test_torch_can_load` 会做外部 oracle 交叉验证(缺省 skip)。
 
 ---
 

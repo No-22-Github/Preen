@@ -13,10 +13,9 @@ dependencies = [
     "tokenizers",
     "safetensors",
     "numpy",
-    # torch is a hard dependency: the .pth state exporter (export.py) uses torch.save
-    # to produce files RWKV Runner can mount. Future packaging work may cut this to
-    # shrink the sidecar bundle (see docs/RWKV-StateTuner-Roadmap.md).
-    "torch",
+    # ml_dtypes 给 numpy 补 bfloat16。用于读/写 RWKV 的 torch .pth(pth_io.py):
+    # 转换器读原始权重、导出器写 Runner 可挂载的 state,全程纯 Python,无需 torch。
+    "ml_dtypes",
     "typer>=0.12",
 ]
 

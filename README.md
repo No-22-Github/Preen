@@ -81,6 +81,7 @@ src/statetuner/                 训练/推理引擎 + CLI 入口
 ├── events.py                     结构化训练事件 (为 sidecar IPC 铺路)
 ├── train.py                      训练循环 (lr/std 监控/早停/checkpoint/恢复)
 ├── export.py                     .pth 导出器 (RWKV Runner 可挂载) + round-trip 验证
+├── pth_io.py                      纯 Python torch .pth 读写 (无 torch, bf16 靠 ml_dtypes)
 └── cli.py                        CLI: train/eval/preview/chat/export + doctor/data-info/state-info
 
 tests/                          回归测试 (改 src 必跑)
@@ -137,7 +138,7 @@ train_data/NekoQA_10k/          NekoQA 数据集 (Apache-2.0, 见目录内 NOTIC
 - [uv](https://docs.astral.sh/uv/) 包管理器
 
 ```bash
-uv sync                    # 安装依赖 (mlx-lm + torch + typer 等)
+uv sync                    # 安装依赖 (mlx-lm + ml_dtypes + typer 等,无 torch)
 uv run statetuner --help   # 8 个子命令: train/eval/preview/chat/export + doctor/data-info/state-info
 ```
 
@@ -226,6 +227,12 @@ std 冲到正常值的 50~100 倍,state 退化成一个无条件偏置。lr=0.01
 **训练为什么用 ops、推理为什么用 kernel。** ops 路径可微,每一步都有 VJP,训练需要它;
 kernel 路径快但没有 VJP。两条路径已验证在容差内等价,细节见
 [P0 理论指南 §二/§五](docs/P0-理论指南.md)。
+
+**为什么不依赖 torch。** RWKV 的 `.pth` 是 torch 用 zip+pickle 存的,唯一需要 torch 的地方
+就是读原始权重、写导出的 state。为这两个 I/O 点扛整个 torch(Mac 上约 480MB)不划算,也和
+"MLX 原生"的定位别扭。所以 `pth_io.py` 用纯 Python 复刻了这套格式:读端与 `torch.load` 逐字节
+等价(3 个真实模型 798/798 张量验证),写端产物 RWKV Runner 可直接挂载,转换产物与 torch 版
+逐字节相同。bf16 靠 `ml_dtypes`(3.8MB)补上 numpy 缺的类型。
 
 ---
 

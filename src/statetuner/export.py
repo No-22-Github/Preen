@@ -5,7 +5,7 @@
 键名与形状:
   - 每层一个 key: blocks.{i}.att.time_state
   - tensor shape: (n_head, head_dim, head_dim) = (H, D, D)
-  - dtype: fp32(RWKV Runner 加载时会 .to(torch.float),所以存 fp32 最稳)
+  - dtype: fp32(RWKV Runner 加载后会转 float,所以存 fp32 最稳)
 
 转置方向(RWKV-Runner rwkv.py:836-857 的真实分支,2026-07 验证):
   Runner 按 model.version 分两条加载路径:
@@ -17,10 +17,10 @@
   Runner 加载后注入 kernel 的 == S_mlx == 训练时的 state。
 
   早期版本误按 v5/v6 路径设计(预先 swapaxes),导致 x070 模型在 Runner 上注入了
-  转置方向的 state,输出碎渣。已修正(见 docs/P1-任务①收尾报告.md 修正记录)。
+  转置方向的 state,输出碎渣。已修正(见 docs/工程实测数据.md §三)。
 
-容器:torch.save(dict)。RWKV Runner 的 torch.load(map_location="cpu") 自动检测
-格式(tar 与 zip 都能加载),直接用 torch.save 即可,无需手写 pickle。
+容器:torch 的 zip+pickle `.pth`,由 pth_io.write_pth 纯 Python 生成(无 torch 依赖)。
+RWKV Runner 的 torch.load(map_location="cpu") 可直接读回并挂载。
 """
 from __future__ import annotations
 
@@ -29,6 +29,8 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
+
+from .pth_io import read_pth, write_pth
 
 PathLike = Union[str, Path]
 StateDict = Dict[int, np.ndarray]  # {layer_idx: ndarray(H,D,D)}, MLX 方向
@@ -55,7 +57,7 @@ def export_pth(
       1. (v5/v6 only) 每层 state 做 transpose(-2,-1) → ascontiguous → fp32
          x070 (RWKV-7) 模型: Runner 加载不转置, 直接存原样
       2. 组 OrderedDict, key = blocks.{i}.att.time_state
-      3. torch.save
+      3. write_pth(纯 Python torch 格式)
 
     states: {layer_idx: ndarray(H,D,D)} (MLX 训练方向)
     num_layers: 显式层数(默认取 max key + 1);用于层数与模型不一致时补齐
@@ -63,8 +65,6 @@ def export_pth(
           依据 RWKV-Runner rwkv.py:843 version>=7 分支不 transpose。
     返回写入的路径。
     """
-    import torch
-
     states_np = _normalize_states(states)
     n = num_layers if num_layers is not None else (max(states_np) + 1)
 
@@ -78,12 +78,9 @@ def export_pth(
             arr = np.ascontiguousarray(np.swapaxes(arr, -2, -1))
         else:
             arr = np.ascontiguousarray(arr)
-        sd[f"blocks.{i}.att.time_state"] = torch.from_numpy(arr)
+        sd[f"blocks.{i}.att.time_state"] = arr
 
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(sd, out_path)
-    return out_path
+    return write_pth(sd, Path(out_path))
 
 
 def load_pth_as_numpy(path: PathLike, *, reverse_transpose: bool = False) -> StateDict:
@@ -95,17 +92,15 @@ def load_pth_as_numpy(path: PathLike, *, reverse_transpose: bool = False) -> Sta
         仅对 v5/v6 导出(export_pth x070=False)有意义。
         x070 导出的文件本身就是训练方向(Runner 不转置),reverse_transpose 应为 False。
 
-    依赖 torch.load 读取。
+    用 pth_io.read_pth 读取(纯 Python,无 torch)。
     """
-    import torch
-
-    raw = torch.load(Path(path), map_location="cpu", weights_only=True)
+    raw = read_pth(Path(path))
     out: StateDict = {}
     for k, v in raw.items():
         if not k.endswith(".att.time_state"):
             continue
         layer = int(k.split(".")[1])
-        arr = v.detach().cpu().numpy().astype(np.float32)
+        arr = np.asarray(v).astype(np.float32)
         if reverse_transpose:
             arr = np.ascontiguousarray(np.swapaxes(arr, -2, -1))
         out[layer] = arr

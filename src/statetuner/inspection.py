@@ -230,7 +230,7 @@ def doctor_report() -> dict:
         "machine": platform.machine(),
         "apple_silicon": sys.platform == "darwin" and platform.machine() == "arm64",
     }
-    for module_name in ("numpy", "torch", "mlx", "mlx_lm"):
+    for module_name in ("numpy", "ml_dtypes", "mlx", "mlx_lm"):
         try:
             module = __import__(module_name)
             report[module_name] = {"ok": True, "version": getattr(module, "__version__", "unknown")}
