@@ -19,6 +19,7 @@ from typing import Callable, Optional
 from .core import StateInput
 from .inference import (
     AbortChecker,
+    GenerationAborted,
     GenerationConfig,
     InferenceEngine,
     render_prompt,
@@ -47,6 +48,30 @@ class ChatReply:
     lines: list[str]
     exit: bool = False
     payload: Optional[dict] = None
+
+
+@dataclass(frozen=True)
+class StateChange:
+    """set_state 的结构化结果(T3 public API)。
+
+    ok=True 表示切换成功(off 或加载路径);False 表示加载失败(路径无效等)。
+    state_label 切换后的标签(off / 路径);history_cleared 因换 S₀ 会重置会话。
+    message 是给人看的中文说明(CLI/chat 用),协议层不依赖它。
+    """
+
+    ok: bool
+    state_label: Optional[str]
+    history_cleared: bool
+    message: str
+
+
+@dataclass(frozen=True)
+class RewindChange:
+    """rewind 的结构化结果(T3 public API)。"""
+
+    rounds_removed: int
+    history_len: int
+    message: str
 
 
 class ChatSession:
@@ -115,6 +140,18 @@ class ChatSession:
         """
         return self.template == "qa" and not self.reasoning
 
+    @property
+    def _supports_multiturn(self) -> bool:
+        """模板是否支持多轮胶水(S2)。
+
+        QA 有 continuation_prefix_template;INSTRUCTION 的 continuation 是 None
+        (单任务,模板 docstring 明确禁多轮);raw 无角色锚点。
+        非 qa 模板每轮独立:prompt 永远是 render_prompt(user)(无历史拼接),
+        避免用 QA 的胶水给 instruction/raw 拼多轮(旧 bug,会偏离训练分布)。
+        history 仍记录(供 /rewind、A/B 展示),但不进 prompt。
+        """
+        return self.template == "qa"
+
     def _can_continue(self) -> bool:
         """本轮是否可走续传:方言安全 + cache 干净 + 有可用 cache + 历史非空。"""
         return (
@@ -141,60 +178,77 @@ class ChatSession:
     ) -> ChatReply:
         """单路生成(非 A/B),含续传/重放决策。
 
-        状态机(三种路径,history 追加时机统一在生成后):
+        状态机(三种路径):
           首轮(history 空)     :prompt = render_prompt(user),cache=None
-          续传(_can_continue)  :prompt = last_assistant + continuation_glue(user),
-                                  cache = 上一轮 cache
-          重放(其他)            :prompt = _build_replay_prompt(含本轮 user),
+          续传(_can_continue)  :prompt = continuation_glue(user),
+                                  cache = 上一轮 cache(续传安全方言才走)
+          重放(其他)            :prompt = _build_replay_prompt(pending_user=user),
                                   cache = None
-        生成成功后统一追加 [user, assistant] 两个 turn(首轮/续传)或 [assistant]
-        一个 turn(重放,因 user 已在 _build_replay_prompt 前追加)。
+
+        P0-2 会话原子性:**所有 history/cache 变更都在 generate 成功之后**。
+        旧实现在重放路径 generate 前就 append user turn → abort 时留下孤儿 user
+        turn → 下轮重放拼出两段 User: 中间无回答;_rewind 的"每轮=2 turn"假设破产。
+        续传路径传 self.cache(同一对象)→ 前向就地写 cache[1],abort 时已污染,
+        而 cache_clean 仍 True → 下轮 _can_continue() 为真 → 从不存在的上下文续。
+        现在统一在成功后 append + 更新 cache;abort 时 history/cache 不变,
+        cache_clean 显式置 False(强制下轮重放)。
         """
         is_first_turn = len(self.history) == 0
+        # S2:非 qa 模板(instruction/raw)不支持多轮胶水,每轮独立 prompt。
+        # 用 self._supports_multiturn 把"是否首轮"扩成"本轮是否走独立 prompt"。
+        is_independent_turn = is_first_turn or not self._supports_multiturn
         is_continuation = self._can_continue()
         stream_cb = self._wrap_stream_callback(on_text) if on_text else None
 
-        if is_first_turn:
-            prompt = render_prompt(
-                user_text, self.template, reasoning=self.reasoning, think=self.think
-            )
-            result = self.engine.generate(
-                prompt,
-                state=self.state,
-                cache=None,
-                config=self.config,
-                on_text=stream_cb,
-                should_abort=self.abort_checker,
-            )
-        elif is_continuation:
-            prompt = self._build_continuation_prompt(user_text)
-            result = self.engine.generate(
-                prompt,
-                state=self.state,
-                cache=self.cache,
-                config=self.config,
-                on_text=stream_cb,
-                should_abort=self.abort_checker,
-            )
-        else:
-            # 重放:先把本轮 user 追加进 history,再渲染完整历史
-            self.history.append(Turn(role="user", text=user_text))
-            prompt = self._build_replay_prompt()
-            result = self.engine.generate(
-                prompt,
-                state=self.state,
-                cache=None,
-                config=self.config,
-                on_text=stream_cb,
-                should_abort=self.abort_checker,
-            )
+        try:
+            if is_independent_turn:
+                # 首轮 或 非多轮模板(S2):每轮独立 prompt,无历史拼接。
+                prompt = render_prompt(
+                    user_text, self.template, reasoning=self.reasoning, think=self.think
+                )
+                result = self.engine.generate(
+                    prompt,
+                    state=self.state,
+                    cache=None,
+                    config=self.config,
+                    on_text=stream_cb,
+                    should_abort=self.abort_checker,
+                )
+            elif is_continuation:
+                prompt = self._build_continuation_prompt(user_text)
+                result = self.engine.generate(
+                    prompt,
+                    state=self.state,
+                    cache=self.cache,
+                    config=self.config,
+                    on_text=stream_cb,
+                    should_abort=self.abort_checker,
+                )
+            else:
+                # 重放:渲染含本轮 user 的完整历史,但不改 self.history(P0-2)。
+                prompt = self._build_replay_prompt(pending_user=user_text)
+                result = self.engine.generate(
+                    prompt,
+                    state=self.state,
+                    cache=None,
+                    config=self.config,
+                    on_text=stream_cb,
+                    should_abort=self.abort_checker,
+                )
+        except GenerationAborted:
+            # P0-2:abort 时 history 未变(所有 append 都在成功后);但续传路径
+            # 传入了 self.cache(同一对象),前向可能已就地写 cache[1] → 已污染。
+            # 置 cache=None + cache_clean=False,强制下轮重放(§2.2 脏 cache 语义)。
+            # 重放后 re-raise,让 serve 发 error{aborted}。
+            self.cache = None
+            self.cache_clean = False
+            raise
 
         display = self._display_text(result.text)
 
-        # 统一记录 history(文本是唯一事实源,§2.3)
-        if is_first_turn or is_continuation:
-            self.history.append(Turn(role="user", text=user_text))
-        # 重放路径 user turn 已在上面追加,这里只补 assistant
+        # 统一记录 history(文本是唯一事实源,§2.3)—— 全部在 generate 成功后。
+        # 三条路径都 append user + assistant(P0-2:重放路径不再提前 append)。
+        self.history.append(Turn(role="user", text=user_text))
         self.history.append(Turn(role="assistant", text=display))
 
         # 更新 cache 状态(供下一轮决策)
@@ -245,28 +299,35 @@ class ChatSession:
         # 只有胶水,不含 last_assistant(已在 cache 里)
         return QA.continuation_prefix_template.format(q=user_text)
 
-    def _build_replay_prompt(self) -> str:
+    def _build_replay_prompt(self, *, pending_user: Optional[str] = None) -> str:
         """重放 prompt = 从 S₀ 重新渲染完整 history 文本。
 
         以 history 的 display 文本为准(§2.3:文本是唯一事实源,token 只审计)。
         首轮 user 用 render_prompt(含 bos 若 reasoning),后续 assistant 用裸文本、
-        user 用 continuation 胶水。调用方应已把本轮 user turn 追加进 history。
+        user 用 continuation 胶水。
+
+        pending_user(P0-2):本轮 user 文本。调用方不再提前 append 进 history
+        (abort 时会留孤儿),而是通过此参数参与渲染,生成成功后才 append。
         """
-        if not self.history:
+        # 构造本次渲染用的 turns = 历史 + (可选)本轮 user
+        turns: list[Turn] = list(self.history)
+        if pending_user is not None:
+            turns.append(Turn(role="user", text=pending_user))
+        if not turns:
             return render_prompt(
                 "", self.template, reasoning=self.reasoning, think=self.think
             )
         # 首轮 user turn → prefix 模板
         parts = [
             render_prompt(
-                self.history[0].text,
+                turns[0].text,
                 self.template,
                 reasoning=self.reasoning,
                 think=self.think,
             )
         ]
         # 后续 turns:assistant 裸文本 + user continuation 胶水交替
-        for turn in self.history[1:]:
+        for turn in turns[1:]:
             if turn.role == "assistant":
                 parts.append(turn.text)
             elif turn.role == "user":
@@ -321,6 +382,82 @@ class ChatSession:
     def _summary(result) -> str:
         return result.summary_line()
 
+    # ── public API(T3:协议层/未来 UI 共用,不依赖 CLI 斜杠命令)──────────
+    # 斜杠命令退化成这些方法的 parser;协议 payload 取结构化字段,
+    # 不再从 reply.lines[0] 捞中文人话(改 CLI 文案 → 协议跟着变)。
+
+    def set_state(self, path: Optional[str]) -> StateChange:
+        """切换 state(T3 public API)。
+
+        path=None 关闭 state(零基线);path=字符串 加载该 npz/pth。
+        换 S₀ = 换人设,续传旧对话无意义 → 重置会话(history/cache 清空,§2.4)。
+
+        返回 StateChange(ok/state_label/history_cleared/message)。
+        ok=False 表示加载失败(路径无效、格式不符等),state 维持原状。
+        """
+        if path is None:
+            self.state = None
+            self.state_label = None
+            self.history = []
+            self.cache = None
+            self.cache_clean = True
+            return StateChange(
+                ok=True, state_label=None, history_cleared=True,
+                message="state 已关闭,已重置会话;后续轮次使用零 state 基线。",
+            )
+        resolved = Path(path).expanduser()
+        try:
+            loaded = self.state_loader(resolved)
+        except Exception as exc:
+            return StateChange(
+                ok=False, state_label=self.state_label, history_cleared=False,
+                message=f"state 加载失败: {exc}",
+            )
+        self.state = loaded
+        self.state_label = str(resolved)
+        self.history = []
+        self.cache = None
+        self.cache_clean = True
+        return StateChange(
+            ok=True, state_label=str(resolved), history_cleared=True,
+            message=f"state 已加载: {resolved}(已重置会话)",
+        )
+
+    def rewind(self, n: int = 1) -> RewindChange:
+        """撤销最后 n 轮(T3 public API)。一"轮" = 一个 user+assistant 对。
+
+        历史被改 → cache 失效,下一轮自动重放。
+        n 超过现有轮数时 clamp 到 0(不报错)。
+        """
+        if n < 1:
+            n = 1
+        total_turns = len(self.history)
+        turns_per_round = 2
+        clamp = min(n * turns_per_round, total_turns)
+        if clamp == 0:
+            return RewindChange(
+                rounds_removed=0, history_len=total_turns,
+                message="无历史可撤销。",
+            )
+        rounds_removed = clamp // turns_per_round
+        self.history = self.history[: total_turns - clamp]
+        self.cache = None
+        self.cache_clean = False
+        return RewindChange(
+            rounds_removed=rounds_removed, history_len=len(self.history),
+            message=f"已撤销 {rounds_removed} 轮;下一轮将重放剩余历史"
+                    f"({len(self.history)} 条记录)。",
+        )
+
+    def reset(self) -> None:
+        """清空会话(T3 public API,/clear 真实语义)。
+
+        清空 history、丢弃 cache、回到 S₀。无返回(纯副作用,协议层发 ok 即可)。
+        """
+        self.history = []
+        self.cache = None
+        self.cache_clean = True
+
     def _command(self, text: str) -> ChatReply:
         try:
             parts = shlex.split(text)
@@ -364,68 +501,34 @@ class ChatSession:
         return ChatReply([f"未知命令: {command}；输入 /help 查看帮助。"])
 
     def _clear_command(self) -> ChatReply:
-        """/clear 真实语义(§2.4):清空 history、丢弃 cache、回到 S₀。"""
-        self.history = []
-        self.cache = None
-        self.cache_clean = True
+        """/clear 真实语义(§2.4):清空 history、丢弃 cache、回到 S₀。
+
+        T3:薄包装,核心逻辑在 reset() public API。
+        """
+        self.reset()
         return ChatReply(["已清空会话:历史与 cache 已重置,下一轮从 S₀ 重新开始。"])
 
     def _rewind_command(self, args: list[str]) -> ChatReply:
-        """/rewind [n]:截断最后 n 轮(默认 1),触发重放。
-
-        一"轮" = 一个 user+assistant 对。截断后 cache 丢弃(历史被改,续传失效),
-        下一轮自动走重放。n 超过轮数时 clamp 到 0。
-        """
+        """/rewind [n] parser(T3):解析 n → rewind(n) public API。"""
         n = 1
         if args:
             try:
                 n = int(args[0])
             except ValueError:
                 return ChatReply([f"/rewind 参数必须是正整数,收到: {args[0]}"])
-        if n < 1:
-            return ChatReply(["/rewind 参数必须 >= 1"])
-        # history 按 [user, assistant, user, assistant, ...] 排列,
-        # 每轮 = 2 个 turn。截断 n 轮 = 删最后 2n 个 turn。
-        total_turns = len(self.history)
-        turns_per_round = 2
-        clamp = min(n * turns_per_round, total_turns)
-        if clamp == 0:
-            return ChatReply(["无历史可撤销。"])
-        rounds_removed = clamp // turns_per_round
-        self.history = self.history[: total_turns - clamp]
-        # 历史被改 → cache 失效,下一轮重放
-        self.cache = None
-        self.cache_clean = False
-        return ChatReply(
-            [
-                f"已撤销 {rounds_removed} 轮;下一轮将重放剩余历史({len(self.history)} 条记录)。"
-            ]
-        )
+        result = self.rewind(n)
+        return ChatReply([result.message])
 
     def _state_command(self, args: list[str]) -> ChatReply:
+        """/state parser(T3):解析 path/off → set_state(path|None) public API。"""
         if not args:
             return ChatReply([f"当前 state: {self.state_label or 'off'}"])
         value = args[0]
         if value.lower() in ("off", "none", "zero"):
-            self.state = None
-            self.state_label = None
-            # §2.4: 切换 state = 换 S₀ = 换人设,续传旧对话无意义 → 重置会话
-            self.history = []
-            self.cache = None
-            self.cache_clean = True
-            return ChatReply(["state 已关闭,已重置会话;后续轮次使用零 state 基线。"])
-        path = Path(value).expanduser()
-        try:
-            loaded = self.state_loader(path)
-        except Exception as exc:
-            return ChatReply([f"state 加载失败: {exc}"])
-        self.state = loaded
-        self.state_label = str(path)
-        # §2.4: 多轮中途切换 state → 清空会话(换 S₀ = 换人设)
-        self.history = []
-        self.cache = None
-        self.cache_clean = True
-        return ChatReply([f"state 已加载: {path}(已重置会话)"])
+            result = self.set_state(None)
+        else:
+            result = self.set_state(value)
+        return ChatReply([result.message])
 
     def _toggle_ab(self, args: list[str]) -> ChatReply:
         if args:

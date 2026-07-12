@@ -1,7 +1,11 @@
 from pathlib import Path
 
+import pytest
+
 from statetuner.chat import ChatSession
-from statetuner.inference import ABResult, GenerationConfig, GenerationResult
+from statetuner.inference import (
+    ABResult, GenerationAborted, GenerationConfig, GenerationResult,
+)
 from statetuner.templates import QA as NEKO_QA  # tests 局部别名
 
 
@@ -380,3 +384,111 @@ def test_display_text_think_on_end_to_end_in_history():
     assert assistant_turn.text == "可见的回答"
     assert "我的思考过程" not in assistant_turn.text
     assert "</think>" not in assistant_turn.text
+
+
+# ────────────────────────────────────────────────────────────────
+# P0-2 + Q3: abort 会话原子性 —— history 不变 + cache_clean=False
+# ────────────────────────────────────────────────────────────────
+
+
+class AbortingEngine:
+    """generate 抛 GenerationAborted(模拟 serve abort / 中途取消)。
+
+    支持在指定路径(首轮/续传/重放)触发:首参数传 cache 即可判断当前路径。
+    每次调用都抛 → 测的就是 abort 时 history/cache 的一致性。
+    """
+
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    def load_state(self, state):
+        return {0: str(state)}
+
+    def generate(self, prompt, *, state=None, config=None, cache=None,
+                 on_text=None, should_abort=None):
+        self.calls.append({"prompt": prompt, "cache": cache})
+        raise GenerationAborted()
+
+
+def test_abort_on_first_turn_leaves_history_empty():
+    """P0-2:首轮 generate 抛 GenerationAborted → history 不留孤儿 user turn。
+
+    旧实现重放路径在 generate 前就 append user turn → abort 时留下孤儿。
+    现在所有 append 都在成功后;abort 时 history 长度不变。
+    """
+    engine = AbortingEngine()
+    session = ChatSession(engine, template="qa", state={0: "s"})
+    with pytest.raises(GenerationAborted):
+        session.handle("Q1")
+    # 关键:history 仍为空(没追加孤儿 user turn)
+    assert len(session.history) == 0, "首轮 abort 后 history 应为空(无孤儿 user turn)"
+
+
+def test_abort_on_continuation_invalidates_cache():
+    """P0-2:续传路径 abort → cache 必须失效(cache=None, cache_clean=False)。
+
+    旧实现续传路径传 self.cache(同一对象),前向就地写 cache[1],
+    abort 时已污染而 cache_clean 仍 True → 下轮 _can_continue() 为真
+    → 从不存在的上下文续。
+    现在显式置 cache=None + cache_clean=False,强制下轮重放。
+    """
+    engine = FakeEngine()  # 先用正常 engine 跑一轮建立续传条件
+    session = ChatSession(engine, template="qa", state={0: "s"})
+    session.handle("Q1")
+    assert len(session.history) == 2
+    assert session.cache is not None
+    assert session.cache_clean is True
+
+    # 第二轮换成 aborting engine(模拟这轮被中断)
+    session.engine = AbortingEngine()
+    with pytest.raises(GenerationAborted):
+        session.handle("Q2")
+
+    # Q3 核心断言:abort 后 history 长度不变(仍 2,没追加 Q2 的孤儿 turn)
+    assert len(session.history) == 2, "续传 abort 后 history 长度应不变"
+    # P0-2 核心断言:cache 失效,下轮强制重放
+    assert session.cache is None, "abort 后 cache 必须 None(防从污染 cache 续传)"
+    assert session.cache_clean is False, "abort 后 cache_clean 必须 False(强制下轮重放)"
+
+
+def test_abort_on_replay_leaves_history_unchanged():
+    """P0-2:重放路径 abort → history 不变(旧实现提前 append user turn 留孤儿)。
+
+    构造重放条件:reasoning 会话(reasoning 每轮重放),先跑一轮,
+    第二轮进重放路径时换 aborting engine。
+    """
+    engine = FakeEngine()
+    session = ChatSession(engine, template="qa", reasoning=True, think="fast", state={0: "s"})
+    session.handle("Q1")
+    assert len(session.history) == 2
+
+    session.engine = AbortingEngine()
+    with pytest.raises(GenerationAborted):
+        session.handle("Q2")
+    # 重放路径 abort:history 不变(旧 bug 会留孤儿 user turn)
+    assert len(session.history) == 2, "重放 abort 后 history 长度应不变"
+
+
+def test_abort_then_next_turn_replays_cleanly():
+    """P0-2 端到端:abort 后下一轮能干净重放(不拼出两段 User: 中间无回答)。
+
+    旧 bug 的表现:孤儿 user turn 让 _build_replay_prompt 拼出
+    "User: Q1\n\nAssistant: A1\n\nUser: Q2\n\nAssistant:\n\nUser: Q3..."
+    这种破损序列。修复后 history 一致,重放 prompt 结构正确。
+    """
+    engine = FakeEngine()
+    session = ChatSession(engine, template="qa", state={0: "s"})
+    session.handle("Q1")
+    # 第二轮被中断
+    session.engine = AbortingEngine()
+    with pytest.raises(GenerationAborted):
+        session.handle("Q2")
+    # 第三轮:换回正常 engine,应干净重放
+    session.engine = FakeEngine()
+    session.handle("Q3")
+    # history 应是 [Q1 user, Q1 assistant, Q3 user, Q3 assistant] —— 没有 Q2 孤儿
+    assert len(session.history) == 4
+    users = [t for t in session.history if t.role == "user"]
+    assert [t.text for t in users] == ["Q1", "Q3"], (
+        f"history user turns 应是 [Q1, Q3](无 Q2 孤儿), 实际 {[t.text for t in users]}"
+    )

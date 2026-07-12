@@ -262,6 +262,59 @@ def test_abort_with_no_in_flight_returns_ok():
     assert term["id"] == "a1"
 
 
+def test_send_with_aborting_engine_returns_aborted_error():
+    """Q3 + P0-2:send → generate 抛 GenerationAborted → error{aborted}。
+
+    FakeEngine(abort_at_step=...) 此前是死代码(写了没人用);
+    send → aborted 这条主路径此前零个不依赖模型的测试。补上。
+    同时验证 abort 时 session 状态原子性:history 不变 + cache_clean=False。
+    """
+    cap = CaptureProtocol(abort_at_step=0)  # 第一次 should_abort 检查就触发
+    _, ns = _send_and_collect(cap, {"id": "n", "cmd": "new_session", "template": "qa"})
+    sid = ns["session_id"]
+    events, term = _send_and_collect(cap, {
+        "id": "ab", "cmd": "send", "session_id": sid, "text": "你好",
+    })
+    assert term["type"] == "error"
+    assert term["code"] == "aborted"
+    assert term["id"] == "ab"
+    # P0-2:session 状态原子性 —— history 不留孤儿 user turn
+    managed = cap.proto.manager.get_session(sid)
+    assert len(managed.session.history) == 0, "abort 后 history 应为空(无孤儿 turn)"
+    # cache_clean=False 强制下轮重放(续传路径的 cache 可能已被前向污染)
+    assert managed.session.cache_clean is False
+    assert managed.session.cache is None
+
+
+def test_send_abort_then_next_send_replays_cleanly():
+    """P0-2 端到端(serve 层):abort 后下一轮 send 能正常完成,不残留孤儿。
+
+    证明 abort 不会让会话进入坏状态(下轮 send 正常发 turn_end + ok)。
+    """
+    # 第一次 send 用 aborting engine,第二次换正常 engine
+    cap = CaptureProtocol(abort_at_step=0)
+    _, ns = _send_and_collect(cap, {"id": "n", "cmd": "new_session", "template": "qa"})
+    sid = ns["session_id"]
+    # 第一轮:abort
+    _, aborted = _send_and_collect(cap, {
+        "id": "a1", "cmd": "send", "session_id": sid, "text": "Q1",
+    })
+    assert aborted["code"] == "aborted"
+    # 换回正常 engine(FakeEngine 在本文件顶部定义)
+    cap.engine = FakeEngine()
+    cap.proto.manager.engine = cap.engine
+    managed = cap.proto.manager.get_session(sid)
+    managed.session.engine = cap.engine
+    # 第二轮:应正常完成
+    events, term = _send_and_collect(cap, {
+        "id": "s2", "cmd": "send", "session_id": sid, "text": "Q2",
+    })
+    assert term["type"] == "ok"
+    # history 应只有 Q2 这轮(无 Q1 孤儿)
+    users = [t for t in managed.session.history if t.role == "user"]
+    assert [t.text for t in users] == ["Q2"]
+
+
 # ── 会话控制:set_config / rewind / reset / close ────────────
 
 def test_set_config_updates_session():

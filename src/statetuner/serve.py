@@ -592,8 +592,11 @@ class ServeProtocol:
             try:
                 reply = session.handle(text, on_text=on_text)
             except GenerationAborted:
-                # §3.5 aborted:被中断,发 error 终结;chat 状态可能部分更新,
-                # 但 cache 在重放语义下下轮自动重建(§2.2),无需修补。
+                # §3.5 aborted:被中断,发 error 终结。
+                # P0-2:ChatSession._handle_single 已在 GenerationAborted 时
+                # 置 cache=None + cache_clean=False(续传路径的 self.cache 可能
+                # 已被前向就地污染),下轮强制重放。旧注释"cache 自动重建无需修补"
+                # 是错的(重放只在 cache_clean=False 时触发,abort 路径原先没置 False)。
                 self._emit(_error("aborted", "生成已中断", id_=id_))
                 return
 
@@ -641,17 +644,22 @@ class ServeProtocol:
         session = managed.session
 
         if cmd == "set_state":
+            # T3:走 ChatSession.set_state public API,协议 payload 取结构化字段,
+            # 不再从 reply.lines[0] 捞中文人话(改 CLI 文案协议会跟着变)。
             state_path = params.get("state_path")  # None = 关闭 state
-            if state_path is None:
-                # /state off
-                # ChatSession 没有直接的 public off API,复用 _state_command
-                reply = session._state_command(["off"])
-            else:
-                if not isinstance(state_path, str):
-                    raise ProtocolError("set_state 的 state_path 必须是字符串或 null")
-                reply = session._state_command([state_path])
-            managed.state_path = state_path if isinstance(state_path, str) else None
-            self._emit(_ok(id_, message=reply.lines[0] if reply.lines else None))
+            if state_path is not None and not isinstance(state_path, str):
+                raise ProtocolError("set_state 的 state_path 必须是字符串或 null")
+            result = session.set_state(state_path)
+            if not result.ok:
+                # 加载失败 → bad_request(附 message 供 UI 展示)
+                raise ProtocolError(result.message)
+            managed.state_path = result.state_label
+            self._emit(_ok(
+                id_,
+                state_label=result.state_label,
+                history_cleared=result.history_cleared,
+                message=result.message,
+            ))
             return
 
         if cmd == "set_config":
@@ -666,12 +674,17 @@ class ServeProtocol:
             n = params.get("n", 1)
             if not isinstance(n, int) or n < 1:
                 raise ProtocolError("rewind 的 n 必须是 >= 1 的整数")
-            reply = session._rewind_command([str(n)])
-            self._emit(_ok(id_, history_len=len(session.history)))
+            result = session.rewind(n)
+            self._emit(_ok(
+                id_,
+                rounds_removed=result.rounds_removed,
+                history_len=result.history_len,
+                message=result.message,
+            ))
             return
 
         if cmd == "reset":
-            reply = session._clear_command()
+            session.reset()
             self._emit(_ok(id_))
             return
 
