@@ -38,6 +38,34 @@ def _bad_input(exc: Exception) -> None:
     raise typer.Exit(2)
 
 
+def _apply_cache_limit(spec: Optional[str]) -> None:
+    """load_model 前设 MLX buffer cache 上限(GB 口径)。
+
+    必须在任何 MLX 加载/分配前调用才有效(mem_probe 验证过的时序)。
+    spec 解析:
+      None       — 不动 MLX 默认(理论上不会被触发,默认是 auto)
+      "auto"     — 物理内存 × 25%(16GB 机器 ≈ 4.3G,c4G 同档)
+      "<number>" — 直接当 GB,如 "4" → 4G
+    全仓 GB 口径(÷1e9),禁止 /1024³。
+    """
+    if spec is None:
+        return
+    import mlx.core as mx
+
+    if spec == "auto":
+        gb = mx.device_info()["memory_size"] / 1e9 * 0.25
+    else:
+        try:
+            gb = float(spec)
+        except ValueError:
+            _bad_input(ValueError(
+                f"--cache-limit-gb 只接受 'auto' 或正数, 收到 {spec!r}"
+            ))
+    if gb <= 0:
+        _bad_input(ValueError("--cache-limit-gb 必须 > 0"))
+    mx.set_cache_limit(int(gb * 1e9))
+
+
 @app.command("doctor")
 def doctor(
     json_output: bool = typer.Option(False, "--json", help="stdout 输出结构化 JSON"),
@@ -167,6 +195,10 @@ def train(
         help="任务模板: nekoqa(角色扮演 QA,默认)",
     ),
     seed: int = typer.Option(42, "--seed"),
+    cache_limit_gb: Optional[str] = typer.Option(
+        "auto", "--cache-limit-gb",
+        help="MLX buffer cache 上限;auto=物理内存×25%(默认,16G机≈4.3G),或直接给 GB 数。设小降 RSS,必须在模型加载前生效。",
+    ),
 ):
     """训练 state tuning。事件流输出到 stdout(JSON lines)。"""
     if not model.is_dir():
@@ -187,6 +219,9 @@ def train(
         _bad_input(ValueError("--patience 和 --checkpoint-every 必须 > 0"))
     if pth_out is not None and not export_pth:
         _bad_input(ValueError("--pth-out 必须配合 --export-pth"))
+
+    # cache_limit 必须在 load_model 前生效(mem_probe 验证过的时序)。
+    _apply_cache_limit(cache_limit_gb)
 
     import mlx.core as mx
 
@@ -265,6 +300,10 @@ def eval(
     ),
     limit: int = typer.Option(5, "--limit", help="最多输出条数(默认 5)"),
     json_output: bool = typer.Option(False, "--json", help="stdout 输出结构化 JSON"),
+    cache_limit_gb: Optional[str] = typer.Option(
+        "auto", "--cache-limit-gb",
+        help="MLX buffer cache 上限;auto=物理内存×25%(默认,16G机≈4.3G),或直接给 GB 数。设小降 RSS,必须在模型加载前生效。",
+    ),
 ):
     """评估:对数据集逐条生成(state 注入),输出结果。
 
@@ -285,6 +324,9 @@ def eval(
         _bad_input(ValueError("max-tokens/temperature/top-p 参数范围非法"))
     if limit <= 0:
         raise typer.BadParameter("--limit 必须 > 0")
+
+    # cache_limit 必须在 load_model 前生效(mem_probe 验证过的时序)。
+    _apply_cache_limit(cache_limit_gb)
 
     from .core import load_model
     from .inference import GenerationConfig, InferenceEngine, with_template_stops
@@ -364,6 +406,10 @@ def chat(
     ab: bool = typer.Option(False, "--ab", help="启动时开启 A/B"),
     stream: bool = typer.Option(True, "--stream/--no-stream", help="逐步输出生成文本"),
     template: str = typer.Option("g1g", "--template", help="g1g(RWKV7-G1 原生,默认) | raw | nekoqa"),
+    cache_limit_gb: Optional[str] = typer.Option(
+        "auto", "--cache-limit-gb",
+        help="MLX buffer cache 上限;auto=物理内存×25%(默认,16G机≈4.3G),或直接给 GB 数。设小降 RSS,必须在模型加载前生效。",
+    ),
 ):
     """模型常驻的交互模式；支持运行中动态切换 state。"""
     if not model.is_dir():
@@ -376,6 +422,9 @@ def chat(
         _bad_input(ValueError("max-tokens/temperature/top-p 参数范围非法"))
     if ab and state is None:
         _bad_input(ValueError("--ab 必须同时提供 --state"))
+
+    # cache_limit 必须在 load_model 前生效(mem_probe 验证过的时序)。
+    _apply_cache_limit(cache_limit_gb)
 
     from .chat import ChatSession
     from .core import load_model

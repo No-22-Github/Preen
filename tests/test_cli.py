@@ -123,6 +123,123 @@ def test_train_rejects_pth_out_without_export(tmp_path):
     assert "--export-pth" in result.output
 
 
+def _make_train_doubles(monkeypatch, received):
+    """搭 train 测试用的 MLX + service 双桩,不加载真实模型。
+
+    received 是测试侧传入的 dict,用于收集 set_cache_limit 的入参。
+    返回 run_training 的 noop stub(已 patch 到 service 模块)。
+    """
+
+    def _fake_set_cache_limit(n):
+        received["bytes"] = n
+
+    def _noop(request, emitter, *, status=None):
+        from statetuner.service import TrainingJobResult
+
+        return TrainingJobResult(
+            state_path=request.out,
+            metadata_path=request.out,
+            pth_path=None,
+            epochs_run=0,
+            final_loss=0.0,
+            final_state_std=0.0,
+            elapsed=0.0,
+        )
+
+    monkeypatch.setattr("mlx.core.set_cache_limit", _fake_set_cache_limit)
+    monkeypatch.setattr("statetuner.service.run_training", _noop)
+    return _noop
+
+
+def _write_train_fixture(tmp_path):
+    """搭 train 命令所需的最小 model 目录 + 单条 data.json。"""
+    model = tmp_path / "model"
+    model.mkdir()
+    data = tmp_path / "data.json"
+    data.write_text(
+        json.dumps([{"instruction": "q", "output": "a"}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return model, data
+
+
+def test_train_applies_explicit_cache_limit(tmp_path, monkeypatch):
+    """--cache-limit-gb 4 → set_cache_limit(int(4e9))(显式数字用法)。"""
+    model, data = _write_train_fixture(tmp_path)
+    received = {}
+    _make_train_doubles(monkeypatch, received)
+
+    result = runner.invoke(
+        app,
+        [
+            "train", "--model", str(model), "--data", str(data),
+            "--out", str(tmp_path / "state.npz"),
+            "--cache-limit-gb", "4",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert received.get("bytes") == int(4 * 1e9)
+
+
+def test_train_cache_limit_default_is_auto(tmp_path, monkeypatch):
+    """不传 --cache-limit-gb 时,默认 auto = 物理内存 × 25%。"""
+    model, data = _write_train_fixture(tmp_path)
+    received = {}
+    _make_train_doubles(monkeypatch, received)
+
+    # 假 16G 机器:memory_size = 16e9 bytes → auto 应得 int(4e9)。
+    monkeypatch.setattr(
+        "mlx.core.device_info", lambda: {"memory_size": int(16 * 1e9)}
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "train", "--model", str(model), "--data", str(data),
+            "--out", str(tmp_path / "state.npz"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert received.get("bytes") == int(16 * 1e9 * 0.25)
+
+
+def test_train_cache_limit_auto_uses_quarter_of_memory(tmp_path, monkeypatch):
+    """显式 --cache-limit-gb auto → 物理内存 × 25%(与默认同路径,独立覆盖)。"""
+    model, data = _write_train_fixture(tmp_path)
+    received = {}
+    _make_train_doubles(monkeypatch, received)
+
+    monkeypatch.setattr(
+        "mlx.core.device_info", lambda: {"memory_size": int(32 * 1e9)}
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "train", "--model", str(model), "--data", str(data),
+            "--out", str(tmp_path / "state.npz"),
+            "--cache-limit-gb", "auto",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert received.get("bytes") == int(32 * 1e9 * 0.25)
+
+
+def test_train_cache_limit_rejects_bad_input(tmp_path):
+    """--cache-limit-gb abc → exit 2 + 错误文案(走 _bad_input)。"""
+    model, data = _write_train_fixture(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "train", "--model", str(model), "--data", str(data),
+            "--out", str(tmp_path / "state.npz"),
+            "--cache-limit-gb", "abc",
+        ],
+    )
+    assert result.exit_code == 2, result.output
+    assert "--cache-limit-gb" in result.output
+
+
 def test_state_info_json(tmp_path):
     path = tmp_path / "state.npz"
     np.savez(

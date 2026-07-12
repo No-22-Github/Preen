@@ -115,6 +115,8 @@ PYTHONPATH=src .venv/bin/python -m statetuner.cli preview \
 - **断点 L650**(均 636 token):step_peak 12.22G 顶到削顶线。
 - fp32 比 bf16 step_peak 高 ~1.7G,fp32 红线更紧。
 - 完整数据见 `experiments/mixed_precision/report_matrix.md`(本地留档,不进 git)。
+- **产品 CLI 已接入 `--cache-limit-gb`**(train/eval/chat),**缺省 = `auto`(物理内存 × 25%,16G 机 ≈ 4.3G,c4G 同档)**。可显式传 GB 数(如 `--cache-limit-gb 4`)或 `auto` 覆盖。该参数必须在 load_model 前生效,`cli.py` 的 `_apply_cache_limit` helper 已保证时序;时序铁律来源见 `tools/mem_probe.py:106-117`(set_cache_limit 在 load_model 之前)。
+- **⚠️ auto 默认改变了训练口径**:历史训练数据(0.4B/1.5B 的 loss/std 曲线)是在不设 cache_limit 下跑的;auto 默认开启后 cache 命中率下降,训练数据与历史不再严格可比。红线档内存数据仍适用(4.3G ≈ 4G)。
 
 ### 历史观察(已解释)
 - 0.4B 训练实测 RSS ≈ 11~12GB:大头是 fp32 state 在 bf16 权重的 wkv 循环里把整个循环提升成 fp32(MLX 类型提升规则 bf16+fp32=fp32)。这是机制事实,非 bug。
