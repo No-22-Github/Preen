@@ -1,0 +1,325 @@
+//
+//  ChatStore.swift
+//  Preen
+//
+//  对话状态。@Observable @MainActor(UI 线程)。
+//
+//  本期最小版(单栏):基础多轮 + abort。
+//  不做(留 #8):A/B 双栏、崩溃恢复重放、Inspector 会话区。
+//
+//  事件驱动:
+//   - text_chunk(id, delta, phase) → 把增量追加到最后一条 assistant 消息(按 phase 分段)。
+//   - turn_end(id, result, thinking?, answer?) → 用拆分后的 thinking/answer 覆盖最后一条;
+//     非 think=on 用 result.text。
+//   - ok/error 终结事件:ok 标完成,error{aborted} 标中断(保留已生成文本),其他 error 标错误。
+//
+
+import Foundation
+import Observation
+
+/// 消息角色。
+enum ChatRole: Equatable {
+    case user
+    case assistant
+}
+
+/// 消息的一段文本(按 think/answer 分段)。
+struct ChatSegment: Identifiable, Equatable {
+    let id = UUID()
+    let phase: ServePhase
+    var text: String
+}
+
+/// 一条消息。
+struct ChatMessage: Identifiable, Equatable {
+    let id = UUID()
+    let role: ChatRole
+    /// assistant 消息按 phase 分段(think/answer);user 消息单段 answer。
+    var segments: [ChatSegment]
+    /// turn_end 的技术摘要(stop_reason / token 数 / t/s),dim 显示。
+    var summary: String?
+    /// 中断标记(abort 后保留已生成部分,UI 加"(已中断)")。
+    var isAborted: Bool = false
+    /// 错误消息(若该轮失败)。
+    var errorText: String?
+
+    /// 拼接所有段的文本(用于显示/重放)。
+    var fullText: String {
+        segments.map(\.text).joined()
+    }
+}
+
+@Observable
+@MainActor
+final class ChatStore {
+
+    // === 状态 ===
+    private(set) var messages: [ChatMessage] = []
+    private(set) var sessionId: String?
+    private(set) var isGenerating: Bool = false  // UI 据此切换发送/abort 按钮
+    private(set) var isConnected: Bool = false  // serve 进程 ready
+    private(set) var lastError: String?
+
+    /// 当前请求 id(text_chunk/turn_end/终结事件用它配对)。
+    private var inFlightId: String?
+
+    /// ServeClient 持有。
+    private var client: ServeClient?
+    /// 事件流消费 Task。
+    private var consumeTask: Task<Void, Never>?
+
+    // === 配置 ===
+    var genConfig: GenConfig = .defaultConfig
+    var statePath: String?  // 当前 state 文件路径(nil = 无 state 基线)
+
+    // MARK: - 生命周期
+
+    /// 启动 serve + 等待 ready + 自动建 session。
+    func connect(model: URL) {
+        disconnect()
+        let client = ServeClient()
+        self.client = client
+        let stream = client.start(model: model)
+        consumeTask = Task { [weak self] in
+            for await event in stream {
+                self?.consume(event: event)
+            }
+        }
+    }
+
+    /// 断开(杀进程)。
+    func disconnect() {
+        consumeTask?.cancel()
+        consumeTask = nil
+        client?.terminate()
+        client = nil
+        isConnected = false
+        sessionId = nil
+        isGenerating = false
+    }
+
+    // MARK: - 用户动作
+
+    /// 发送一条消息。
+    func send(text: String) {
+        guard let sid = sessionId, isConnected, !isGenerating else { return }
+        guard !text.isEmpty else { return }
+
+        // user 消息先入列。
+        messages.append(ChatMessage(role: .user, segments: [ChatSegment(phase: .answer, text: text)]))
+        // assistant 占位(空段,等 text_chunk 填)。
+        messages.append(ChatMessage(role: .assistant, segments: [ChatSegment(phase: .answer, text: "")]))
+        isGenerating = true
+        lastError = nil
+
+        // 异步发指令;流式事件经 consume(event:) 更新占位。
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.client?.send(sessionId: sid, text: text)
+                // send 返回 = 终结事件到达;consume 已处理。
+            } catch let err as ServeError {
+                self.handleSendError(err)
+            } catch {
+                self.handleSendError(.ioError(error.localizedDescription))
+            }
+        }
+    }
+
+    /// abort 当前生成(独立通道:abort 自己的 id,不耦合被中断的 send)。
+    func abort() {
+        guard isGenerating else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            try? await self.client?.abort()
+            // abort 的 ok 立即返回;被中断的 send 的 error{aborted} 会异步到达,
+            // 由 consume(event:) 标记 isAborted。
+        }
+    }
+
+    /// 改采样配置(下一轮生效)。
+    func applyConfig() {
+        guard let sid = sessionId else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let resp = try await self.client?.send(.setConfig(id: self.newClientId(),
+                                                                   sessionId: sid,
+                                                                   genConfig: self.genConfig.toDTO()))
+                if case .error(_, let msg) = resp {
+                    self.lastError = msg
+                }
+            } catch {
+                self.lastError = error.localizedDescription
+            }
+        }
+    }
+
+    /// 切换 state 文件。
+    func setState(path: String?) {
+        guard let sid = sessionId else { return }
+        statePath = path
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let resp = try await self.client?.send(.setState(id: self.newClientId(),
+                                                                 sessionId: sid,
+                                                                 statePath: path))
+                if case .ok(let payload) = resp {
+                    // set_state 成功 = 重置会话(history/cache 清空)。
+                    self.messages.removeAll()
+                    _ = payload  // stateLabel 等可后续展示
+                }
+            } catch {
+                self.lastError = error.localizedDescription
+            }
+        }
+    }
+
+    /// 新建会话(连接后自动调,或换模板/切 state 后重建)。
+    func newSession(template: String = "qa", reasoning: Bool? = nil, think: String? = nil) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let sid = try await self.client?.newSession(template: template, reasoning: reasoning,
+                                                            think: think, statePath: self.statePath,
+                                                            genConfig: self.genConfig.toDTO())
+                self.sessionId = sid
+                self.messages.removeAll()
+            } catch {
+                self.lastError = "建会话失败:\(error.localizedDescription)"
+            }
+        }
+    }
+
+    // MARK: - 事件消费
+
+    func consume(event: ServeEvent) {
+        switch event {
+        case .ready:
+            isConnected = true
+            // 自动建会话(qa 模板默认)。
+            newSession()
+        case .textChunk(let id, _, let delta, let phase):
+            handleTextChunk(id: id, delta: delta, phase: phase)
+        case .turnEnd(let id, _, _, let result, let thinking, let answer):
+            handleTurnEnd(id: id, result: result, thinking: thinking, answer: answer)
+        case .ok(let id, _):
+            // 终结事件(非 send 的指令,如 set_config/set_state)。标记生成结束。
+            if id == inFlightId {
+                isGenerating = false
+                inFlightId = nil
+            }
+        case .error(let id, let code, let message):
+            handleError(id: id, code: code, message: message)
+        }
+    }
+
+    // MARK: - 内部
+
+    private func newClientId() -> String {
+        // ServeClient 内部有自己的 id 生成;此处给那些直传 .send(...) 的便捷场景用。
+        // 简单用时间戳+随机;ServeClient.newSession/setState 等自己生成,不走这里。
+        "u\(UUID().uuidString.prefix(8))"
+    }
+
+    private func handleTextChunk(id: String, delta: String, phase: ServePhase) {
+        inFlightId = id
+        guard let last = messages.last, last.role == .assistant else { return }
+        // 找最后一个同 phase 的段追加;没有就开新段。
+        var msg = last
+        if let idx = msg.segments.lastIndex(where: { $0.phase == phase }) {
+            msg.segments[idx].text += delta
+        } else {
+            msg.segments.append(ChatSegment(phase: phase, text: delta))
+        }
+        messages[messages.count - 1] = msg
+    }
+
+    private func handleTurnEnd(id: String, result: GenerationResult, thinking: String?, answer: String?) {
+        inFlightId = id
+        guard let last = messages.last, last.role == .assistant else { return }
+        var msg = last
+
+        // think=on 时,用顶层 thinking/answer 覆盖(单一事实源,Swift 不重新拆分)。
+        if let t = thinking, let a = answer {
+            msg.segments = []
+            if !t.isEmpty {
+                msg.segments.append(ChatSegment(phase: .think, text: t))
+            }
+            msg.segments.append(ChatSegment(phase: .answer, text: a))
+        } else {
+            // 非 think=on:result.text 整体作为 answer 段。
+            msg.segments = [ChatSegment(phase: .answer, text: result.text)]
+        }
+
+        // 技术摘要(design.md §6:dim 显示 stop_reason/token 数/t/s)。
+        msg.summary = buildSummary(result: result)
+        messages[messages.count - 1] = msg
+        // turn_end 不是终结事件;等 ok/error 标 isGenerating=false。
+    }
+
+    private func handleError(id: String?, code: ServeErrorCode, message: String) {
+        // error 是终结事件。
+        if id == inFlightId {
+            isGenerating = false
+            inFlightId = nil
+        }
+        switch code {
+        case .aborted:
+            // 中断:保留已生成文本,标"(已中断)"。
+            if let idx = messages.indices.last, messages[idx].role == .assistant {
+                messages[idx].isAborted = true
+            }
+        case .busy:
+            // busy = 已有 in-flight(理论上 UI 已禁用,这是兜底)。
+            lastError = "服务器忙:\(message)"
+            // 移除空占位(没生成的 assistant 消息)。
+            if let idx = messages.indices.last, messages[idx].role == .assistant,
+               messages[idx].segments.allSatisfy({ $0.text.isEmpty }) {
+                messages.remove(at: idx)
+            }
+        default:
+            lastError = message
+            // 标记最后一条 assistant 消息的错误。
+            if let idx = messages.indices.last, messages[idx].role == .assistant {
+                if messages[idx].fullText.isEmpty {
+                    messages[idx].errorText = message
+                }
+            }
+        }
+    }
+
+    private func handleSendError(_ err: ServeError) {
+        isGenerating = false
+        inFlightId = nil
+        switch err {
+        case .aborted:
+            if let idx = messages.indices.last, messages[idx].role == .assistant {
+                messages[idx].isAborted = true
+            }
+        case .busy:
+            lastError = "已有生成进行中"
+        default:
+            lastError = err.localizedDescription
+        }
+    }
+
+    /// 拼技术摘要(stop_reason · token 数 · t/s)。
+    private func buildSummary(result: GenerationResult) -> String {
+        var parts: [String] = []
+        parts.append("stop=\(result.stopReason)")
+        parts.append("tokens=\(result.tokenCount)")
+        if let tps = result.generationTps {
+            parts.append(String(format: "%.1f t/s", tps))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    // MARK: - 派生
+
+    /// 是否可以发送(已连接 + 有会话 + 不在生成)。
+    var canSend: Bool {
+        isConnected && sessionId != nil && !isGenerating
+    }
+}
