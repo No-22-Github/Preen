@@ -18,6 +18,8 @@ import SwiftUI
 struct TrainingPanel: View {
     @Bindable var store: TrainStore
     @Binding var modelPath: String
+    var recentRuns: [TrainingRun]
+    var onSelectRun: (TrainingRun) -> Void
     @State private var config: TrainingConfig = .defaultConfig
     @State private var phase: Phase = .empty  // idle 态下的子阶段
     @State private var showingChart = false
@@ -39,7 +41,11 @@ struct TrainingPanel: View {
             case .idle:
                 switch phase {
                 case .empty:
-                    TrainingEmptyView(config: $config) {
+                    TrainingEmptyView(
+                        config: $config,
+                        recentRuns: recentRuns,
+                        onSelectRun: onSelectRun
+                    ) {
                         phase = .configuring
                     }
                 case .configuring:

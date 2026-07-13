@@ -30,7 +30,7 @@ struct TrainingRunDetailView: View {
         .task(id: run.updatedAt) { await loadDetails() }
         .alert("导出失败", isPresented: Binding(
             get: { exportError != nil }, set: { if !$0 { exportError = nil } }
-        )) { Button("好") { exportError = nil } } message: { Text(exportError ?? "") }
+        )) { Button("关闭") { exportError = nil } } message: { Text(exportError ?? "") }
     }
 
     private var header: some View {

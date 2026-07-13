@@ -15,6 +15,7 @@ import SwiftUI
 
 struct TrainingRunningView: View {
     @Bindable var store: TrainStore
+    @State private var showingCancelConfirm = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -32,13 +33,29 @@ struct TrainingRunningView: View {
             HStack {
                 Spacer()
                 Button(role: .destructive) {
-                    store.cancel()
+                    showingCancelConfirm = true
                 } label: {
                     Label("取消训练", systemImage: "stop.circle")
                 }
                 .keyboardShortcut(.cancelAction)
             }
             .padding(16)
+            .confirmationDialog(
+                "确认取消训练？",
+                isPresented: $showingCancelConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("取消训练", role: .destructive) {
+                    store.cancel()
+                }
+                Button("继续训练", role: .cancel) {}
+            } message: {
+                if store.totalSteps > 0 {
+                    Text("训练进行到第 \(store.currentEpoch + 1) 轮 \(store.displayedCurrentStep)/\(store.totalSteps) 步。取消后训练进程会终止，已计算的 loss 曲线会保留，但未完成的进度无法恢复。")
+                } else {
+                    Text("取消后训练进程会终止，已计算的 loss 曲线会保留，但未完成的进度无法恢复。")
+                }
+            }
         }
     }
 

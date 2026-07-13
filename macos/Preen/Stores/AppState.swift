@@ -11,7 +11,6 @@ import Observation
 
 /// 侧边栏选中项。
 enum SidebarItem: String, CaseIterable, Identifiable {
-    case home
     case training
     case chat
     case history
@@ -19,7 +18,6 @@ enum SidebarItem: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .home: return "首页"
         case .training: return "训练"
         case .chat: return "对话"
         case .history: return "训练记录"
@@ -28,7 +26,6 @@ enum SidebarItem: String, CaseIterable, Identifiable {
     }
     var systemImage: String {
         switch self {
-        case .home: return "house"
         case .training: return "graduationcap"
         case .chat: return "bubble.left.and.bubble.right"
         case .history: return "clock.arrow.circlepath"
@@ -41,7 +38,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
 @MainActor
 final class AppState {
     // === 当前面板 ===
-    var selection: SidebarItem = .home
+    var selection: SidebarItem = .training
     var selectedRunID: UUID?
 
     // === 模型(侧边栏底部选,全 app 共享)===

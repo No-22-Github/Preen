@@ -7,17 +7,41 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct TrainingEmptyView: View {
     @Binding var config: TrainingConfig
+    var recentRuns: [TrainingRun]
+    var onSelectRun: (TrainingRun) -> Void
     var onConfigured: () -> Void  // 选完数据,进配置态
 
-    var body: some View {
-        VStack(spacing: 24) {
-            Spacer()
+    @State private var isDropTargeted = false
 
-            Image(systemName: "square.and.arrow.down")
-                .font(.system(size: 56))
+    var body: some View {
+        HStack(spacing: 0) {
+            // 左半:开始新训练。
+            newRunSection
+                .frame(maxWidth: .infinity)
+                .frame(maxHeight: .infinity)
+
+            if !recentRuns.isEmpty {
+                Divider()
+                // 右半:最近训练。
+                RecentRunsView(runs: recentRuns, onSelect: onSelectRun)
+                    .frame(maxWidth: 320)
+                    .padding(.vertical, 32)
+                    .padding(.trailing, 32)
+                    .padding(.leading, 24)
+                    .frame(maxHeight: .infinity)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var newRunSection: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "tray.and.arrow.down")
+                .font(.system(size: 48))
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
 
@@ -28,6 +52,9 @@ struct TrainingEmptyView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+
+            dropZone
+                .frame(maxWidth: 440)
 
             VStack(spacing: 12) {
                 PathRow(label: "训练数据",
@@ -44,7 +71,7 @@ struct TrainingEmptyView: View {
                     Spacer()
                 }
             }
-            .frame(maxWidth: 480)
+            .frame(maxWidth: 440)
 
             if !config.dataPath.isEmpty && !config.modelPath.isEmpty {
                 Button {
@@ -57,10 +84,56 @@ struct TrainingEmptyView: View {
                 .controlSize(.large)
                 .transition(.opacity)
             }
-
-            Spacer()
         }
         .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// 拖拽接受区:把文件拖进来直接设为训练数据,也保留点击走 Open Panel。
+    private var dropZone: some View {
+        VStack(spacing: 4) {
+            if config.dataPath.isEmpty {
+                Text("拖入数据文件,或点下方「选择…」")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text(URL(fileURLWithPath: config.dataPath).lastPathComponent)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+        .frame(maxWidth: 480, minHeight: 56)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(isDropTargeted ? Color.accentColor.opacity(0.12) : Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(
+                    isDropTargeted ? Color.accentColor : Color.secondary.opacity(0.4),
+                    style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])
+                )
+        )
+        .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
+            handleDrop(providers)
+        }
+    }
+
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first else { return false }
+        provider.loadItem(forTypeIdentifier: "public.file-url", options: nil) { item, _ in
+            guard let data = item as? Data,
+                  let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
+            let ext = url.pathExtension.lowercased()
+            let accepted = ["json", "jsonl", "csv"]
+            DispatchQueue.main.async {
+                if accepted.contains(ext) {
+                    config.dataPath = url.path
+                }
+            }
+        }
+        return true
     }
 }

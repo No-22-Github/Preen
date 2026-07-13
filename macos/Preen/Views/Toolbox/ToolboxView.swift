@@ -44,7 +44,7 @@ struct ToolboxView: View {
             get: { store.errorMessage != nil },
             set: { if !$0 { store.clearError() } }
         )) {
-            Button("好") { store.clearError() }
+            Button("关闭") { store.clearError() }
         } message: {
             Text(store.errorMessage ?? "未知错误")
         }
@@ -58,7 +58,7 @@ struct ToolboxView: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("将替换目录中的模型权重、配置和 tokenizer 文件，其他文件会保留。")
+            Text("将替换目录中的模型权重、配置和 tokenizer 文件；目录中的其他文件会保留。")
         }
     }
 
@@ -69,9 +69,11 @@ struct ToolboxView: View {
                     destination = .home
                 } label: {
                     Image(systemName: "chevron.left")
+                        .font(.title3.weight(.semibold))
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .font(.title3.weight(.semibold))
                 .disabled(store.isRunning)
                 .help(store.isRunning ? "请先等待任务完成或取消" : "返回工具箱")
             }
@@ -112,43 +114,44 @@ struct ToolboxView: View {
         }
     }
 
-    // MARK: - 卡片首页
+    // MARK: - 工具列表首页(系统设置风格)
 
     private var toolboxHome: some View {
         ScrollView {
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 250, maximum: 340), spacing: 16)],
-                alignment: .leading,
-                spacing: 16
-            ) {
-                toolCard(
-                    title: "模型转换",
-                    description: "将原生 RWKV-7 .pth 转为 HF safetensors 模型目录。",
-                    icon: "shippingbox.and.arrow.backward",
-                    tint: .blue
-                ) { destination = .modelConversion }
+            VStack(alignment: .leading, spacing: 24) {
+                Form {
+                    Section {
+                        toolRow(
+                            title: "模型转换",
+                            description: "将原生 RWKV-7 .pth 转为 HF safetensors 模型目录。",
+                            icon: "shippingbox.and.arrow.backward",
+                            tint: .blue
+                        ) { destination = .modelConversion }
 
-                toolCard(
-                    title: "数据集预览",
-                    description: "探测格式，查看最终训练文本和 token 截断情况。",
-                    icon: "doc.text.magnifyingglass",
-                    tint: .purple
-                ) { destination = .datasetPreview }
+                        toolRow(
+                            title: "数据集预览",
+                            description: "探测格式，查看最终训练文本和 token 截断情况。",
+                            icon: "doc.text.magnifyingglass",
+                            tint: .purple
+                        ) { destination = .datasetPreview }
 
-                toolCard(
-                    title: "数据集转换",
-                    description: "把 Alpaca、ShareGPT、ChatML 或裸 QA 转成标准 JSONL。",
-                    icon: "arrow.triangle.2.circlepath.doc.on.clipboard",
-                    tint: .green
-                ) { destination = .datasetConversion }
+                        toolRow(
+                            title: "数据集转换",
+                            description: "把 Alpaca、ShareGPT、ChatML 或裸 QA 转成标准 JSONL。",
+                            icon: "arrow.triangle.2.circlepath.doc.on.clipboard",
+                            tint: .green
+                        ) { destination = .datasetConversion }
+                    }
+                }
+                .formStyle(.grouped)
             }
-            .padding(24)
-            .frame(maxWidth: 1080, alignment: .leading)
+            .padding(.vertical, 20)
+            .frame(maxWidth: 820, alignment: .center)
             .frame(maxWidth: .infinity, alignment: .top)
         }
     }
 
-    private func toolCard(
+    private func toolRow(
         title: String,
         description: String,
         icon: String,
@@ -156,38 +159,27 @@ struct ToolboxView: View {
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(alignment: .top) {
-                    Image(systemName: icon)
-                        .font(.system(size: 27, weight: .medium))
-                        .foregroundStyle(tint)
-                        .frame(width: 50, height: 50)
-                        .background(tint.opacity(0.13), in: RoundedRectangle(cornerRadius: 12))
-                    Spacer()
-                    Image(systemName: "arrow.up.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.tertiary)
-                }
-                Text(title)
-                    .font(.title3.bold())
-                Text(description)
-                    .font(.subheadline)
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
+                    .frame(width: 28, height: 28)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                    Text(description)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
             }
-            .padding(18)
-            .frame(maxWidth: .infinity, minHeight: 185, alignment: .leading)
-            .contentShape(RoundedRectangle(cornerRadius: 14))
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 14))
-        .overlay {
-            RoundedRectangle(cornerRadius: 14)
-                .stroke(.separator.opacity(0.45), lineWidth: 1)
-        }
-        .preenGlassSurface(cornerRadius: 14, interactive: true)
     }
 
     // MARK: - 模型转换
@@ -195,7 +187,14 @@ struct ToolboxView: View {
     private var modelConversionView: some View {
         toolScroll {
             surface {
-                toolPathRow("原生模型", detail: ".pth", path: store.modelSourcePath) {
+                toolPathRow("原生模型", detail: ".pth", path: store.modelSourcePath,
+                            acceptsDrop: true,
+                            onDropPath: { url in
+                        store.modelSourcePath = url.path
+                        store.modelOutputPath = PythonResolver.modelsDirectory
+                            .appendingPathComponent(url.deletingPathExtension().lastPathComponent)
+                            .path
+                    }) {
                     if let url = pickFile() {
                         store.modelSourcePath = url.path
                         store.modelOutputPath = PythonResolver.modelsDirectory
@@ -237,6 +236,11 @@ struct ToolboxView: View {
             }
 
             HStack {
+                if store.isRunning {
+                    Button("取消") { store.cancel() }
+                        .buttonStyle(.bordered)
+                }
+                Spacer()
                 Button {
                     if store.modelOutputRequiresConfirmation {
                         showingOverwriteConfirmation = true
@@ -249,11 +253,6 @@ struct ToolboxView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .disabled(!store.canConvertModel)
-
-                if store.isRunning {
-                    Button("取消") { store.cancel() }
-                        .buttonStyle(.bordered)
-                }
             }
 
             jobStatus(for: "model")
@@ -316,14 +315,17 @@ struct ToolboxView: View {
                 }
             }
 
-            Button {
-                store.previewDataset(modelPath: modelPath)
-            } label: {
-                Label("检查数据集", systemImage: "doc.text.magnifyingglass")
+            HStack {
+                Spacer()
+                Button {
+                    store.previewDataset(modelPath: modelPath)
+                } label: {
+                    Label("检查数据集", systemImage: "doc.text.magnifyingglass")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(!store.canPreviewDataset || modelPath.isEmpty)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(!store.canPreviewDataset || modelPath.isEmpty)
 
             jobStatus(for: "dataset")
 
@@ -339,7 +341,14 @@ struct ToolboxView: View {
     }
 
     private var datasetSourceRow: some View {
-        toolPathRow("源数据", detail: "JSON / JSONL / CSV", path: store.datasetSourcePath) {
+        toolPathRow("源数据", detail: "JSON / JSONL / CSV", path: store.datasetSourcePath,
+                    acceptsDrop: true,
+                    onDropPath: { url in
+                store.selectDatasetSource(path: url.path)
+                store.datasetOutputPath = PythonResolver.datasetsDirectory
+                    .appendingPathComponent(url.deletingPathExtension().lastPathComponent + ".standard.jsonl")
+                    .path
+            }) {
             if let url = pickFile() {
                 store.selectDatasetSource(path: url.path)
                 store.datasetOutputPath = PythonResolver.datasetsDirectory
@@ -501,7 +510,6 @@ struct ToolboxView: View {
                 .foregroundStyle(.secondary)
         }
         .buttonStyle(.bordered)
-        .controlSize(.small)
     }
 
     private var datasetPreviewRangeText: String {
@@ -554,6 +562,11 @@ struct ToolboxView: View {
             }
 
             HStack {
+                if store.isRunning {
+                    Button("取消") { store.cancel() }
+                        .buttonStyle(.bordered)
+                }
+                Spacer()
                 Button {
                     store.importDataset()
                 } label: {
@@ -562,11 +575,6 @@ struct ToolboxView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .disabled(!store.canImportDataset)
-
-                if store.isRunning {
-                    Button("取消") { store.cancel() }
-                        .buttonStyle(.bordered)
-                }
             }
 
             jobStatus(for: "dataset")
@@ -629,6 +637,8 @@ struct ToolboxView: View {
         _ title: String,
         detail: String?,
         path: String,
+        acceptsDrop: Bool = false,
+        onDropPath: ((URL) -> Void)? = nil,
         action: @escaping () -> Void
     ) -> some View {
         HStack(spacing: 12) {
@@ -649,6 +659,21 @@ struct ToolboxView: View {
             Button("选择…", action: action)
                 .disabled(store.isRunning)
         }
+        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+            guard acceptsDrop, let onDropPath else { return false }
+            return Self.handleFileDrop(providers, handler: onDropPath)
+        }
+    }
+
+    /// 从拖拽数据提取第一个文件 URL。
+    private static func handleFileDrop(_ providers: [NSItemProvider], handler: @escaping (URL) -> Void) -> Bool {
+        guard let provider = providers.first else { return false }
+        provider.loadItem(forTypeIdentifier: "public.file-url", options: nil) { item, _ in
+            guard let data = item as? Data,
+                  let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
+            DispatchQueue.main.async { handler(url) }
+        }
+        return true
     }
 
     @ViewBuilder

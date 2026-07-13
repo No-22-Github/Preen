@@ -2,18 +2,17 @@ import SwiftUI
 
 struct GlobalStatusBar: View {
     @Bindable var appState: AppState
+    @Environment(\.openWindow) private var openWindow
+    @State private var showingBackendStatus = false
+    @State private var isHoveringStatus = false
 
     private var backend: BackendStore { appState.backendStore }
     private var train: TrainStore { appState.trainStore }
 
     var body: some View {
         HStack(spacing: 12) {
-            statusDot(color: healthColor)
-            Text(healthLabel)
-                .fontWeight(.medium)
-
-            Divider().frame(height: 14)
-            Label(backend.runtime.message, systemImage: "terminal")
+            // 绿点 + 健康文字 + 运行时消息(可点击,打开后端状态)。
+            statusCluster
 
             if backend.training.phase == .running {
                 Divider().frame(height: 14)
@@ -41,6 +40,16 @@ struct GlobalStatusBar: View {
                 Text("剩余 \(TrainStore.formatDuration(remaining))")
                     .foregroundStyle(.secondary)
             }
+
+            // 关于入口(最右侧)。
+            Button {
+                openWindow(id: "about")
+            } label: {
+                Image(systemName: "info.circle")
+            }
+            .buttonStyle(.borderless)
+            .help("关于 Preen")
+            .labelStyle(.iconOnly)
         }
         .font(.caption.monospacedDigit())
         .lineLimit(1)
@@ -49,6 +58,36 @@ struct GlobalStatusBar: View {
         .background(.bar)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("全局后端状态：\(healthLabel)")
+        .sheet(isPresented: $showingBackendStatus) {
+            BackendStatusView(store: appState.backendStore)
+        }
+    }
+
+    /// 绿点 + 健康标签 + 运行时消息,整体可点击(hover 淡背景)。
+    private var statusCluster: some View {
+        Button {
+            showingBackendStatus = true
+        } label: {
+            HStack(spacing: 12) {
+                Circle()
+                    .fill(healthColor)
+                    .frame(width: 7, height: 7)
+                Text(healthLabel)
+                    .fontWeight(.medium)
+                Divider().frame(height: 14)
+                Label(backend.runtime.message, systemImage: "terminal")
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(isHoveringStatus ? Color.primary.opacity(0.06) : .clear)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHoveringStatus = $0 }
+        .help("查看 Python、MLX 与后端日志")
     }
 
     private var healthColor: Color {
@@ -71,10 +110,6 @@ struct GlobalStatusBar: View {
         case .unavailable: return "运行时异常"
         case .ready: return backend.training.phase == .running ? "训练中" : "后端正常"
         }
-    }
-
-    private func statusDot(color: Color) -> some View {
-        Circle().fill(color).frame(width: 7, height: 7)
     }
 
     private func pressureLabel(_ pressure: MemoryPressureLevel) -> String {

@@ -14,8 +14,10 @@ struct ChatInputBar: View {
     @Binding var text: String
     var canSend: Bool
     var isGenerating: Bool
+    var canClear: Bool
     var onSend: () -> Void
     var onAbort: () -> Void
+    var onClearSession: () -> Void
 
     @FocusState private var isFocused: Bool
 
@@ -24,10 +26,11 @@ struct ChatInputBar: View {
             // 输入区。
             TextEditor(text: $text)
                 .font(.body)
+                .scrollContentBackground(.hidden)
                 .frame(minHeight: 36, maxHeight: 120)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(.quaternary, in: .rect)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(.quaternary.opacity(0.7), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .focused($isFocused)
                 .disabled(isGenerating)  // 生成时不让编辑
                 .onChange(of: text) { _, new in
@@ -43,24 +46,36 @@ struct ChatInputBar: View {
                     return .ignored
                 }
 
-            // 发送 / abort 按钮(互斥)。
-            if isGenerating {
-                Button(role: .destructive, action: onAbort) {
-                    Label("停止", systemImage: "stop.fill")
-                        .frame(minWidth: 70)
+            // 右侧按钮列:清除会话(上) + 发送/停止(下)。
+            VStack(spacing: 8) {
+                Button(action: onClearSession) {
+                    Image(systemName: "trash")
+                        .font(.body)
+                        .frame(width: 30, height: 30)
                 }
                 .buttonStyle(.bordered)
-                .controlSize(.large)
-                .keyboardShortcut(.escape, modifiers: [])
-            } else {
-                Button(action: send) {
-                    Label("发送", systemImage: "arrow.up")
-                        .frame(minWidth: 70)
+                .disabled(!canClear || isGenerating)
+                .help("清除当前会话,开始新一轮")
+
+                if isGenerating {
+                    Button(role: .destructive, action: onAbort) {
+                        Image(systemName: "stop.fill")
+                            .font(.body)
+                            .frame(width: 30, height: 30)
+                    }
+                    .keyboardShortcut(.escape, modifiers: [])
+                    .help("停止生成 (Esc)")
+                } else {
+                    Button(action: send) {
+                        Image(systemName: "arrow.up")
+                            .font(.body.weight(.semibold))
+                            .frame(width: 30, height: 30)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!canSend || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .help("发送 (⌘⏎)")
                 }
-                .preenGlassButton(prominent: true)
-                .controlSize(.large)
-                .disabled(!canSend || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                .keyboardShortcut(.return, modifiers: .command)
             }
         }
         .padding(12)

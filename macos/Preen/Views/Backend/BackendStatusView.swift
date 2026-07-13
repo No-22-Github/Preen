@@ -10,7 +10,15 @@ struct BackendStatusView: View {
             HStack {
                 Text("后端环境").font(.title2)
                 Spacer()
-                Button("重新检查") { Task { await store.checkRuntime() } }
+                if store.runtime.phase == .checking {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("检查中…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Button("重新检查") { Task { await store.checkRuntime() } }
+                }
             }
             statusRow("运行时", status: store.runtime.message, phase: store.runtime.phase == .ready ? .ready : (store.runtime.phase == .checking ? .starting : .failed))
             statusRow("推理", status: store.inference.message, phase: store.inference.phase)

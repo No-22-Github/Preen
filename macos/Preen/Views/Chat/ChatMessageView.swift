@@ -35,7 +35,7 @@ struct ChatMessageView: View {
             .textSelection(.enabled)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(Color.accentColor.opacity(0.15), in: .rect)
+            .background(Color.accentColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .frame(maxWidth: 480, alignment: .trailing)
     }
 
@@ -73,6 +73,7 @@ struct ChatMessageView: View {
         .frame(maxWidth: 480, alignment: .leading)
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+        .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     @ViewBuilder

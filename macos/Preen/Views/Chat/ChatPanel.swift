@@ -26,9 +26,12 @@ struct ChatPanel: View {
     var onDisconnect: () -> Void
 
     @State private var inputText: String = ""
-    @State private var showSampler: Bool = false
+    /// 采样配置 sheet(独立弹窗,不再塞顶栏)。
+    @State private var showSamplerSheet: Bool = false
     /// 启动日志弹窗:点「连接」后显示,ready 自动关 / 失败保留排查。
     @State private var isShowingStartupLog: Bool = false
+    /// 清除会话确认弹窗。
+    @State private var showClearConfirm: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -43,14 +46,33 @@ struct ChatPanel: View {
                 text: $inputText,
                 canSend: store.canSend,
                 isGenerating: store.isGenerating,
+                canClear: store.isConnected && !store.messages.isEmpty,
                 onSend: { store.send(text: inputText); inputText = "" },
-                onAbort: { store.abort() }
+                onAbort: { store.abort() },
+                onClearSession: { showClearConfirm = true }
             )
         }
-        .sheet(isPresented: $isShowingStartupLog) {
-            StartupLogSheet(store: store) {
-                isShowingStartupLog = false
+        .confirmationDialog(
+            "清除当前会话?",
+            isPresented: $showClearConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("清除", role: .destructive) {
+                store.newSession()
             }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("将清空所有对话消息并开始新一轮。此操作无法撤销。")
+        }
+        .sheet(isPresented: $isShowingStartupLog) {
+            StartupLogSheet(
+                store: store,
+                onDismiss: { isShowingStartupLog = false },
+                onRetry: { onConnect() }
+            )
+        }
+        .sheet(isPresented: $showSamplerSheet) {
+            samplerSheet
         }
         .onChange(of: injectedStatePath) { _, newPath in
             // 训练完成跳来:自动连 + 切 state。
@@ -76,11 +98,12 @@ struct ChatPanel: View {
 
             // state 显示。
             if let path = store.statePath {
-                Label(URL(fileURLWithPath: path).lastPathComponent, systemImage: "cpu")
+                let name: String = URL(fileURLWithPath: path).lastPathComponent
+                Label(name, systemImage: "cpu")
                     .font(.caption)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(.quaternary, in: .rect)
+                    .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
             }
 
             // 选择 state。
@@ -91,11 +114,14 @@ struct ChatPanel: View {
             }
             .disabled(!store.isConnected)
 
-            // 采样配置(折叠 DisclosureGroup)。
-            DisclosureGroup("采样", isExpanded: $showSampler) {
-                samplerControls
+            // 采样配置(独立 sheet,省略号表示打开新界面)。
+            Button {
+                showSamplerSheet = true
+            } label: {
+                Label("采样…", systemImage: "slider.horizontal.3")
             }
-            .font(.caption)
+            .disabled(!store.isConnected)
+            .help("温度、top_p、惩罚等生成参数")
 
             // 连接 / 断开。
             if store.isConnected {
@@ -117,26 +143,51 @@ struct ChatPanel: View {
         .preenGlassSurface(cornerRadius: 14)
     }
 
-    private var samplerControls: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                LabeledDoubleField(label: "temp", value: $store.genConfig.temperature, default: 1.2)
-                LabeledDoubleField(label: "top_p", value: $store.genConfig.topP, default: 0.5)
-                LabeledIntField(label: "max_tokens", value: $store.genConfig.maxTokens, default: 300)
+    private var samplerSheet: some View {
+        VStack(spacing: 0) {
+            Text("采样配置")
+                .font(.headline)
+                .padding(.top, 20)
+                .padding(.bottom, 4)
+            Text("修改后点「应用」,下一轮回复生效")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.bottom, 16)
+
+            Form {
+                Section("采样") {
+                    HStack {
+                        LabeledDoubleField(label: "temp", value: $store.genConfig.temperature, default: 1.2)
+                        LabeledDoubleField(label: "top_p", value: $store.genConfig.topP, default: 0.5)
+                        LabeledIntField(label: "max_tokens", value: $store.genConfig.maxTokens, default: 300)
+                    }
+                }
+                Section("惩罚") {
+                    HStack {
+                        LabeledDoubleField(label: "presence", value: $store.genConfig.presencePenalty, default: 0.4)
+                        LabeledDoubleField(label: "frequency", value: $store.genConfig.frequencyPenalty, default: 0.4)
+                        LabeledDoubleField(label: "decay", value: $store.genConfig.penaltyDecay, default: 0.996)
+                    }
+                }
+                Section("可复现性") {
+                    LabeledIntField(label: "seed", value: $store.genConfig.seed, default: 42)
+                }
             }
+            .formStyle(.grouped)
+
             HStack {
-                LabeledIntField(label: "seed", value: $store.genConfig.seed, default: 42)
-                LabeledDoubleField(label: "presence", value: $store.genConfig.presencePenalty, default: 0.4)
-                LabeledDoubleField(label: "frequency", value: $store.genConfig.frequencyPenalty, default: 0.4)
+                Button("取消", role: .cancel) { showSamplerSheet = false }
+                Spacer()
+                Button("应用") {
+                    store.applyConfig()
+                    showSamplerSheet = false
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
             }
-            HStack {
-                LabeledDoubleField(label: "decay", value: $store.genConfig.penaltyDecay, default: 0.996)
-                Button("应用(下轮生效)") { store.applyConfig() }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-            }
+            .padding(16)
         }
-        .padding(.vertical, 4)
+        .frame(width: 460)
     }
 
     // MARK: - 消息列表

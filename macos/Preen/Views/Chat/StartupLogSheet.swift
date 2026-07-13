@@ -15,6 +15,8 @@ struct StartupLogSheet: View {
     @Bindable var store: ChatStore
     /// 关闭弹窗(成功或用户手动关)。
     var onDismiss: () -> Void
+    /// 重试:重新发起连接(失败态下可用)。
+    var onRetry: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -115,10 +117,9 @@ struct StartupLogSheet: View {
             Spacer()
             if store.startupError != nil {
                 Button("重试") {
-                    // 重试 = 关弹窗 + 让用户再点连接(或这里直接重连)。
-                    // 简单起见:只关闭弹窗,用户在主面板点「连接」重发。
-                    onDismiss()
+                    onRetry()
                 }
+                .keyboardShortcut(.defaultAction)
             }
             Button(store.isConnected ? "完成" : "关闭") {
                 onDismiss()

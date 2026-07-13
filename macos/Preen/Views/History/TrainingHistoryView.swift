@@ -25,6 +25,7 @@ struct TrainingHistoryView: View {
                     }
                     Button { importState() } label: { Image(systemName: "plus") }
                         .help("登记外部 State")
+                        .labelStyle(.iconOnly)
                 }
                 .padding(10)
                 List(filteredRuns, selection: $appState.selectedRunID) { run in
@@ -44,7 +45,7 @@ struct TrainingHistoryView: View {
                     }
                     .tag(run.id)
                 }
-                .listStyle(.sidebar)
+                .listStyle(.inset)
             }
             .frame(minWidth: 260, idealWidth: 300, maxWidth: 360)
 
@@ -64,7 +65,7 @@ struct TrainingHistoryView: View {
         }
         .alert("无法导入 State", isPresented: Binding(
             get: { importError != nil }, set: { if !$0 { importError = nil } }
-        )) { Button("好") { importError = nil } } message: { Text(importError ?? "") }
+        )) { Button("关闭") { importError = nil } } message: { Text(importError ?? "") }
     }
 
     private func importState() {
