@@ -42,7 +42,7 @@ struct ContentView: View {
                           injectedStatePath: $appState.injectedStatePath)
             }
         case .history:
-            libraryPlaceholder
+            TrainingHistoryView(appState: appState)
         }
     }
 
@@ -60,18 +60,4 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var libraryPlaceholder: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "shippingbox")
-                .font(.system(size: 40))
-                .foregroundStyle(.secondary)
-            Text("训练记录")
-                .font(.title3)
-                .foregroundStyle(.secondary)
-            Text("记录详情将在下一片接入")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
 }

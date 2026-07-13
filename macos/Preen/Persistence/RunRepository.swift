@@ -57,6 +57,48 @@ actor RunRepository {
         try load(from: directoryURL(for: id).appendingPathComponent(Self.runFilename))
     }
 
+    func loadEvents(id: UUID) -> [TrainEvent] {
+        let url = directoryURL(for: id).appendingPathComponent(Self.eventsFilename)
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+        let decoder = JSONDecoder()
+        return text.split(whereSeparator: \.isNewline).compactMap { line in
+            try? decoder.decode(TrainEvent.self, from: Data(line.utf8))
+        }
+    }
+
+    func loadStderr(id: UUID) -> String {
+        let url = directoryURL(for: id).appendingPathComponent(Self.stderrFilename)
+        return (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+    }
+
+    func registerImportedState(stateURL: URL, metadataURL: URL? = nil) throws -> TrainingRun {
+        let now = Date()
+        var run = TrainingRun(kind: .imported, status: .completed, createdAt: now)
+        run.finishedAt = now
+        run.artifacts.statePath = stateURL.path
+        if let metadataURL, fileManager.fileExists(atPath: metadataURL.path) {
+            run.artifacts.metadataPath = metadataURL.path
+            if let metadata = try? StateMetadata.load(from: metadataURL) {
+                run.summary.actualEpochs = metadata.result.epochsRun
+                run.summary.finalLoss = metadata.result.finalLoss
+                run.summary.heldOutLoss = metadata.result.bestHeldOutLoss
+                run.summary.stateStd = metadata.result.finalStateStd
+                run.summary.elapsedSeconds = metadata.result.elapsed
+                run.summary.dataHash = metadata.dataSHA256
+            }
+        }
+        _ = try create(run)
+        return run
+    }
+
+    func setPthArtifact(runID: UUID, path: String) throws -> TrainingRun {
+        var run = try load(id: runID)
+        run.artifacts.pthPath = path
+        run.updatedAt = Date()
+        try save(run)
+        return run
+    }
+
     func scan() -> [TrainingRun] {
         guard let directories = try? fileManager.contentsOfDirectory(
             at: rootURL,

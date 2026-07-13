@@ -126,10 +126,10 @@
 - `macos/Preen/Persistence/RunRepository.swift`
 - `macos/Preen/ContentView.swift`
 
-- [ ] 将当前 State 库 placeholder 扩成训练记录列表。
-- [ ] 详情展示配置、数据哈希、实际轮数、final/held-out loss、state std、耗时和全部产物。
-- [ ] 支持筛选状态、复制日志、导出事件、Finder 中显示、去对话、导出 `.pth`。
-- [ ] 外部 state 可作为 imported record 登记，不伪造训练来源。
+- [x] 将当前 State 库 placeholder 扩成训练记录列表。
+- [x] 详情展示配置、数据哈希、实际轮数、final/held-out loss、state std、耗时和全部产物。
+- [x] 支持筛选状态、复制日志、导出事件、Finder 中显示、去对话、导出 `.pth`。
+- [x] 外部 state 可作为 imported record 登记，不伪造训练来源。
 
 验收：用户不用打开终端即可回答“这次用什么数据和参数训的、为什么失败、产物在哪里”。
 

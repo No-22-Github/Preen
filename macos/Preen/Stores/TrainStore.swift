@@ -374,6 +374,14 @@ final class TrainStore {
         let metadataURL = baseURL.appendingPathExtension("meta.json")
         if FileManager.default.fileExists(atPath: metadataURL.path) {
             run.artifacts.metadataPath = metadataURL.path
+            if let metadata = try? StateMetadata.load(from: metadataURL) {
+                run.summary.actualEpochs = metadata.result.epochsRun
+                run.summary.finalLoss = metadata.result.finalLoss
+                run.summary.heldOutLoss = metadata.result.bestHeldOutLoss
+                run.summary.stateStd = metadata.result.finalStateStd
+                run.summary.elapsedSeconds = metadata.result.elapsed
+                run.summary.dataHash = metadata.dataSHA256
+            }
         }
         if let config = run.config {
             let pthURL = config.pthOutputPath.map(URL.init(fileURLWithPath:))
@@ -424,7 +432,7 @@ final class TrainStore {
     }
 
     /// 把秒数格式化成 `Mm Ss` / `Hh Mm`。
-    static func formatDuration(_ seconds: Double) -> String {
+    nonisolated static func formatDuration(_ seconds: Double) -> String {
         let s = Int(seconds)
         if s < 60 { return "\(s)s" }
         if s < 3600 { return "\(s / 60)m \(s % 60)s" }
