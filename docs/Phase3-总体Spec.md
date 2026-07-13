@@ -517,6 +517,8 @@ Preen.app/Contents/
   models/        模型权重（GB 级，绝不进 bundle）
   states/        训练产物 state + metadata
   datasets/      导入产物 jsonl + import.json
+  runs/          每次训练的 run.json + events.jsonl + stderr.log
+  logs/          runtime / serve 的滚动诊断日志
   hf-cache/      HF_HOME 指到这里，禁止污染 ~/.cache
 ```
 
