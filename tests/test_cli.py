@@ -16,8 +16,130 @@ def test_root_help_lists_product_commands():
     for command in (
         "train", "eval", "export", "preview", "chat",
         "doctor", "data-info", "state-info",
+        "convert-model", "dataset-preview", "dataset-preview-page", "import",
     ):
         assert command in result.stdout
+
+
+def test_convert_model_emits_tool_events(tmp_path, monkeypatch):
+    source = tmp_path / "model.pth"
+    source.write_bytes(b"fixture")
+    out = tmp_path / "converted"
+
+    def fake_convert(source_path, output, **kwargs):
+        kwargs["progress_callback"]("convert", "转换张量", 1, 2)
+        output.mkdir()
+        return {"output_path": str(output), "tensor_count": 2, "precision": "bf16"}
+
+    monkeypatch.setattr("statetuner.model_converter.convert", fake_convert)
+    result = runner.invoke(app, [
+        "convert-model", "--rwkv7", str(source), "--out", str(out),
+    ])
+    assert result.exit_code == 0, result.output
+    events = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+    assert [event["type"] for event in events] == ["started", "progress", "completed"]
+    assert events[-1]["tool"] == "model_conversion"
+    assert events[-1]["result"]["tensor_count"] == 2
+
+
+def test_import_events_support_manual_mapping(tmp_path):
+    source = tmp_path / "custom.jsonl"
+    source.write_text('{"ask":"你好","reply":"喵"}\n', encoding="utf-8")
+    out = tmp_path / "standard.jsonl"
+    result = runner.invoke(app, [
+        "import", "--data", str(source), "--out", str(out),
+        "--prompt-key", "ask", "--response-key", "reply", "--events",
+    ])
+    assert result.exit_code == 0, result.output
+    events = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+    assert [event["type"] for event in events] == ["started", "completed"]
+    assert events[-1]["result"]["record_count"] == 1
+    assert out.exists()
+
+
+def test_dataset_preview_emits_render_and_inspection(tmp_path, monkeypatch):
+    class Tokenizer:
+        @staticmethod
+        def encode(text):
+            return [ord(char) for char in text]
+
+    model = tmp_path / "model"
+    model.mkdir()
+    source = tmp_path / "custom.jsonl"
+    source.write_text('{"ask":"你好","reply":"喵"}\n', encoding="utf-8")
+    monkeypatch.setattr("mlx_lm.utils.load_tokenizer", lambda *args, **kwargs: Tokenizer())
+    result = runner.invoke(app, [
+        "dataset-preview", "--model", str(model), "--data", str(source),
+        "--prompt-key", "ask", "--response-key", "reply", "--ctx-len", "128",
+    ])
+    assert result.exit_code == 0, result.output
+    events = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+    payload = events[-1]["result"]
+    assert events[-1]["type"] == "completed"
+    assert payload["inspection"]["valid"] == 1
+    assert payload["preview"][0]["full_text"] == (
+        payload["preview"][0]["prefix_text"] + payload["preview"][0]["target_text"]
+    )
+
+
+def test_dataset_preview_cache_pages_without_returning_all_rows(tmp_path, monkeypatch):
+    class Tokenizer:
+        @staticmethod
+        def encode(text):
+            return [ord(char) for char in text]
+
+    model = tmp_path / "model"
+    model.mkdir()
+    source = tmp_path / "many.jsonl"
+    source.write_text("".join(
+        json.dumps({"q": f"问题 {i}", "a": f"回答 {i}"}, ensure_ascii=False) + "\n"
+        for i in range(45)
+    ), encoding="utf-8")
+    cache = tmp_path / "preview-cache.jsonl"
+    monkeypatch.setattr("mlx_lm.utils.load_tokenizer", lambda *args, **kwargs: Tokenizer())
+
+    initial = runner.invoke(app, [
+        "dataset-preview", "--model", str(model), "--data", str(source),
+        "--cache-out", str(cache), "--page-size", "20",
+    ])
+    assert initial.exit_code == 0, initial.output
+    initial_events = [json.loads(line) for line in initial.stdout.splitlines() if line.strip()]
+    payload = initial_events[-1]["result"]
+    assert len(payload["preview"]) == 20
+    assert payload["pagination"] == {
+        "cache_path": str(cache), "total": 45, "page_size": 20, "page_count": 3,
+    }
+
+    page = runner.invoke(app, [
+        "dataset-preview-page", "--cache", str(cache), "--page", "3",
+    ])
+    assert page.exit_code == 0, page.output
+    page_events = [json.loads(line) for line in page.stdout.splitlines() if line.strip()]
+    page_payload = page_events[-1]["result"]
+    assert page_payload["page"] == 3
+    assert page_payload["total"] == 45
+    assert len(page_payload["preview"]) == 5
+    assert page_payload["preview"][0]["prompt_text"] == "问题 40"
+
+
+def test_data_info_routes_import_sidecar_to_standard_loader(tmp_path, monkeypatch):
+    class Tokenizer:
+        @staticmethod
+        def encode(text):
+            return [ord(char) for char in text]
+
+    model = tmp_path / "model"
+    model.mkdir()
+    data = tmp_path / "standard.jsonl"
+    data.write_text('{"prompt":"你好","response":"喵"}\n', encoding="utf-8")
+    sidecar = data.with_name(data.stem + data.suffix + ".import.json")
+    sidecar.write_text('{"result":{"template":"qa"}}', encoding="utf-8")
+    monkeypatch.setattr("mlx_lm.utils.load_tokenizer", lambda *args, **kwargs: Tokenizer())
+    result = runner.invoke(app, [
+        "data-info", "--model", str(model), "--data", str(data), "--json",
+    ])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["valid"] == 1
 
 
 def test_preview_ab_requires_state_before_model_load(tmp_path):

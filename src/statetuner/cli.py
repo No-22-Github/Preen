@@ -83,6 +83,9 @@ def data_info(
     model: Path = typer.Option(..., "--model", "-m", help="HF 模型目录(tokenizer 来源)"),
     data: Path = typer.Option(..., "--data", "-d", help="NekoQA JSON/JSONL"),
     ctx_len: int = typer.Option(512, "--ctx-len"),
+    template: str = typer.Option(
+        "auto", "--template", help="auto(按 sidecar) | qa | instruction",
+    ),
     json_output: bool = typer.Option(False, "--json", help="stdout 输出结构化 JSON"),
 ):
     """用真实 tokenizer 检查数据字段、长度与截断情况。"""
@@ -92,8 +95,11 @@ def data_info(
         _bad_input(ValueError(f"数据文件不存在: {data}"))
     if ctx_len <= 0:
         _bad_input(ValueError("--ctx-len 必须 > 0"))
+    if template not in ("auto", "qa", "instruction"):
+        _bad_input(ValueError("--template 只支持 auto / qa / instruction"))
 
-    from .inspection import inspect_data
+    from .inspection import inspect_data, inspect_standard_jsonl
+    from .service import _has_import_sidecar
     from mlx_lm.utils import load_tokenizer
 
     typer.echo(f"# 加载 tokenizer: {model}", err=True)
@@ -101,7 +107,21 @@ def data_info(
         tok = load_tokenizer(
             str(model), tokenizer_config_extra={"trust_remote_code": True}
         )
-        result = inspect_data(data, tok, ctx_len=ctx_len)
+        if _has_import_sidecar(data):
+            selected_template = template
+            if selected_template == "auto":
+                sidecar = data.with_name(data.stem + data.suffix + ".import.json")
+                payload = json.loads(sidecar.read_text(encoding="utf-8"))
+                selected_template = payload.get("result", {}).get("template", "qa")
+            result = inspect_standard_jsonl(
+                data, tok, template=selected_template, ctx_len=ctx_len,
+            )
+        else:
+            if template == "instruction":
+                raise ValueError(
+                    "无 .import.json sidecar 的遗留数据只能按 qa 模板检查"
+                )
+            result = inspect_data(data, tok, ctx_len=ctx_len)
     except (OSError, ValueError, TypeError) as exc:
         _bad_input(exc)
     payload = result.to_dict()
@@ -805,6 +825,223 @@ def preview(
             typer.echo(result.summary_line())
 
 
+@app.command("convert-model")
+def convert_model(
+    rwkv7: Path = typer.Option(..., "--rwkv7", help="BlinkDL 原生 RWKV-7 .pth"),
+    out: Path = typer.Option(..., "--out", "-o", help="输出 HF 模型目录"),
+    precision: str = typer.Option("bf16", "--precision", help="bf16(推荐) | fp16 | fp32"),
+    reference: Optional[Path] = typer.Option(
+        None, "--reference", help="可选:同架构 safetensors 活模型校验模板",
+    ),
+    tokenizer_src: Optional[Path] = typer.Option(
+        None, "--tokenizer-src", help="可选:自定义 World tokenizer 目录",
+    ),
+    overwrite: bool = typer.Option(False, "--overwrite", help="允许写入非空输出目录"),
+):
+    """原生 RWKV-7 .pth → Preen/MLX 可用的 HF safetensors 模型目录。
+
+    stdout 只输出工具任务 JSON Lines；人类日志走 stderr，供 App 与 CLI 共用。
+    """
+    if not rwkv7.is_file():
+        _bad_input(ValueError(f"原生模型文件不存在: {rwkv7}"))
+    if rwkv7.suffix.lower() != ".pth":
+        _bad_input(ValueError("--rwkv7 必须是 .pth 文件"))
+    if precision not in ("bf16", "fp16", "fp32"):
+        _bad_input(ValueError("--precision 只支持 bf16 / fp16 / fp32"))
+    if reference is not None and not reference.is_file():
+        _bad_input(ValueError(f"reference 不存在: {reference}"))
+    if tokenizer_src is not None and not tokenizer_src.is_dir():
+        _bad_input(ValueError(f"tokenizer 目录不存在: {tokenizer_src}"))
+    if out.exists() and not out.is_dir():
+        _bad_input(ValueError(f"输出路径已存在且不是目录: {out}"))
+    if out.is_dir() and any(out.iterdir()) and not overwrite:
+        _bad_input(ValueError(f"输出目录非空: {out};如需覆盖请传 --overwrite"))
+
+    import time
+    from .model_converter import convert
+    from .tool_events import (
+        ToolEventEmitter, cancelled as tool_cancelled, completed as tool_completed,
+        failed as tool_failed, progress as tool_progress, started as tool_started,
+    )
+
+    tool = "model_conversion"
+    emitter = ToolEventEmitter()
+    emitter.emit(tool_started(tool, f"开始转换 {rwkv7.name}"))
+    began = time.monotonic()
+
+    def _progress(phase: str, message: str, current: Optional[int], total: Optional[int]) -> None:
+        fraction = 0.02 if phase == "read" else 0.9 if phase == "write" else None
+        if phase == "convert" and current is not None and total:
+            fraction = 0.05 + 0.8 * (current / total)
+        emitter.emit(tool_progress(
+            tool, phase, message, current=current, total=total, fraction=fraction,
+        ))
+
+    try:
+        result = convert(
+            rwkv7, out, ref_path=reference, tokenizer_src=tokenizer_src,
+            precision=precision, progress_callback=_progress,
+            log=lambda message: typer.echo(f"# {message}", err=True),
+        )
+    except KeyboardInterrupt:
+        emitter.emit(tool_cancelled(tool))
+        raise typer.Exit(130)
+    except (OSError, ValueError, TypeError, KeyError, AssertionError) as exc:
+        emitter.emit(tool_failed(tool, str(exc)))
+        raise typer.Exit(1) from None
+
+    result["elapsed"] = round(time.monotonic() - began, 3)
+    emitter.emit(tool_completed(tool, result, path=str(out)))
+
+
+@app.command("dataset-preview")
+def dataset_preview(
+    model: Path = typer.Option(..., "--model", "-m", help="HF 模型目录(tokenizer 来源)"),
+    data: Path = typer.Option(..., "--data", "-d", help="源数据 json/jsonl/csv"),
+    ctx_len: int = typer.Option(512, "--ctx-len"),
+    turn_policy: str = typer.Option("first", "--turn-policy", help="first | all"),
+    prompt_key: Optional[str] = typer.Option(None, "--prompt-key"),
+    response_key: Optional[str] = typer.Option(None, "--response-key"),
+    cache_out: Optional[Path] = typer.Option(
+        None, "--cache-out", help="可选：写入完整渲染预览 JSONL 分页缓存",
+    ),
+    page_size: int = typer.Option(20, "--page-size", min=1, max=200),
+):
+    """探测格式、全量统计，并返回首页训练文本预览。
+
+    传 --cache-out 时把完整预览流式写入磁盘，后续通过 dataset-preview-page
+    按页读取。只加载 tokenizer，不加载模型权重；stdout 为工具任务 JSON Lines。
+    """
+    if not model.is_dir():
+        _bad_input(ValueError(f"模型目录不存在: {model}"))
+    if not data.is_file():
+        _bad_input(ValueError(f"数据文件不存在: {data}"))
+    if ctx_len <= 0:
+        _bad_input(ValueError("--ctx-len 必须 > 0"))
+    if turn_policy not in ("first", "all"):
+        _bad_input(ValueError("--turn-policy 只支持 first / all"))
+    if (prompt_key is None) != (response_key is None):
+        _bad_input(ValueError("--prompt-key 与 --response-key 必须同时提供"))
+    if not 1 <= page_size <= 200:
+        _bad_input(ValueError("--page-size 必须在 1...200 之间"))
+
+    from .importer import (
+        convert, detect_schema, detection_for_fields, read_records,
+    )
+    from .inspection import inspect_standard_records
+    from .preview_cache import PreviewCacheWriter
+    from .tool_events import (
+        ToolEventEmitter, cancelled as tool_cancelled, completed as tool_completed,
+        failed as tool_failed, progress as tool_progress, started as tool_started,
+        warning as tool_warning,
+    )
+    from mlx_lm.utils import load_tokenizer
+
+    tool = "dataset_preview"
+    emitter = ToolEventEmitter()
+    emitter.emit(tool_started(tool, f"检查 {data.name}"))
+    try:
+        emitter.emit(tool_progress(tool, "tokenizer", "加载 tokenizer"))
+        tokenizer = load_tokenizer(
+            str(model), tokenizer_config_extra={"trust_remote_code": True},
+        )
+        items = read_records(data)
+        detection = detect_schema(items)
+        if prompt_key is not None:
+            detection = detection_for_fields(items, prompt_key, response_key or "")
+
+        result_payload = None
+        rendered_payload: list[dict] = []
+        inspection_payload = None
+        pagination_payload = None
+        if detection.schema != "unknown":
+            converted = convert(items, detection, turn_policy=turn_policy)  # type: ignore[arg-type]
+            result_payload = converted.to_dict()
+            emitter.emit(tool_progress(
+                tool, "inspect", f"检查并渲染 {len(converted.records)} 条样本",
+            ))
+            if cache_out is not None:
+                with PreviewCacheWriter(cache_out, page_size=page_size) as cache:
+                    inspected = inspect_standard_records(
+                        converted.records, tokenizer, template=converted.template,
+                        ctx_len=ctx_len, path=str(data), on_rendered=cache.append,
+                    )
+                    meta = cache.commit(template=converted.template, ctx_len=ctx_len)
+                    rendered_payload = cache.first_page
+                pagination_payload = {
+                    "cache_path": str(cache_out),
+                    "total": meta["total"],
+                    "page_size": meta["page_size"],
+                    "page_count": meta["page_count"],
+                }
+            else:
+                def collect_first_page(sample: dict) -> None:
+                    if len(rendered_payload) < page_size:
+                        rendered_payload.append(sample)
+
+                inspected = inspect_standard_records(
+                    converted.records, tokenizer, template=converted.template,
+                    ctx_len=ctx_len, path=str(data), on_rendered=collect_first_page,
+                )
+            inspection_payload = inspected.to_dict()
+            if converted.dropped_system:
+                emitter.emit(tool_warning(
+                    tool, f"已忽略 {converted.dropped_system} 条 system 消息",
+                ))
+            if converted.dropped_other:
+                emitter.emit(tool_warning(
+                    tool, f"已忽略 {converted.dropped_other} 条无法配对的记录",
+                ))
+            if inspected.truncated:
+                emitter.emit(tool_warning(
+                    tool, f"ctx_len={ctx_len} 将截断 {inspected.truncated} 条样本",
+                ))
+
+        available_keys = sorted({
+            str(key) for item in detection.sample if isinstance(item, dict) for key in item.keys()
+        })
+        payload = {
+            "detection": detection.to_dict(),
+            "result": result_payload,
+            "preview": rendered_payload,
+            "inspection": inspection_payload,
+            "pagination": pagination_payload,
+            "available_keys": available_keys,
+            "turn_policy": turn_policy,
+        }
+        emitter.emit(tool_completed(tool, payload, path=str(data)))
+    except KeyboardInterrupt:
+        emitter.emit(tool_cancelled(tool))
+        raise typer.Exit(130)
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        emitter.emit(tool_failed(tool, str(exc)))
+        raise typer.Exit(1) from None
+
+
+@app.command("dataset-preview-page")
+def dataset_preview_page(
+    cache: Path = typer.Option(..., "--cache", help="dataset-preview 生成的缓存"),
+    page: int = typer.Option(..., "--page", min=1),
+    page_size: Optional[int] = typer.Option(None, "--page-size", min=1, max=200),
+):
+    """从磁盘预览缓存读取一页；不加载数据集、tokenizer 或模型。"""
+    from .preview_cache import read_preview_cache_page
+    from .tool_events import (
+        ToolEventEmitter, completed as tool_completed, failed as tool_failed,
+        started as tool_started,
+    )
+
+    tool = "dataset_preview_page"
+    emitter = ToolEventEmitter()
+    emitter.emit(tool_started(tool, f"加载第 {page} 页"))
+    try:
+        payload = read_preview_cache_page(cache, page=page, page_size=page_size)
+        emitter.emit(tool_completed(tool, payload, path=str(cache)))
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+        emitter.emit(tool_failed(tool, str(exc)))
+        raise typer.Exit(1) from None
+
+
 @app.command("import")
 def import_data(
     data: Path = typer.Option(..., "--data", "-d", help="源数据文件(jsonl/json/csv)"),
@@ -813,7 +1050,14 @@ def import_data(
         "first", "--turn-policy",
         help="多轮拆分策略(ShareGPT/Messages): first(只取首对) | all(每对独立成样本)",
     ),
+    prompt_key: Optional[str] = typer.Option(
+        None, "--prompt-key", help="自动探测失败时手动指定 prompt 字段",
+    ),
+    response_key: Optional[str] = typer.Option(
+        None, "--response-key", help="自动探测失败时手动指定 response 字段",
+    ),
     json_output: bool = typer.Option(False, "--json", help="stdout 输出结构化 JSON"),
+    events: bool = typer.Option(False, "--events", help="stdout 输出工具任务 JSON Lines"),
 ):
     """导入外部数据集 → 探测格式 → 转内部标准 jsonl(Spec §4)。
 
@@ -827,22 +1071,50 @@ def import_data(
         _bad_input(ValueError(f"数据文件不存在: {data}"))
     if turn_policy not in ("first", "all"):
         _bad_input(ValueError("--turn-policy 只支持 first / all"))
+    if (prompt_key is None) != (response_key is None):
+        _bad_input(ValueError("--prompt-key 与 --response-key 必须同时提供"))
+    if json_output and events:
+        _bad_input(ValueError("--json 与 --events 不能同时使用"))
 
     from .importer import import_dataset
+    emitter = None
+    if events:
+        from .tool_events import ToolEventEmitter, started as tool_started
+        emitter = ToolEventEmitter()
+        emitter.emit(tool_started("dataset_import", f"开始转换 {data.name}"))
 
     try:
-        artifact, result = import_dataset(data, out, turn_policy=turn_policy)  # type: ignore[arg-type]
+        artifact, result = import_dataset(
+            data, out, turn_policy=turn_policy,  # type: ignore[arg-type]
+            prompt_key=prompt_key, response_key=response_key,
+        )
+    except KeyboardInterrupt:
+        if emitter is not None:
+            from .tool_events import cancelled as tool_cancelled
+            emitter.emit(tool_cancelled("dataset_import"))
+        raise typer.Exit(130)
     except (OSError, ValueError, TypeError) as exc:
+        if emitter is not None:
+            from .tool_events import failed as tool_failed
+            emitter.emit(tool_failed("dataset_import", str(exc)))
+            raise typer.Exit(1) from None
         _bad_input(exc)
 
+    payload = {
+        "jsonl_path": str(artifact.jsonl_path),
+        "sidecar_path": str(artifact.sidecar_path),
+        "sha256": artifact.sha256,
+        "record_count": artifact.record_count,
+        "result": result.to_dict(),
+    }
+
+    if emitter is not None:
+        from .tool_events import completed as tool_completed
+        emitter.emit(tool_completed("dataset_import", payload, path=str(artifact.jsonl_path)))
+        return
+
     if json_output:
-        typer.echo(json.dumps({
-            "jsonl_path": str(artifact.jsonl_path),
-            "sidecar_path": str(artifact.sidecar_path),
-            "sha256": artifact.sha256,
-            "record_count": artifact.record_count,
-            "result": result.to_dict(),
-        }, ensure_ascii=False))
+        typer.echo(json.dumps(payload, ensure_ascii=False))
         return
 
     typer.echo(f"# 探测: {result.detection.schema} (confidence={result.detection.confidence:.2f})", err=True)

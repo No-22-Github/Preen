@@ -7,7 +7,7 @@ import sys
 from dataclasses import asdict, dataclass
 from importlib import metadata
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Optional
 
 import numpy as np
 
@@ -172,6 +172,22 @@ def inspect_standard_jsonl(
     两条数据路径共存:遗留 instruction/output 走 inspect_data,
     importer 产物走本函数。截断/长度统计逻辑一致。
     """
+    return inspect_standard_records(
+        _read_items(path), tokenizer, template=template, ctx_len=ctx_len,
+        path=str(path),
+    )
+
+
+def inspect_standard_records(
+    items: list[Any], tokenizer, *, template: str = "qa", ctx_len: int = 512,
+    path: str = "<memory>",
+    on_rendered: Optional[Callable[[dict[str, Any]], None]] = None,
+) -> DataInspection:
+    """检查 importer 标准记录；可流式输出渲染样本供分页缓存使用。
+
+    ``on_rendered`` 每发现一条有效样本就调用一次。调用方可以直接写 JSONL，
+    无需把完整预览留在 Python 或 Swift 内存中。
+    """
     from .templates import INSTRUCTION, QA
 
     if ctx_len <= 0:
@@ -180,7 +196,6 @@ def inspect_standard_jsonl(
         raise ValueError(f"标准 jsonl 检查只支持 qa / instruction, 收到 {template!r}")
     tmpl = QA if template == "qa" else INSTRUCTION
 
-    items = _read_items(path)
     lengths: list[int] = []
     empty_q = empty_a = truncated = target_lost = 0
 
@@ -202,7 +217,7 @@ def inspect_standard_jsonl(
             if not a:
                 empty_a += 1
                 continue
-            prefix_len = len(tokenizer.encode(tmpl.format_prefix(q=q)))
+            prefix = tmpl.format_prefix(q=q)
         else:  # instruction
             instruction_raw = item.get("instruction")
             input_raw = item.get("input")
@@ -220,22 +235,33 @@ def inspect_standard_jsonl(
             if not a:
                 empty_a += 1
                 continue
-            prefix_len = len(tokenizer.encode(
-                tmpl.format_prefix(instruction=q, input=inp)
-            ))
-        target_len = len(tokenizer.encode(tmpl.format_target(a=a)))
+            prefix = tmpl.format_prefix(instruction=q, input=inp)
+        target = tmpl.format_target(a=a)
+        prefix_len = len(tokenizer.encode(prefix))
+        target_len = len(tokenizer.encode(target))
         length = prefix_len + target_len
         lengths.append(length)
         if length > ctx_len:
             truncated += 1
         if ctx_len < prefix_len:
             target_lost += 1
+        if on_rendered is not None:
+            on_rendered({
+                "full_text": prefix + target,
+                "prefix_text": prefix,
+                "target_text": target,
+                "prefix_len": prefix_len,
+                "token_count": length,
+                "prompt_text": q,
+                "response_text": a,
+                "truncated": length > ctx_len,
+            })
 
     if not lengths:
         raise ValueError("没有有效训练样本")
     arr = np.asarray(lengths, dtype=np.float64)
     return DataInspection(
-        path=str(path),
+        path=path,
         total=len(items),
         valid=len(lengths),
         skipped_empty_question=empty_q,

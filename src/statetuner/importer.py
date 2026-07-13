@@ -124,7 +124,10 @@ class RenderedSample:
     """
 
     full_text: str          # prefix + target 拼接(最终喂给模型的文本)
+    prefix_text: str        # UI 直接着色，禁止在 Swift 侧重写模板或按 token 切 Unicode
+    target_text: str
     prefix_len: int         # token 级 prefix 长度(颜色分界)
+    token_count: int
     prompt_text: str        # 原始 prompt(审计)
     response_text: str      # 原始 response(审计)
     truncated: bool         # 是否因 ctx_len 截断(预览阶段一般 False,留扩展)
@@ -132,7 +135,10 @@ class RenderedSample:
     def to_dict(self) -> dict:
         return {
             "full_text": self.full_text,
+            "prefix_text": self.prefix_text,
+            "target_text": self.target_text,
             "prefix_len": self.prefix_len,
+            "token_count": self.token_count,
             "prompt_text": self.prompt_text,
             "response_text": self.response_text,
             "truncated": self.truncated,
@@ -292,6 +298,37 @@ def detect_schema(items: List[dict]) -> SchemaDetection:
     )
 
 
+def detection_for_fields(
+    items: List[dict], prompt_key: str, response_key: str,
+) -> SchemaDetection:
+    """为自动探测失败的数据构造可追溯的手动字段映射。"""
+    prompt_key = prompt_key.strip()
+    response_key = response_key.strip()
+    if not prompt_key or not response_key:
+        raise ValueError("手动映射必须同时提供 prompt_key 和 response_key")
+    if prompt_key == response_key:
+        raise ValueError("prompt_key 和 response_key 不能相同")
+    sample_items = items[:SAMPLE_LIMIT]
+    if not sample_items:
+        raise ValueError("数据为空，无法建立字段映射")
+    hits = sum(
+        1 for item in sample_items
+        if isinstance(item, dict) and prompt_key in item and response_key in item
+    )
+    if hits == 0:
+        raise ValueError(
+            f"采样数据中找不到字段组合 {prompt_key!r}/{response_key!r}"
+        )
+    return SchemaDetection(
+        schema="bare_qa",
+        prompt_keys=[prompt_key],
+        response_keys=[response_key],
+        confidence=round(hits / len(sample_items), 3),
+        sample=sample_items[:3],
+        total_sampled=len(sample_items),
+    )
+
+
 def _schema_prompt_keys(schema: SchemaName) -> List[str]:
     return {
         "messages": ["messages[].role==user"],
@@ -411,13 +448,21 @@ def convert(
 
     if detection.schema == "bare_qa":
         template = "qa"
+        manual_keys = None
+        if len(detection.prompt_keys) == 1 and len(detection.response_keys) == 1:
+            manual_keys = (detection.prompt_keys[0], detection.response_keys[0])
         for item in items:
-            keys = _find_bare_qa_keys(item)
+            keys = manual_keys or _find_bare_qa_keys(item)
             if keys is None:
                 dropped_other += 1
                 continue
-            prompt = (item.get(keys[0]) or "").strip()
-            response = (item.get(keys[1]) or "").strip()
+            prompt_raw = item.get(keys[0])
+            response_raw = item.get(keys[1])
+            if not isinstance(prompt_raw, str) or not isinstance(response_raw, str):
+                dropped_other += 1
+                continue
+            prompt = prompt_raw.strip()
+            response = response_raw.strip()
             if not prompt or not response:
                 dropped_other += 1
                 continue
@@ -506,6 +551,7 @@ def preview_records(
     template: Literal["qa", "instruction"],
     tokenizer,
     n: int = 3,
+    ctx_len: Optional[int] = None,
 ) -> List[RenderedSample]:
     """渲染前 n 条样本套模板后的最终喂入文本 + token 级 mask 边界(§4.4)。
 
@@ -534,12 +580,16 @@ def preview_records(
         target = tmpl.format_target(a=response_text)
         full_text = prefix + target
         prefix_len = len(tokenizer.encode(prefix))
+        token_count = len(tokenizer.encode(full_text))
         rendered.append(RenderedSample(
             full_text=full_text,
+            prefix_text=prefix,
+            target_text=target,
             prefix_len=prefix_len,
+            token_count=token_count,
             prompt_text=prompt_text,
             response_text=response_text,
-            truncated=False,
+            truncated=ctx_len is not None and token_count > ctx_len,
         ))
     return rendered
 
@@ -551,11 +601,17 @@ def import_dataset(
     out_path: Path,
     *,
     turn_policy: TurnPolicy = "first",
+    prompt_key: Optional[str] = None,
+    response_key: Optional[str] = None,
 ) -> Tuple[ImportArtifact, ImportResult]:
     """探测 → 转换 → 落盘 一站式(CLI import 命令直接调)。"""
     source_path = Path(source_path)
     items = read_records(source_path)
     detection = detect_schema(items)
+    if prompt_key is not None or response_key is not None:
+        detection = detection_for_fields(
+            items, prompt_key or "", response_key or "",
+        )
     result = convert(items, detection, turn_policy=turn_policy)
     artifact = write_import(source_path, result, out_path)
     return artifact, result

@@ -308,7 +308,9 @@ class ServeSessionManager:
 
         §4.1 流程的"探测/预览"步;落盘走 import_dataset 方法。
         """
-        from .importer import convert, detect_schema, preview_records, read_records
+        from .importer import (
+            convert, detect_schema, detection_for_fields, preview_records, read_records,
+        )
 
         data_path = params.get("data_path")
         if not isinstance(data_path, str) or not data_path.strip():
@@ -319,6 +321,20 @@ class ServeSessionManager:
 
         items = read_records(path)
         detection = detect_schema(items)
+        prompt_key = params.get("prompt_key")
+        response_key = params.get("response_key")
+        if (prompt_key is None) != (response_key is None):
+            raise ProtocolError("prompt_key 与 response_key 必须同时提供")
+        if prompt_key is not None:
+            if not isinstance(prompt_key, str) or not isinstance(response_key, str):
+                raise ProtocolError("prompt_key/response_key 必须是字符串")
+            detection = detection_for_fields(items, prompt_key, response_key)
+        turn_policy = params.get("turn_policy", "first")
+        if turn_policy not in ("first", "all"):
+            raise ProtocolError("turn_policy 只支持 first / all")
+        ctx_len = params.get("ctx_len")
+        if ctx_len is not None and (not isinstance(ctx_len, int) or ctx_len <= 0):
+            raise ProtocolError("ctx_len 必须是正整数")
 
         # 探测失败时仍返回 detection(含 sample 原文),UI 走手动映射;
         # 转换只在非 unknown 时做(unknown convert 会抛错)。
@@ -326,7 +342,7 @@ class ServeSessionManager:
         rendered: List[dict] = []
         result_dict: Optional[dict] = None
         if detection.schema != "unknown":
-            result = convert(items, detection, turn_policy="first")
+            result = convert(items, detection, turn_policy=turn_policy)
             converted = result.records
             result_dict = result.to_dict()
             # 渲染预览需要 tokenizer(engine 持有)
@@ -334,7 +350,7 @@ class ServeSessionManager:
                 rs.to_dict()
                 for rs in preview_records(
                     converted[:3], template=result.template,
-                    tokenizer=self.engine.tokenizer, n=3,
+                    tokenizer=self.engine.tokenizer, n=3, ctx_len=ctx_len,
                 )
             ]
         return {
@@ -368,7 +384,14 @@ class ServeSessionManager:
             raise ProtocolError(f"数据文件不存在: {src}", code="not_found")
 
         try:
-            artifact, result = _do_import(src, Path(out_path), turn_policy=turn_policy)
+            prompt_key = params.get("prompt_key")
+            response_key = params.get("response_key")
+            if (prompt_key is None) != (response_key is None):
+                raise ValueError("prompt_key 与 response_key 必须同时提供")
+            artifact, result = _do_import(
+                src, Path(out_path), turn_policy=turn_policy,
+                prompt_key=prompt_key, response_key=response_key,
+            )
         except ValueError as exc:
             # 探测失败(unknown)或转换错误 → bad_request(附原因供 UI 展示)
             raise ProtocolError(f"导入失败: {exc}") from exc

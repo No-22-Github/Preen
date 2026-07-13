@@ -18,6 +18,7 @@ from statetuner.importer import (
     CONFIDENCE_FLOOR,
     convert,
     detect_schema,
+    detection_for_fields,
     import_dataset,
     preview_records,
     read_records,
@@ -109,6 +110,16 @@ def test_convert_unknown_raises():
     d = detect_schema(items)
     with pytest.raises(ValueError, match="unknown"):
         convert(items, d)
+
+
+def test_manual_field_mapping_converts_unknown_schema():
+    items = [{"ask": "你好", "reply": "喵"}, {"ask": "再见", "reply": "拜拜"}]
+    detection = detection_for_fields(items, "ask", "reply")
+    result = convert(items, detection)
+    assert detection.schema == "bare_qa"
+    assert result.records
+    assert result.records[0]["prompt"] == items[0]["ask"]
+    assert result.records[0]["response"] == items[0]["reply"]
 
 
 # ── ShareGPT 多轮策略(§4.5.c)──────────────────────────────
@@ -234,6 +245,8 @@ def test_preview_records_qa_boundary():
     assert "喵~" in r.full_text
     # prefix_len = encode("User: 你好\n\nAssistant:") 的 token 数
     assert r.prefix_len > 0
+    assert r.full_text == r.prefix_text + r.target_text
+    assert r.token_count == len(FakeTokenizer().encode(r.full_text))
     # prefix 段不应包含 target 文本
     prefix_text = r.full_text[: r.full_text.find("Assistant:") + len("Assistant:")]
     assert "喵" not in prefix_text

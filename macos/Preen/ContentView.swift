@@ -52,6 +52,12 @@ struct ContentView: View {
             }
         case .history:
             TrainingHistoryView(appState: appState)
+        case .toolbox:
+            ToolboxView(
+                store: appState.toolboxStore,
+                modelPath: appState.modelPath,
+                onSelectModel: { appState.selectModel(path: $0) }
+            )
         }
     }
 

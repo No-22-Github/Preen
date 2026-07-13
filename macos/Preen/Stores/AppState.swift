@@ -15,6 +15,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
     case training
     case chat
     case history
+    case toolbox
     var id: String { rawValue }
     var label: String {
         switch self {
@@ -22,6 +23,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         case .training: return "训练"
         case .chat: return "对话"
         case .history: return "训练记录"
+        case .toolbox: return "工具箱"
         }
     }
     var systemImage: String {
@@ -30,6 +32,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         case .training: return "graduationcap"
         case .chat: return "bubble.left.and.bubble.right"
         case .history: return "clock.arrow.circlepath"
+        case .toolbox: return "wrench.and.screwdriver"
         }
     }
 }
@@ -53,6 +56,7 @@ final class AppState {
     let trainStore: TrainStore
     let chatStore: ChatStore
     let backendStore: BackendStore
+    let toolboxStore: ToolboxStore
     let runRepository: RunRepository
     private(set) var runs: [TrainingRun] = []
     private(set) var isSwitchingWorker = false
@@ -66,6 +70,7 @@ final class AppState {
         self.backendStore = backend
         self.trainStore = TrainStore(repository: repository, backendStore: backend)
         self.chatStore = ChatStore(backendStore: backend)
+        self.toolboxStore = ToolboxStore()
     }
 
     // MARK: - 模型与进程协调

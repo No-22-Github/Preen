@@ -41,6 +41,12 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/statetuner"]
 
+# 模型转换器运行时资源。开发态仍从仓库原路径读取；wheel/App bundle 内映射到包内，
+# 避免正式版依赖 tools/ 与 assets/ 的仓库布局。
+[tool.hatch.build.targets.wheel.force-include]
+"tools/fixtures/rwkv7_hf_template.json" = "statetuner/assets/rwkv7_hf_template.json"
+"assets/rwkv_world_tokenizer" = "statetuner/assets/rwkv_world_tokenizer"
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]

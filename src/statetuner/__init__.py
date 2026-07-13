@@ -11,6 +11,8 @@
   inspection — 环境、数据与 state 预检
   service — CLI/未来 sidecar 共用的应用编排
   events — 结构化训练事件(为 sidecar IPC 铺路)
+  model_converter — 原生 RWKV-7 权重转 HF safetensors
+  tool_events — App 离线工具任务 JSON Lines 协议
   train  — 训练循环(lr/std 监控/早停/checkpoint/恢复)
   export — .pth 导出器(RWKV Runner 可挂载)
   cli    — 训练/推理/导出与检查入口

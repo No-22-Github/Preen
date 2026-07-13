@@ -30,6 +30,8 @@ src/statetuner/          正式包(改这里)
 ├── inference.py         独立推理引擎(generate 支持 should_abort 钩子,§3 serve 用)
 ├── chat.py              ChatSession(多轮续传/重放,持有 abort_checker)
 ├── importer.py          ★ 数据导入(§4):Alpaca/ShareGPT/Messages/裸 QA 探测 → 标准 jsonl
+├── model_converter.py   ★ 原生 RWKV-7 .pth → HF safetensors 正式转换模块
+├── tool_events.py       ★ 离线工具任务事件(started/progress/completed/failed/cancelled)
 ├── serve.py             ★ 常驻推理协议(§3):stdin/stdout JSON lines + abort
 ├── inspection.py        环境/数据/state 预检(含 inspect_standard_jsonl 给导入产物)
 └── cli.py               train/eval/export/preview/chat/serve/import,带 --template 开关
@@ -38,7 +40,7 @@ tests/                   回归测试(改 src 必跑)
 ├── fixtures/              NekoQA 基准 state(nekoqa_04b_s42.npz,产品 CLI 训练)
 │   └── import/            导入器测试 fixtures(alpaca/sharegpt/messages/bare_qa/dpo 各一份)
 └── golden/                推理 golden 快照(nekoqa_*.json)
-tools/                   模型转换(convert_rwkv7_to_hf.py)+ 内存探针
+tools/                   模型转换兼容入口(convert_rwkv7_to_hf.py,实现已下沉正式包)+ 内存探针
 ├── fixtures/              转换校验模板(rwkv7_hf_template.json,从 fla-hub 0.1B 生成)
 │                          gen_convert_fixture.py = 一次性生成脚本(上游 schema 漂移时重跑)
 └── ...

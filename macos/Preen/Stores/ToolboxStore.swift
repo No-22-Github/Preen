@@ -1,0 +1,416 @@
+import Foundation
+import Observation
+
+enum ToolJobState: Equatable {
+    case idle, running, completed, failed, cancelled
+}
+
+struct ModelConversionResult: Decodable, Equatable {
+    let outputPath: String
+    let tensorCount: Int
+    let precision: String
+    let numHiddenLayers: Int?
+    let hiddenSize: Int?
+    let vocabSize: Int?
+    let elapsed: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case outputPath = "output_path"
+        case tensorCount = "tensor_count"
+        case precision
+        case numHiddenLayers = "num_hidden_layers"
+        case hiddenSize = "hidden_size"
+        case vocabSize = "vocab_size"
+        case elapsed
+    }
+}
+
+struct DatasetDetectionResult: Decodable, Equatable {
+    let schema: String
+    let promptKeys: [String]
+    let responseKeys: [String]
+    let confidence: Double
+    let totalSampled: Int
+
+    enum CodingKeys: String, CodingKey {
+        case schema, confidence
+        case promptKeys = "prompt_keys"
+        case responseKeys = "response_keys"
+        case totalSampled = "total_sampled"
+    }
+}
+
+struct DatasetConversionSummary: Decodable, Equatable {
+    let template: String
+    let turnPolicy: String
+    let droppedSystem: Int
+    let droppedOther: Int
+    let qaDegradationHint: Bool
+    let recordCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case template
+        case turnPolicy = "turn_policy"
+        case droppedSystem = "dropped_system"
+        case droppedOther = "dropped_other"
+        case qaDegradationHint = "qa_degradation_hint"
+        case recordCount = "record_count"
+    }
+}
+
+struct DatasetInspectionResult: Decodable, Equatable {
+    let total: Int
+    let valid: Int
+    let truncated: Int
+    let targetFullyTruncated: Int
+    let minTokens: Int
+    let meanTokens: Double
+    let p95Tokens: Double
+    let maxTokens: Int
+    let ctxLen: Int
+    let template: String
+
+    enum CodingKeys: String, CodingKey {
+        case total, valid, truncated, template
+        case targetFullyTruncated = "target_fully_truncated"
+        case minTokens = "min_tokens"
+        case meanTokens = "mean_tokens"
+        case p95Tokens = "p95_tokens"
+        case maxTokens = "max_tokens"
+        case ctxLen = "ctx_len"
+    }
+}
+
+struct DatasetRenderedSample: Decodable, Equatable, Identifiable {
+    var id: String { "\(prefixLen)-\(promptText)-\(responseText)" }
+    let fullText: String
+    let prefixText: String
+    let targetText: String
+    let prefixLen: Int
+    let tokenCount: Int
+    let promptText: String
+    let responseText: String
+    let truncated: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case fullText = "full_text"
+        case prefixText = "prefix_text"
+        case targetText = "target_text"
+        case prefixLen = "prefix_len"
+        case tokenCount = "token_count"
+        case promptText = "prompt_text"
+        case responseText = "response_text"
+        case truncated
+    }
+}
+
+struct DatasetPreviewResult: Decodable, Equatable {
+    let detection: DatasetDetectionResult
+    let result: DatasetConversionSummary?
+    let preview: [DatasetRenderedSample]
+    let inspection: DatasetInspectionResult?
+    let pagination: DatasetPreviewPagination?
+    let availableKeys: [String]
+    let turnPolicy: String
+
+    enum CodingKeys: String, CodingKey {
+        case detection, result, preview, inspection, pagination
+        case availableKeys = "available_keys"
+        case turnPolicy = "turn_policy"
+    }
+}
+
+struct DatasetPreviewPagination: Decodable, Equatable {
+    let cachePath: String
+    let total: Int
+    let pageSize: Int
+    let pageCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case cachePath = "cache_path"
+        case total
+        case pageSize = "page_size"
+        case pageCount = "page_count"
+    }
+}
+
+struct DatasetPreviewPageResult: Decodable, Equatable {
+    let preview: [DatasetRenderedSample]
+    let page: Int
+    let pageSize: Int
+    let pageCount: Int
+    let total: Int
+
+    enum CodingKeys: String, CodingKey {
+        case preview, page, total
+        case pageSize = "page_size"
+        case pageCount = "page_count"
+    }
+}
+
+@Observable
+@MainActor
+final class ToolboxStore {
+    var modelSourcePath = ""
+    var modelOutputPath = ""
+    var modelPrecision = "bf16"
+    private(set) var modelState: ToolJobState = .idle
+    private(set) var modelResult: ModelConversionResult?
+
+    var datasetSourcePath = ""
+    var datasetOutputPath = ""
+    var datasetTurnPolicy = "first"
+    var datasetContextLength = 512
+    var manualPromptKey = ""
+    var manualResponseKey = ""
+    private(set) var datasetState: ToolJobState = .idle
+    private(set) var datasetAnalysis: DatasetPreviewResult?
+    private(set) var importedDatasetPath: String?
+    private(set) var datasetPreviewSamples: [DatasetRenderedSample] = []
+    private(set) var datasetPreviewPage = 1
+    private(set) var datasetPreviewPageSize = 20
+    private(set) var datasetPreviewPageCount = 0
+    private(set) var datasetPreviewTotal = 0
+
+    private(set) var progress: Double?
+    private(set) var statusMessage = ""
+    private(set) var warnings: [String] = []
+    private(set) var errorMessage: String?
+    private(set) var presentationTool: String?
+
+    private var runner: ToolJobRunner?
+    private var datasetPreviewCachePath: String?
+
+    var isRunning: Bool { runner?.isRunning == true }
+    var canConvertModel: Bool {
+        !modelSourcePath.isEmpty && !modelOutputPath.isEmpty && !isRunning
+    }
+    var modelOutputRequiresConfirmation: Bool {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(
+            atPath: modelOutputPath, isDirectory: &isDirectory
+        ), isDirectory.boolValue else { return false }
+        let contents = try? FileManager.default.contentsOfDirectory(atPath: modelOutputPath)
+        return contents?.isEmpty == false
+    }
+    var canPreviewDataset: Bool {
+        !datasetSourcePath.isEmpty && !isRunning
+    }
+    var canImportDataset: Bool {
+        !datasetSourcePath.isEmpty && !datasetOutputPath.isEmpty && !isRunning
+    }
+
+    func convertModel(overwrite: Bool = false) {
+        guard canConvertModel else { return }
+        begin(tool: "model")
+        modelState = .running
+        var argv = [
+            "-m", "statetuner.cli", "convert-model",
+            "--rwkv7", modelSourcePath,
+            "--out", modelOutputPath,
+            "--precision", modelPrecision,
+        ]
+        if overwrite {
+            argv.append("--overwrite")
+        }
+        consume(runner: runner!, stream: runner!.start(argv: argv, currentDirectory: PythonResolver.repoRoot))
+    }
+
+    func previewDataset(modelPath: String) {
+        guard canPreviewDataset, !modelPath.isEmpty else {
+            errorMessage = "请先在侧边栏选择模型，数据预览需要对应 tokenizer"
+            return
+        }
+        removeDatasetPreviewCache()
+        datasetAnalysis = nil
+        resetDatasetPreviewPage()
+        let cachePath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Preen/DatasetPreview", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString + ".jsonl")
+            .path
+        datasetPreviewCachePath = cachePath
+        begin(tool: "dataset")
+        datasetState = .running
+        var argv = [
+            "-m", "statetuner.cli", "dataset-preview",
+            "--model", modelPath,
+            "--data", datasetSourcePath,
+            "--ctx-len", String(datasetContextLength),
+            "--turn-policy", datasetTurnPolicy,
+            "--cache-out", cachePath,
+            "--page-size", String(datasetPreviewPageSize),
+        ]
+        appendManualMapping(to: &argv)
+        consume(runner: runner!, stream: runner!.start(argv: argv, currentDirectory: PythonResolver.repoRoot))
+    }
+
+    func loadDatasetPreviewPage(_ page: Int) {
+        guard
+            !isRunning,
+            page != datasetPreviewPage,
+            page >= 1,
+            page <= datasetPreviewPageCount,
+            let cachePath = datasetPreviewCachePath
+        else { return }
+
+        // 翻页通常只需约 0.2 秒，不占用完整检查的进度展示区域，
+        // 避免进度条瞬间出现/消失导致内容上下跳动。
+        begin(tool: "dataset-page")
+        datasetState = .running
+        statusMessage = "加载第 \(page) 页"
+        let argv = [
+            "-m", "statetuner.cli", "dataset-preview-page",
+            "--cache", cachePath,
+            "--page", String(page),
+            "--page-size", String(datasetPreviewPageSize),
+        ]
+        consume(runner: runner!, stream: runner!.start(argv: argv, currentDirectory: PythonResolver.repoRoot))
+    }
+
+    func importDataset() {
+        guard canImportDataset else { return }
+        begin(tool: "dataset")
+        datasetState = .running
+        var argv = [
+            "-m", "statetuner.cli", "import",
+            "--data", datasetSourcePath,
+            "--out", datasetOutputPath,
+            "--turn-policy", datasetTurnPolicy,
+            "--events",
+        ]
+        appendManualMapping(to: &argv)
+        consume(runner: runner!, stream: runner!.start(argv: argv, currentDirectory: PythonResolver.repoRoot))
+    }
+
+    func cancel() {
+        runner?.cancel()
+        statusMessage = "正在取消…"
+    }
+
+    func clearError() { errorMessage = nil }
+
+    /// 工具详情页切换时清理瞬时展示；输入和已完成产物保留。
+    func clearPresentationForNavigation() {
+        progress = nil
+        statusMessage = ""
+        warnings = []
+        errorMessage = nil
+        presentationTool = nil
+    }
+
+    func selectDatasetSource(path: String) {
+        guard !isRunning else { return }
+        removeDatasetPreviewCache()
+        datasetSourcePath = path
+        datasetAnalysis = nil
+        importedDatasetPath = nil
+        resetDatasetPreviewPage()
+        manualPromptKey = ""
+        manualResponseKey = ""
+        clearPresentationForNavigation()
+    }
+
+    func invalidateDatasetAnalysis() {
+        guard !isRunning else { return }
+        removeDatasetPreviewCache()
+        datasetAnalysis = nil
+        importedDatasetPath = nil
+        resetDatasetPreviewPage()
+        clearPresentationForNavigation()
+    }
+
+    private func begin(tool: String) {
+        runner = ToolJobRunner()
+        progress = nil
+        statusMessage = "准备中"
+        warnings = []
+        errorMessage = nil
+        presentationTool = tool
+        if tool == "model" { modelResult = nil }
+        if tool == "dataset" { importedDatasetPath = nil }
+    }
+
+    private func appendManualMapping(to argv: inout [String]) {
+        guard !manualPromptKey.isEmpty, !manualResponseKey.isEmpty else { return }
+        argv.append(contentsOf: [
+            "--prompt-key", manualPromptKey,
+            "--response-key", manualResponseKey,
+        ])
+    }
+
+    private func consume(runner: ToolJobRunner, stream: AsyncStream<ToolEvent>) {
+        Task { [weak self] in
+            for await event in stream {
+                self?.consume(event)
+            }
+            if self?.runner === runner { self?.runner = nil }
+        }
+    }
+
+    private func consume(_ event: ToolEvent) {
+        progress = event.progress ?? progress
+        statusMessage = event.message ?? statusMessage
+        switch event.type {
+        case .started, .progress:
+            break
+        case .warning:
+            if let message = event.message { warnings.append(message) }
+        case .completed:
+            do {
+                if event.tool == "model_conversion", let result = event.result {
+                    modelResult = try result.decode(ModelConversionResult.self)
+                    modelState = .completed
+                } else if event.tool == "dataset_preview", let result = event.result {
+                    let analysis = try result.decode(DatasetPreviewResult.self)
+                    datasetAnalysis = analysis
+                    datasetPreviewSamples = analysis.preview
+                    datasetPreviewPage = 1
+                    datasetPreviewPageSize = analysis.pagination?.pageSize ?? 20
+                    datasetPreviewPageCount = analysis.pagination?.pageCount ?? (analysis.preview.isEmpty ? 0 : 1)
+                    datasetPreviewTotal = analysis.pagination?.total ?? analysis.preview.count
+                    datasetPreviewCachePath = analysis.pagination?.cachePath
+                    datasetState = .completed
+                } else if event.tool == "dataset_preview_page", let result = event.result {
+                    let page = try result.decode(DatasetPreviewPageResult.self)
+                    datasetPreviewSamples = page.preview
+                    datasetPreviewPage = page.page
+                    datasetPreviewPageSize = page.pageSize
+                    datasetPreviewPageCount = page.pageCount
+                    datasetPreviewTotal = page.total
+                    datasetState = .completed
+                } else if event.tool == "dataset_import" {
+                    importedDatasetPath = event.path
+                    datasetState = .completed
+                }
+            } catch {
+                fail("无法解析工具结果：\(error.localizedDescription)")
+            }
+        case .failed:
+            fail(event.message ?? "工具任务失败")
+        case .cancelled:
+            modelState = modelState == .running ? .cancelled : modelState
+            datasetState = datasetState == .running ? .cancelled : datasetState
+        }
+    }
+
+    private func fail(_ message: String) {
+        errorMessage = message
+        if modelState == .running { modelState = .failed }
+        if datasetState == .running { datasetState = .failed }
+    }
+
+    private func resetDatasetPreviewPage() {
+        datasetPreviewSamples = []
+        datasetPreviewPage = 1
+        datasetPreviewPageSize = 20
+        datasetPreviewPageCount = 0
+        datasetPreviewTotal = 0
+    }
+
+    private func removeDatasetPreviewCache() {
+        guard let path = datasetPreviewCachePath else { return }
+        try? FileManager.default.removeItem(atPath: path)
+        try? FileManager.default.removeItem(atPath: path + ".meta.json")
+        datasetPreviewCachePath = nil
+    }
+}
