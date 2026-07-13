@@ -47,8 +47,10 @@ enum ServeEvent: Decodable {
 
         switch type {
         case "ready":
-            // ready 无 id。
-            self = .ready(try c.decode(ReadyPayload.self, forKey: .payload))
+            // ready 无 id;protocol_version / version / model / capabilities 是**顶层平铺**
+            // 字段(serve.py `_event()` 把 **fields 铺到事件根,不嵌套 payload)。
+            // 所以用同一 decoder 解 ReadyPayload,而不是 forKey: .payload。
+            self = .ready(try ReadyPayload(from: decoder))
         case "text_chunk":
             let phaseStr = try c.decodeIfPresent(String.self, forKey: .phase) ?? "answer"
             self = .textChunk(
@@ -67,9 +69,11 @@ enum ServeEvent: Decodable {
                 answer: try c.decodeIfPresent(String.self, forKey: .answer)
             )
         case "ok":
+            // ok 的字段(session_id / state_label / message 等)同样是顶层平铺,
+            // 不嵌套在 payload 下(serve.py `_ok(id_, **payload)` 平铺到事件根)。
             self = .ok(
                 id: try c.decode(String.self, forKey: .id),
-                payload: try c.decode(OkPayload.self, forKey: .payload)
+                payload: try OkPayload(from: decoder)
             )
         case "error":
             let codeRaw = try c.decodeIfPresent(String.self, forKey: .code) ?? "internal"

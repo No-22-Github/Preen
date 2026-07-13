@@ -60,6 +60,12 @@ final class ChatStore {
     private(set) var isConnected: Bool = false  // serve 进程 ready
     private(set) var lastError: String?
 
+    // === 启动日志(连接时弹窗实时展示后端 stderr)===
+    /// 后端 stderr 实时累积(连接时清空)。
+    private(set) var startupLog: String = ""
+    /// 启动失败时的错误信息(nil = 仍在启动 / 已成功)。驱动启动弹窗的成败态展示。
+    private(set) var startupError: String?
+
     /// 当前请求 id(text_chunk/turn_end/终结事件用它配对)。
     private var inFlightId: String?
 
@@ -75,15 +81,41 @@ final class ChatStore {
     // MARK: - 生命周期
 
     /// 启动 serve + 等待 ready + 自动建 session。
+    /// 启动期间 stderr 实时推到 `startupLog`(供启动日志弹窗展示)。
     func connect(model: URL) {
         disconnect()
+        // 重置启动日志(新一轮连接)。
+        startupLog = ""
+        startupError = nil
         let client = ServeClient()
         self.client = client
+        // 后端 stderr → 主线程追加到 startupLog(@Observable 自动刷新 UI)。
+        // readabilityHandler 在后台队列触发,这里 dispatch 到 MainActor。
+        client.onStderr = { [weak self] chunk in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.startupLog += chunk
+                // 上限保护(尾部保留,避免无限增长)。
+                if self.startupLog.count > 64 * 1024 {
+                    self.startupLog = String(self.startupLog.suffix(64 * 1024))
+                }
+            }
+        }
+        // stdout 镜像(仅启动期):看 ready 是否到达 Swift 端。connected 后忽略。
+        client.onStdout = { [weak self] line in
+            Task { @MainActor [weak self] in
+                guard let self, !self.isConnected else { return }
+                self.startupLog += "[stdout] \(line)\n"
+            }
+        }
         let stream = client.start(model: model)
         consumeTask = Task { [weak self] in
             for await event in stream {
                 self?.consume(event: event)
             }
+            // stream 自然结束(非取消)= serve 进程 stdout 关闭 = 进程退出。
+            if Task.isCancelled { return }
+            self?.handleServeExit()
         }
     }
 
@@ -96,6 +128,8 @@ final class ChatStore {
         isConnected = false
         sessionId = nil
         isGenerating = false
+        // 清理启动日志状态(下次连接重新累积)。
+        startupError = nil
     }
 
     // MARK: - 用户动作
@@ -211,11 +245,24 @@ final class ChatStore {
                 inFlightId = nil
             }
         case .error(let id, let code, let message):
+            // 启动期(未 connected)的 error = 后端启动失败,记录给启动日志弹窗。
+            if !isConnected {
+                startupError = message
+            }
             handleError(id: id, code: code, message: message)
         }
     }
 
     // MARK: - 内部
+
+    /// serve 进程退出(stream 自然结束)时调用。
+    /// 若此时仍未 connected,说明没收到 ready = 启动失败,保留启动日志供排查。
+    private func handleServeExit() {
+        guard !isConnected else { return }
+        if startupError == nil {
+            startupError = "serve 进程已退出,未发出 ready 事件(请查看日志排查)"
+        }
+    }
 
     private func newClientId() -> String {
         // ServeClient 内部有自己的 id 生成;此处给那些直传 .send(...) 的便捷场景用。

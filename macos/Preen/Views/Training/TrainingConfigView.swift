@@ -118,7 +118,7 @@ struct TrainingConfigView: View {
             Section("训练长度") {
                 LabeledIntField(label: "epochs(配早停后是上限)", value: $config.epochs, default: 20)
                 LabeledIntField(label: "ctx_len(单条样本最长 token)", value: $config.ctxLen, default: 512)
-                LabeledIntField(label: "log_every(每 N 步发一条 step 事件)", value: $config.logEvery, default: 10)
+                LabeledIntField(label: "log_every(每 N 步发一条 step 事件)", value: $config.logEvery, default: 1)
             }
 
             Section("早停") {

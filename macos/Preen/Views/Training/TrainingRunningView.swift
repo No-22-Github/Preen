@@ -156,6 +156,12 @@ struct TrainingRunningView: View {
             }
         }
         .chartXScale(domain: 0...max(store.totalSteps, 1))
+        // 禁用数据变化的隐式动画:Charts 在 lossPoints/epochBoundaries 追加时会
+        // 用默认动画过渡,过渡途中折线 x 域重映射会产生「折返再归位」的视觉假象
+        // (尤其 epoch 边界 RuleMark 加入触发整图重建时)。流式数据应即时落位,不插值。
+        .animation(nil, value: store.lossPoints)
+        .animation(nil, value: store.epochBoundaries)
+        .animation(nil, value: store.heldOutPoints)
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .accessibilityLabel("训练 loss 曲线")

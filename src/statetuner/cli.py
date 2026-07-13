@@ -166,6 +166,10 @@ def train(
     ctx_len: int = typer.Option(512, "--ctx-len", help="上下文长度"),
     epochs: int = typer.Option(20, "--epochs", help="epoch 数(配早停后是上限)"),
     grad_clip: float = typer.Option(1.0, "--grad-clip"),
+    log_every: int = typer.Option(
+        1, "--log-every",
+        help="每 N 步发一个 step 事件(默认 1 = 每步都发;事件开销微秒级,不影响训练速度)",
+    ),
     early_stop: bool = typer.Option(True, "--early-stop/--no-early-stop", help="held-out 早停"),
     patience: int = typer.Option(3, "--patience", help="早停耐心(连续 N 次不改善则停)"),
     test_ratio: float = typer.Option(0.1, "--test-ratio", help="无 --test-data 时从 train 划分比例"),
@@ -209,6 +213,8 @@ def train(
         _bad_input(ValueError("--test-ratio 必须在 (0, 1) 范围内"))
     if patience <= 0 or checkpoint_every <= 0:
         _bad_input(ValueError("--patience 和 --checkpoint-every 必须 > 0"))
+    if log_every < 1:
+        _bad_input(ValueError("--log-every 必须 >= 1"))
     if pth_out is not None and not export_pth:
         _bad_input(ValueError("--pth-out 必须配合 --export-pth"))
     if template not in ("qa", "instruction"):
@@ -230,6 +236,7 @@ def train(
         lr=lr, lr_floor=lr_floor, warmup=warmup, ctx_len=ctx_len, epochs=epochs,
         # std 健康区间未标定：只记录，不使用旧 1.0 阈值报警。
         grad_clip=grad_clip, max_state_std=None,
+        log_every=log_every,
         early_stop=early_stop, early_stop_patience=patience,
         checkpoint_dir=checkpoint_dir, checkpoint_every=checkpoint_every,
         resume=resume, seed=seed,

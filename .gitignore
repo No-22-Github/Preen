@@ -100,6 +100,10 @@ xcuserdata/
 *.xcuserdatad
 *.xccheckout
 *.moved-aside
+# 共享 scheme(.xcscheme)里写死了本机环境变量(PREEN_SIDECAR_PYTHON /
+# PREEN_REPO_ROOT 绝对路径),换机/别人 clone 会失效。靠运行时 PythonResolver
+# 探测更稳。scheme 本身由 Xcode 在每台机器自动生成,不入库。
+macos/Preen.xcodeproj/xcshareddata/
 
 # Swift Package Manager
 .swiftpm/

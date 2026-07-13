@@ -25,6 +25,8 @@ struct ChatPanel: View {
 
     @State private var inputText: String = ""
     @State private var showSampler: Bool = false
+    /// 启动日志弹窗:点「连接」后显示,ready 自动关 / 失败保留排查。
+    @State private var isShowingStartupLog: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -39,6 +41,11 @@ struct ChatPanel: View {
                 onSend: { store.send(text: inputText); inputText = "" },
                 onAbort: { store.abort() }
             )
+        }
+        .sheet(isPresented: $isShowingStartupLog) {
+            StartupLogSheet(store: store) {
+                isShowingStartupLog = false
+            }
         }
         .onChange(of: injectedStatePath) { _, newPath in
             // 训练完成跳来:自动连 + 切 state。
@@ -91,6 +98,8 @@ struct ChatPanel: View {
             } else {
                 Button {
                     store.connect(model: URL(fileURLWithPath: modelPath))
+                    // 弹出启动日志窗口,实时看后端输出,ready 自动关。
+                    isShowingStartupLog = true
                 } label: {
                     Label("连接", systemImage: "link")
                 }

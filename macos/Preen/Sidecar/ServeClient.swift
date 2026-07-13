@@ -67,6 +67,14 @@ final class ServeClient {
     private let stderrLock = NSLock()
     private var _stderrLog = ""
 
+    /// stderr 增量回调:每收到一段后端输出就触发(供 UI 实时展示启动日志)。
+    /// 在后台线程(readabilityHandler 队列)触发,调用方自行切线程。
+    var onStderr: ((String) -> Void)?
+
+    /// stdout 增量回调:每读到一行 JSON 事件就触发原始行(诊断启动期 ready 是否到达)。
+    /// 在读循环 Task 线程触发。调用方通常只在启动期(未 ready)关心它。
+    var onStdout: ((String) -> Void)?
+
     init() {}
 
     // MARK: - 生命周期
@@ -85,6 +93,20 @@ final class ServeClient {
         process.executableURL = PythonResolver.executable
         process.arguments = argv
         process.environment = PythonResolver.childEnvironment
+
+        // 启动诊断:把 app 实际用的 python / PYTHONPATH / argv 推到启动日志窗口。
+        // 最高频根因是 PREEN_SIDECAR_PYTHON 没进子进程环境 → fallback 到
+        // /usr/bin/python3(系统自带,无 mlx 依赖,import 即崩)。这里一眼能看出来。
+        let pythonPath = PythonResolver.repoRoot?
+            .appendingPathComponent("src").path ?? "(无 — 环境变量缺失,可能用错解释器)"
+        let diag = """
+        # [Preen] sidecar python: \(PythonResolver.executable.path)
+        # [Preen] PYTHONPATH: \(pythonPath)
+        # [Preen] HF_HOME: \(PythonResolver.hfCache.path)
+        # [Preen] argv: \(argv.joined(separator: " "))
+
+        """
+        onStderr?(diag)
 
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
@@ -205,6 +227,10 @@ final class ServeClient {
             for try await line in handle.bytes.lines {
                 guard !line.isEmpty else { continue }
                 guard let data = line.data(using: .utf8) else { continue }
+                // 诊断镜像:启动期把 stdout 原始行也推给 UI,看 ready 是否到达 Swift 端。
+                if let raw = String(data: data, encoding: .utf8) {
+                    onStdout?(raw)
+                }
                 let event: ServeEvent
                 do {
                     event = try JSONDecoder().decode(ServeEvent.self, from: data)
@@ -330,6 +356,8 @@ final class ServeClient {
             _stderrLog = String(_stderrLog.suffix(32 * 1024))
         }
         stderrLock.unlock()
+        // 实时推给 UI(启动日志窗口)。
+        onStderr?(s)
     }
 
     /// 取 stderr 累积(诊断失败时用)。

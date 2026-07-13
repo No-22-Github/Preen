@@ -45,7 +45,7 @@ struct TrainingConfig: Equatable {
     var ctxLen: Int = 512
     var epochs: Int = 20
     var gradClip: Double = 1.0
-    var logEvery: Int = 10
+    var logEvery: Int = 1
     var earlyStop: Bool = true
     var earlyStopPatience: Int = 3
     var testRatio: Double = 0.1
