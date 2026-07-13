@@ -27,8 +27,10 @@ struct ContentView: View {
     @ViewBuilder
     private var detail: some View {
         switch appState.selection {
+        case .home:
+            HomeView(appState: appState)
         case .training:
-            TrainingPanel(store: appState.trainStore) { stateURL in
+            TrainingPanel(store: appState.trainStore, modelPath: $appState.modelPath) { stateURL in
                 appState.goToChat(stateURL: stateURL)
             }
         case .chat:
@@ -39,7 +41,7 @@ struct ContentView: View {
                           modelPath: appState.modelPath,
                           injectedStatePath: $appState.injectedStatePath)
             }
-        case .library:
+        case .history:
             libraryPlaceholder
         }
     }
@@ -63,10 +65,10 @@ struct ContentView: View {
             Image(systemName: "shippingbox")
                 .font(.system(size: 40))
                 .foregroundStyle(.secondary)
-            Text("State 库")
+            Text("训练记录")
                 .font(.title3)
                 .foregroundStyle(.secondary)
-            Text("待 #9 实现")
+            Text("记录详情将在下一片接入")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
         }

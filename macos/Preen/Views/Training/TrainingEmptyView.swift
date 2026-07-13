@@ -33,9 +33,16 @@ struct TrainingEmptyView: View {
                 PathRow(label: "训练数据",
                         path: $config.dataPath,
                         isDirectory: false)
-                PathRow(label: "模型目录",
-                        path: $config.modelPath,
-                        isDirectory: true)
+                HStack {
+                    Text("当前模型")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 200, alignment: .leading)
+                    Text(config.modelPath.isEmpty ? "请在侧边栏选择模型" : URL(fileURLWithPath: config.modelPath).lastPathComponent)
+                        .lineLimit(1)
+                        .foregroundStyle(config.modelPath.isEmpty ? .secondary : .primary)
+                    Spacer()
+                }
             }
             .frame(maxWidth: 480)
 

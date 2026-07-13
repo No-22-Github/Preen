@@ -11,22 +11,25 @@ import Observation
 
 /// 侧边栏选中项。
 enum SidebarItem: String, CaseIterable, Identifiable {
+    case home
     case training
     case chat
-    case library
+    case history
     var id: String { rawValue }
     var label: String {
         switch self {
+        case .home: return "首页"
         case .training: return "训练"
         case .chat: return "对话"
-        case .library: return "State 库"
+        case .history: return "训练记录"
         }
     }
     var systemImage: String {
         switch self {
+        case .home: return "house"
         case .training: return "graduationcap"
         case .chat: return "bubble.left.and.bubble.right"
-        case .library: return "shippingbox"
+        case .history: return "clock.arrow.circlepath"
         }
     }
 }
@@ -35,7 +38,8 @@ enum SidebarItem: String, CaseIterable, Identifiable {
 @MainActor
 final class AppState {
     // === 当前面板 ===
-    var selection: SidebarItem = .training
+    var selection: SidebarItem = .home
+    var selectedRunID: UUID?
 
     // === 模型(侧边栏底部选,全 app 共享)===
     var modelPath: String = ""
@@ -54,7 +58,7 @@ final class AppState {
         self.runRepository = repository
         self.backendStore = backend
         self.trainStore = TrainStore(repository: repository, backendStore: backend)
-        self.chatStore = ChatStore()
+        self.chatStore = ChatStore(backendStore: backend)
     }
 
     func restoreRuns() async {

@@ -52,6 +52,15 @@ struct ChatMessage: Identifiable, Equatable {
 @Observable
 @MainActor
 final class ChatStore {
+    private let backendStore: BackendStore
+
+    init(backendStore: BackendStore) {
+        self.backendStore = backendStore
+    }
+
+    convenience init() {
+        self.init(backendStore: BackendStore())
+    }
 
     // === 状态 ===
     private(set) var messages: [ChatMessage] = []
@@ -87,6 +96,7 @@ final class ChatStore {
         // 重置启动日志(新一轮连接)。
         startupLog = ""
         startupError = nil
+        backendStore.updateInference(phase: .starting, message: "正在加载模型")
         let client = ServeClient()
         self.client = client
         // 后端 stderr → 主线程追加到 startupLog(@Observable 自动刷新 UI)。
@@ -95,6 +105,7 @@ final class ChatStore {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.startupLog += chunk
+                self.backendStore.appendInferenceLog(chunk)
                 // 上限保护(尾部保留,避免无限增长)。
                 if self.startupLog.count > 64 * 1024 {
                     self.startupLog = String(self.startupLog.suffix(64 * 1024))
@@ -109,6 +120,7 @@ final class ChatStore {
             }
         }
         let stream = client.start(model: model)
+        backendStore.updateInference(phase: .starting, pid: client.pid, message: "正在加载模型")
         consumeTask = Task { [weak self] in
             for await event in stream {
                 self?.consume(event: event)
@@ -128,6 +140,7 @@ final class ChatStore {
         isConnected = false
         sessionId = nil
         isGenerating = false
+        backendStore.updateInference(phase: .idle, message: "推理未启动")
         // 清理启动日志状态(下次连接重新累积)。
         startupError = nil
     }
@@ -232,6 +245,7 @@ final class ChatStore {
         switch event {
         case .ready:
             isConnected = true
+            backendStore.updateInference(phase: .ready, pid: client?.pid, message: "推理就绪")
             // 自动建会话(qa 模板默认)。
             newSession()
         case .textChunk(let id, _, let delta, let phase):
@@ -258,7 +272,13 @@ final class ChatStore {
     /// serve 进程退出(stream 自然结束)时调用。
     /// 若此时仍未 connected,说明没收到 ready = 启动失败,保留启动日志供排查。
     private func handleServeExit() {
-        guard !isConnected else { return }
+        let wasConnected = isConnected
+        isConnected = false
+        backendStore.updateInference(
+            phase: wasConnected ? .idle : .failed,
+            message: wasConnected ? "推理进程已退出" : "推理启动失败"
+        )
+        guard !wasConnected else { return }
         if startupError == nil {
             startupError = "serve 进程已退出,未发出 ready 事件(请查看日志排查)"
         }

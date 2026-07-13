@@ -69,10 +69,16 @@ struct TrainingConfigView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("数据 & 模型").font(.headline)
 
-            // 模型目录。
-            PathRow(label: "模型目录(HF 转换产物)",
-                    path: $config.modelPath,
-                    isDirectory: true)
+            HStack {
+                Text("模型目录(HF 转换产物)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 200, alignment: .leading)
+                Text(config.modelPath.isEmpty ? "请在侧边栏选择模型" : config.modelPath)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer()
+            }
 
             // 训练数据。
             PathRow(label: "训练数据(JSON / JSONL)",

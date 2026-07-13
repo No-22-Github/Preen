@@ -17,6 +17,7 @@ import SwiftUI
 
 struct TrainingPanel: View {
     @Bindable var store: TrainStore
+    @Binding var modelPath: String
     @State private var config: TrainingConfig = .defaultConfig
     @State private var phase: Phase = .empty  // idle 态下的子阶段
 
@@ -81,6 +82,8 @@ struct TrainingPanel: View {
         }
         .animation(.default, value: store.state)
         .animation(.default, value: phase)
+        .onAppear { config.modelPath = modelPath }
+        .onChange(of: modelPath) { _, newValue in config.modelPath = newValue }
     }
 
     // MARK: - finishing

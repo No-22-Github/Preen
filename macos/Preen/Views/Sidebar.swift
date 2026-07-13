@@ -14,6 +14,7 @@ import SwiftUI
 
 struct Sidebar: View {
     @Bindable var appState: AppState
+    @State private var showingBackendStatus = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -24,11 +25,45 @@ struct Sidebar: View {
             Spacer()
 
             Divider()
+            backendStatus
+                .padding(.horizontal, 12)
+                .padding(.top, 10)
             // 模型选择器(钉底部)。
             modelPicker
                 .padding(12)
         }
         .frame(minWidth: 200)
+        .sheet(isPresented: $showingBackendStatus) {
+            BackendStatusView(store: appState.backendStore)
+        }
+    }
+
+    private var backendStatus: some View {
+        Button { showingBackendStatus = true } label: {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(runtimeColor)
+                    .frame(width: 8, height: 8)
+                Text(appState.backendStore.runtime.message)
+                    .font(.caption)
+                    .lineLimit(1)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("查看 Python、MLX 与后端日志")
+    }
+
+    private var runtimeColor: Color {
+        switch appState.backendStore.runtime.phase {
+        case .checking: return .orange
+        case .ready: return .green
+        case .unavailable: return .red
+        }
     }
 
     private var navList: some View {
