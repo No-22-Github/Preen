@@ -16,6 +16,7 @@ struct TrainingDoneView: View {
     @Bindable var store: TrainStore
     /// 「去对话」回调:把 state 路径传给对话面板。
     var onGoToChat: (URL) -> Void
+    var onShowChart: () -> Void
 
     var body: some View {
         VStack(spacing: 24) {
@@ -33,6 +34,12 @@ struct TrainingDoneView: View {
 
             // 按钮组。
             HStack(spacing: 12) {
+                Button {
+                    onShowChart()
+                } label: {
+                    Label("查看曲线", systemImage: "chart.xyaxis.line")
+                }
+                .disabled(store.lossPoints.isEmpty)
                 if let path = store.outputPath {
                     Button {
                         onGoToChat(URL(fileURLWithPath: path))

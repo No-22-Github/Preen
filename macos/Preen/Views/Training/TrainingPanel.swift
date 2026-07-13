@@ -20,6 +20,7 @@ struct TrainingPanel: View {
     @Binding var modelPath: String
     @State private var config: TrainingConfig = .defaultConfig
     @State private var phase: Phase = .empty  // idle 态下的子阶段
+    @State private var showingChart = false
 
     /// 「去对话」回调(把产物 state 路径传给对话面板)。
     var onGoToChat: (URL) -> Void
@@ -71,7 +72,9 @@ struct TrainingPanel: View {
                 finishingView
 
             case .completed:
-                TrainingDoneView(store: store, onGoToChat: onGoToChat)
+                TrainingDoneView(store: store, onGoToChat: onGoToChat) {
+                    showingChart = true
+                }
 
             case .failed:
                 failedView
@@ -84,6 +87,10 @@ struct TrainingPanel: View {
         .animation(.default, value: phase)
         .onAppear { config.modelPath = modelPath }
         .onChange(of: modelPath) { _, newValue in config.modelPath = newValue }
+        .sheet(isPresented: $showingChart) {
+            TrainingChartView(store: store)
+                .frame(minWidth: 760, minHeight: 480)
+        }
     }
 
     // MARK: - finishing
@@ -120,7 +127,7 @@ struct TrainingPanel: View {
 
             HStack {
                 Button("返回配置") { store.reset(); phase = .configuring }
-                Button("查看曲线") { /* 留 #7:失败后保留曲线可看 */ }
+                Button("查看曲线") { showingChart = true }
                     .disabled(store.lossPoints.isEmpty)
             }
             .buttonStyle(.bordered)
@@ -151,6 +158,8 @@ struct TrainingPanel: View {
                 .foregroundStyle(.secondary)
 
             HStack {
+                Button("查看曲线") { showingChart = true }
+                    .disabled(store.lossPoints.isEmpty)
                 Button("返回配置") { store.reset(); phase = .configuring }
                     .buttonStyle(.bordered)
                     .controlSize(.large)

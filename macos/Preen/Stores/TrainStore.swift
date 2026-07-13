@@ -29,14 +29,6 @@ enum TrainState: Equatable {
     case cancelled
 }
 
-/// loss 折线一个点。
-struct LossPoint: Identifiable, Equatable {
-    let id = UUID()
-    let step: Int
-    let loss: Double
-    let epoch: Int
-}
-
 /// epoch 边界(Swift Charts 画 RuleMark)。
 struct EpochBoundary: Identifiable, Equatable {
     let id = UUID()
@@ -46,8 +38,9 @@ struct EpochBoundary: Identifiable, Equatable {
 
 /// held-out loss 一个点(虚线)。
 struct HeldOutPoint: Identifiable, Equatable {
-    let id = UUID()
+    var id: Int { epoch }
     let epoch: Int
+    let step: Int
     let loss: Double
 }
 
@@ -59,8 +52,9 @@ final class TrainStore {
     private(set) var state: TrainState = .idle
 
     // === 损耗曲线 ===
-    private(set) var lossPoints: [LossPoint] = []
+    private(set) var lossPoints: [TrainingMetric] = []
     private(set) var heldOutPoints: [HeldOutPoint] = []
+    private(set) var epochLossPoints: [EpochLossPoint] = []
     private(set) var epochBoundaries: [EpochBoundary] = []
 
     // === 进度(3 秒判据:不点不滚能读到)===
@@ -70,7 +64,8 @@ final class TrainStore {
     private(set) var currentLoss: Double = 0
     private(set) var currentLr: Double = 0
     private(set) var startedAt: Date?
-    private(set) var estimatedTotalSeconds: Double?
+    private(set) var estimatedRemainingSeconds: Double?
+    private var stepTimingSamples: [(step: Int, timestamp: Double)] = []
 
     // === 配置(start 事件填,UI 顶部摘要回显)===
     private(set) var configSnapshot: TrainConfigSnapshot?
@@ -156,6 +151,7 @@ final class TrainStore {
         state = .idle
         lossPoints.removeAll()
         heldOutPoints.removeAll()
+        epochLossPoints.removeAll()
         epochBoundaries.removeAll()
         currentEpoch = 0
         currentStep = 0
@@ -163,7 +159,8 @@ final class TrainStore {
         currentLoss = 0
         currentLr = 0
         startedAt = nil
-        estimatedTotalSeconds = nil
+        estimatedRemainingSeconds = nil
+        stepTimingSamples.removeAll()
         configSnapshot = nil
         outputPath = nil
         finalBest = nil
@@ -189,20 +186,26 @@ final class TrainStore {
             currentEpoch = epoch
         case .epochStart(let epoch, _):
             currentEpoch = epoch
-        case .step(let step, let total, let loss, let lr, let epoch, _):
+        case .step(let step, let total, let loss, let lr, let epoch, let timestamp):
             currentStep = step
             currentLoss = loss
             currentLr = lr
             totalSteps = total
             if let ep = epoch { currentEpoch = ep }
-            lossPoints.append(LossPoint(step: step, loss: loss, epoch: currentEpoch))
-            updateEta()
-        case .epochEnd(let epoch, let loss, _, _, let heldOut, let best, _, _):
+            lossPoints.append(TrainingMetric(
+                step: step, loss: loss, learningRate: lr, epoch: currentEpoch, timestamp: timestamp
+            ))
+            updateEta(step: step, timestamp: timestamp)
+        case .epochEnd(let epoch, let loss, let stateStd, _, let heldOut, let best, _, _):
             currentEpoch = epoch
-            // 画 epoch 边界(用当前 step 号作为 RuleMark 位置)。
-            epochBoundaries.append(EpochBoundary(epoch: epoch, step: currentStep))
+            let epochEndStep = actualEpochEndStep(epoch: epoch)
+            epochBoundaries.append(EpochBoundary(epoch: epoch, step: epochEndStep))
+            epochLossPoints.append(EpochLossPoint(
+                epoch: epoch, step: epochEndStep, trainLoss: loss,
+                heldOutLoss: heldOut, stateStd: stateStd
+            ))
             if let h = heldOut {
-                heldOutPoints.append(HeldOutPoint(epoch: epoch, loss: h))
+                heldOutPoints.append(HeldOutPoint(epoch: epoch, step: epochEndStep, loss: h))
             }
             _ = best  // best 暂存到 final 处理;epoch_end 的 best 不一定是最终
             _ = loss  // epoch 平均 loss,暂不用(本期只画 step loss)
@@ -225,6 +228,8 @@ final class TrainStore {
             // ✅ 唯一可信完成信号。
             self.outputPath = path
             self.elapsed = elapsed
+            if totalSteps > 0 { currentStep = totalSteps - 1 }
+            estimatedRemainingSeconds = 0
             state = .completed
             backendStore.updateTraining(phase: .idle, message: "训练已完成")
         case .failed(let message, _, _):
@@ -248,14 +253,33 @@ final class TrainStore {
 
     // MARK: - 内部
 
-    private func updateEta() {
-        guard let start = startedAt, totalSteps > 0, currentStep > 0 else {
-            estimatedTotalSeconds = nil
+    private func updateEta(step: Int, timestamp: Double) {
+        if let previous = stepTimingSamples.last, step > previous.step, timestamp >= previous.timestamp {
+            stepTimingSamples.append((step: step, timestamp: timestamp))
+        } else if stepTimingSamples.isEmpty {
+            stepTimingSamples.append((step: step, timestamp: timestamp))
+        }
+        if stepTimingSamples.count > 21 {
+            stepTimingSamples.removeFirst(stepTimingSamples.count - 21)
+        }
+        guard stepTimingSamples.count >= 2, totalSteps > 0 else {
+            estimatedRemainingSeconds = nil
             return
         }
-        let elapsed = Date().timeIntervalSince(start)
-        let perStep = elapsed / Double(currentStep)
-        estimatedTotalSeconds = perStep * Double(totalSteps)
+        let pairs = zip(stepTimingSamples, stepTimingSamples.dropFirst())
+        let perStep = pairs.compactMap { older, newer -> Double? in
+            let stepDelta = newer.step - older.step
+            guard stepDelta > 0 else { return nil }
+            return (newer.timestamp - older.timestamp) / Double(stepDelta)
+        }
+        guard !perStep.isEmpty else { estimatedRemainingSeconds = nil; return }
+        let average = perStep.reduce(0, +) / Double(perStep.count)
+        estimatedRemainingSeconds = average * Double(max(0, totalSteps - step - 1))
+    }
+
+    private func actualEpochEndStep(epoch: Int) -> Int {
+        guard let configSnapshot else { return currentStep }
+        return min(max(0, totalSteps - 1), max(0, (epoch + 1) * configSnapshot.nSamples - 1))
     }
 
     /// 事件流结束时,若仍在 running/finishing,说明进程异常退出。
@@ -373,14 +397,18 @@ final class TrainStore {
 
     /// 预计剩余秒数。
     var remainingSeconds: Double? {
-        guard let total = estimatedTotalSeconds, let done = elapsedSeconds else { return nil }
-        return max(0, total - done)
+        estimatedRemainingSeconds
     }
 
     /// 进度百分比(0~1)。
     var progress: Double {
         guard totalSteps > 0 else { return 0 }
-        return min(1, Double(currentStep) / Double(totalSteps))
+        let completed = lossPoints.isEmpty ? 0 : currentStep + 1
+        return min(1, Double(completed) / Double(totalSteps))
+    }
+
+    var displayedCurrentStep: Int {
+        lossPoints.isEmpty ? 0 : min(totalSteps, currentStep + 1)
     }
 
     /// 当前 loss 显示文案。

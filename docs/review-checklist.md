@@ -104,12 +104,12 @@
 - `macos/Preen/Models/TrainingMetric.swift`
 - `macos/PreenTests/TrainingMetricTests.swift`
 
-- [ ] 修正 0-based step 的显示、进度和 ETA 计算。
-- [ ] ETA 改用 step 时间戳的滚动统计，不混入模型加载时间。
-- [ ] held-out loss 使用真实 epoch 结束 step；保留 epoch 平均 train loss。
-- [ ] raw loss 用低透明度细线；EMA 用 2pt 主线，默认 smoothing 0.6，可调 0-0.95。
-- [ ] 移除每点常驻 PointMark，加入 hover 十字线和 raw / EMA / lr / epoch 提示。
-- [ ] 失败、取消、完成态都能重新打开同一张曲线。
+- [x] 修正 0-based step 的显示、进度和 ETA 计算。
+- [x] ETA 改用 step 时间戳的滚动统计，不混入模型加载时间。
+- [x] held-out loss 使用真实 epoch 结束 step；保留 epoch 平均 train loss。
+- [x] raw loss 用低透明度细线；EMA 用 2pt 主线，默认 smoothing 0.6，可调 0-0.95。
+- [x] 移除每点常驻 PointMark，加入 hover 十字线和 raw / EMA / lr / epoch 提示。
+- [x] 失败、取消、完成态都能重新打开同一张曲线。
 
 验收：平滑只影响显示，不改 events 与训练结果；调到 0 可还原 raw 走势；历史记录重开后曲线一致。
 
