@@ -161,6 +161,13 @@ final class ServeClient {
         }
     }
 
+    /// 不阻塞 MainActor 地等待 SIGTERM 完成，确保下一项重任务启动前 Metal 资源已释放。
+    func waitUntilExit() async {
+        while process.isRunning {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+    }
+
     /// 进程是否仍在跑。
     var isRunning: Bool {
         process.isRunning

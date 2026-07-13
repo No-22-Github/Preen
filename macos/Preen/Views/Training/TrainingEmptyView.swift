@@ -53,7 +53,7 @@ struct TrainingEmptyView: View {
                     Label("继续配置", systemImage: "arrow.right")
                         .frame(minWidth: 140)
                 }
-                .buttonStyle(.borderedProminent)
+                .preenGlassButton(prominent: true)
                 .controlSize(.large)
                 .transition(.opacity)
             }

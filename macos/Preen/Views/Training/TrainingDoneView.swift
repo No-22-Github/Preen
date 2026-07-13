@@ -47,7 +47,7 @@ struct TrainingDoneView: View {
                         Label("去对话", systemImage: "bubble.left.and.bubble.right")
                             .frame(minWidth: 120)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .preenGlassButton(prominent: true)
                     .controlSize(.large)
                 }
                 if let path = store.outputPath {

@@ -22,25 +22,27 @@ struct HomeView: View {
                     .frame(maxWidth: .infinity)
                     .accessibilityLabel("Preen")
 
-                HStack(spacing: 12) {
-                    QuickActionCard(
-                        title: "开始训练", subtitle: "选择数据并配置 State Tuning", systemImage: "play.fill",
-                        isEnabled: !appState.modelPath.isEmpty
-                    ) { appState.selection = .training }
-                    QuickActionCard(
-                        title: "继续最近记录", subtitle: recentRuns.first.map { $0.status.label } ?? "暂无记录",
-                        systemImage: "clock.arrow.circlepath", isEnabled: !recentRuns.isEmpty
-                    ) {
-                        appState.selectedRunID = recentRuns.first?.id
-                        appState.selection = .history
-                    }
-                    let stateRun = recentRuns.first { $0.artifacts.statePath != nil }
-                    QuickActionCard(
-                        title: "测试最近 State", subtitle: stateRun?.artifacts.statePath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "暂无可用 State",
-                        systemImage: "bubble.left.and.bubble.right", isEnabled: stateRun != nil && !appState.modelPath.isEmpty
-                    ) {
-                        if let path = stateRun?.artifacts.statePath {
-                            appState.goToChat(stateURL: URL(fileURLWithPath: path))
+                PreenGlassEffectGroup(spacing: 8) {
+                    HStack(spacing: 12) {
+                        QuickActionCard(
+                            title: "开始训练", subtitle: "选择数据并配置 State Tuning", systemImage: "play.fill",
+                            isEnabled: !appState.modelPath.isEmpty
+                        ) { appState.selection = .training }
+                        QuickActionCard(
+                            title: "继续最近记录", subtitle: recentRuns.first.map { $0.status.label } ?? "暂无记录",
+                            systemImage: "clock.arrow.circlepath", isEnabled: !recentRuns.isEmpty
+                        ) {
+                            appState.selectedRunID = recentRuns.first?.id
+                            appState.selection = .history
+                        }
+                        let stateRun = recentRuns.first { $0.artifacts.statePath != nil }
+                        QuickActionCard(
+                            title: "测试最近 State", subtitle: stateRun?.artifacts.statePath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "暂无可用 State",
+                            systemImage: "bubble.left.and.bubble.right", isEnabled: stateRun != nil && !appState.modelPath.isEmpty
+                        ) {
+                            if let path = stateRun?.artifacts.statePath {
+                                appState.goToChat(stateURL: URL(fileURLWithPath: path))
+                            }
                         }
                     }
                 }

@@ -52,7 +52,7 @@ struct TrainingConfigView: View {
                         Label("开始训练", systemImage: "play.fill")
                             .frame(minWidth: 140)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .preenGlassButton(prominent: true)
                     .controlSize(.large)
                     .disabled(!config.canStart)
                     .keyboardShortcut(.return, modifiers: .command)

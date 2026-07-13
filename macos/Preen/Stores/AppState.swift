@@ -42,7 +42,12 @@ final class AppState {
     var selectedRunID: UUID?
 
     // === 模型(侧边栏底部选,全 app 共享)===
-    var modelPath: String = ""
+    private var modelCatalog: RecentModelCatalog
+    var modelPath: String {
+        get { modelCatalog.selectedPath }
+        set { selectModel(path: newValue) }
+    }
+    var recentModels: [RecentModel] { modelCatalog.entries }
 
     // === 子 store ===
     let trainStore: TrainStore
@@ -50,15 +55,75 @@ final class AppState {
     let backendStore: BackendStore
     let runRepository: RunRepository
     private(set) var runs: [TrainingRun] = []
+    private(set) var isSwitchingWorker = false
 
-    init() {
+    init(defaults: UserDefaults = .standard) {
         PythonResolver.ensureApplicationDirectories()
         let repository = RunRepository()
         let backend = BackendStore()
+        self.modelCatalog = RecentModelCatalog(defaults: defaults)
         self.runRepository = repository
         self.backendStore = backend
         self.trainStore = TrainStore(repository: repository, backendStore: backend)
         self.chatStore = ChatStore(backendStore: backend)
+    }
+
+    // MARK: - 模型与进程协调
+
+    func selectModel(path: String) {
+        let previousPath = modelCatalog.selectedPath
+        modelCatalog.select(path: path)
+        if modelCatalog.selectedPath != previousPath, chatStore.hasActiveProcess {
+            // 换模型不会自动重连；先终止旧模型，避免 Metal 内存池继续驻留。
+            chatStore.disconnect()
+        }
+    }
+
+    /// 模型列表每次展开前调用，移除已经移动/删除的目录。
+    func validateRecentModels() {
+        let previousPath = modelCatalog.selectedPath
+        modelCatalog.validate()
+        if previousPath != modelCatalog.selectedPath, chatStore.hasActiveProcess {
+            chatStore.disconnect()
+        }
+    }
+
+    /// 强制单工作进程：释放推理模型后才允许训练进程启动。
+    func startTraining(config: TrainingConfig) {
+        guard !isSwitchingWorker else { return }
+        isSwitchingWorker = true
+        Task { [weak self] in
+            guard let self else { return }
+            defer { isSwitchingWorker = false }
+            if chatStore.hasActiveProcess {
+                backendStore.updateInference(
+                    phase: .stopping,
+                    pid: chatStore.processID,
+                    message: "正在释放推理模型"
+                )
+                await chatStore.disconnectAndWait()
+            }
+            trainStore.start(config: config)
+        }
+    }
+
+    /// 强制单工作进程：取消并等训练进程退出后才加载推理模型。
+    func connectInference() {
+        guard !modelPath.isEmpty, !isSwitchingWorker else { return }
+        let model = URL(fileURLWithPath: modelPath)
+        isSwitchingWorker = true
+        Task { [weak self] in
+            guard let self else { return }
+            defer { isSwitchingWorker = false }
+            if trainStore.hasActiveProcess {
+                await trainStore.cancelAndWait()
+            }
+            chatStore.connect(model: model)
+        }
+    }
+
+    func disconnectInference() {
+        chatStore.disconnect()
     }
 
     func restoreRuns() async {

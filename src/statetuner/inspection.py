@@ -5,6 +5,7 @@ import json
 import platform
 import sys
 from dataclasses import asdict, dataclass
+from importlib import metadata
 from pathlib import Path
 from typing import Any
 
@@ -325,6 +326,17 @@ def validate_state_for_model(state_path: Path, model) -> dict:
     return _load_state_dict(state_path)
 
 
+def _module_version(module_name: str, module: Any) -> str:
+    """优先读模块版本；namespace package 则回退到安装分发元数据。"""
+    module_version = getattr(module, "__version__", None)
+    if module_version not in (None, "", "unknown"):
+        return str(module_version)
+    try:
+        return metadata.version(module_name.replace("_", "-"))
+    except metadata.PackageNotFoundError:
+        return "unknown"
+
+
 def doctor_report() -> dict:
     """返回轻量环境报告；单个可选组件失败不会让整个 doctor 崩溃。"""
     report: dict[str, Any] = {
@@ -336,7 +348,10 @@ def doctor_report() -> dict:
     for module_name in ("numpy", "ml_dtypes", "mlx", "mlx_lm"):
         try:
             module = __import__(module_name)
-            report[module_name] = {"ok": True, "version": getattr(module, "__version__", "unknown")}
+            report[module_name] = {
+                "ok": True,
+                "version": _module_version(module_name, module),
+            }
         except BaseException as exc:
             report[module_name] = {"ok": False, "error": str(exc)}
     try:

@@ -34,16 +34,21 @@ struct ContentView: View {
         case .home:
             HomeView(appState: appState)
         case .training:
-            TrainingPanel(store: appState.trainStore, modelPath: $appState.modelPath) { stateURL in
-                appState.goToChat(stateURL: stateURL)
-            }
+            TrainingPanel(
+                store: appState.trainStore,
+                modelPath: $appState.modelPath,
+                onStart: { appState.startTraining(config: $0) },
+                onGoToChat: { appState.goToChat(stateURL: $0) }
+            )
         case .chat:
             if appState.modelPath.isEmpty {
                 chatNeedsModel
             } else {
                 ChatPanel(store: appState.chatStore,
                           modelPath: appState.modelPath,
-                          injectedStatePath: $appState.injectedStatePath)
+                          injectedStatePath: $appState.injectedStatePath,
+                          onConnect: { appState.connectInference() },
+                          onDisconnect: { appState.disconnectInference() })
             }
         case .history:
             TrainingHistoryView(appState: appState)

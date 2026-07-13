@@ -22,6 +22,8 @@ struct TrainingPanel: View {
     @State private var phase: Phase = .empty  // idle 态下的子阶段
     @State private var showingChart = false
 
+    var onStart: (TrainingConfig) -> Void
+
     /// 「去对话」回调(把产物 state 路径传给对话面板)。
     var onGoToChat: (URL) -> Void
 
@@ -42,7 +44,7 @@ struct TrainingPanel: View {
                     }
                 case .configuring:
                     TrainingConfigView(config: $config) {
-                        store.start(config: config)
+                        onStart(config)
                     }
                     .toolbar {
                         ToolbarItem(placement: .navigation) {

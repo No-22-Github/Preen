@@ -25,8 +25,9 @@ struct QuickActionCard: View {
             .padding(14)
             .frame(maxWidth: .infinity, minHeight: 76, alignment: .leading)
             .contentShape(Rectangle())
+            .preenGlassSurface(cornerRadius: 14, interactive: isEnabled)
         }
-        .buttonStyle(.bordered)
+        .preenQuickActionButtonStyle()
         .disabled(!isEnabled)
     }
 }

@@ -3,6 +3,7 @@ import json
 import numpy as np
 import pytest
 
+from statetuner import inspection
 from statetuner.inspection import inspect_data, load_qa_pairs, validate_state_for_model
 
 
@@ -10,6 +11,32 @@ class CharTokenizer:
     @staticmethod
     def encode(text):
         return [ord(char) for char in text]
+
+
+def test_module_version_uses_distribution_metadata_for_namespace_package(monkeypatch):
+    class NamespacePackage:
+        pass
+
+    requested = []
+
+    def fake_version(name):
+        requested.append(name)
+        return "0.32.0"
+
+    monkeypatch.setattr(inspection.metadata, "version", fake_version)
+    assert inspection._module_version("mlx", NamespacePackage()) == "0.32.0"
+    assert requested == ["mlx"]
+
+
+def test_module_version_prefers_module_attribute(monkeypatch):
+    class VersionedPackage:
+        __version__ = "1.2.3"
+
+    def unexpected_metadata_lookup(_):
+        raise AssertionError("有 __version__ 时不应查询分发元数据")
+
+    monkeypatch.setattr(inspection.metadata, "version", unexpected_metadata_lookup)
+    assert inspection._module_version("numpy", VersionedPackage()) == "1.2.3"
 
 
 def test_inspect_data_counts_invalid_and_truncated(tmp_path):

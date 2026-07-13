@@ -102,6 +102,13 @@ final class TrainJobRunner {
         process.interrupt()  // SIGINT
     }
 
+    /// 不阻塞 MainActor 地等待训练进程完成 SIGINT 收尾。
+    func waitUntilExit() async {
+        while process.isRunning {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+    }
+
     /// 进程是否仍在跑。
     var isRunning: Bool {
         process.isRunning

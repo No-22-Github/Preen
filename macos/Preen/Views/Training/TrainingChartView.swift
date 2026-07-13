@@ -102,7 +102,14 @@ struct TrainingChartView: View {
                     )
                     .foregroundStyle(Color.accentColor)
                     .symbolSize(45)
-                    .annotation(position: .top, spacing: 8) {
+                    .annotation(
+                        position: .top,
+                        spacing: 8,
+                        overflowResolution: AnnotationOverflowResolution(
+                            x: .fit(to: .chart),
+                            y: .fit(to: .chart)
+                        )
+                    ) {
                         tooltip(point, metric: selectedMetric)
                     }
                 }
@@ -197,7 +204,8 @@ struct TrainingChartView: View {
         }
         .font(.caption.monospacedDigit())
         .padding(7)
-        .background(.regularMaterial, in: .rect)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
     }
 
     private func pressureText(_ pressure: MemoryPressureLevel) -> String {

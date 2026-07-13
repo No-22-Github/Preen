@@ -15,6 +15,7 @@ import SwiftUI
 struct Sidebar: View {
     @Bindable var appState: AppState
     @State private var showingBackendStatus = false
+    @State private var showingModelList = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -42,9 +43,9 @@ struct Sidebar: View {
         Button { showingBackendStatus = true } label: {
             HStack(spacing: 8) {
                 Circle()
-                    .fill(runtimeColor)
+                    .fill(backendColor)
                     .frame(width: 8, height: 8)
-                Text(appState.backendStore.runtime.message)
+                Text(backendEntryLabel)
                     .font(.caption)
                     .lineLimit(1)
                 Spacer()
@@ -58,29 +59,51 @@ struct Sidebar: View {
         .help("查看 Python、MLX 与后端日志")
     }
 
-    private var runtimeColor: Color {
-        switch appState.backendStore.runtime.phase {
-        case .checking: return .orange
-        case .ready: return .green
-        case .unavailable: return .red
-        }
+    private var backendColor: Color {
+        if backendHasError { return .red }
+        if backendIsTransitioning { return .orange }
+        return .green
+    }
+
+    private var backendEntryLabel: String {
+        if backendHasError { return "后端异常 · 查看日志" }
+        if backendIsTransitioning { return "后端切换中" }
+        return "后端状态与日志"
+    }
+
+    private var backendHasError: Bool {
+        let backend = appState.backendStore
+        return backend.runtime.phase == .unavailable ||
+            backend.training.phase == .failed || backend.inference.phase == .failed
+    }
+
+    private var backendIsTransitioning: Bool {
+        let backend = appState.backendStore
+        return backend.runtime.phase == .checking ||
+            backend.training.phase == .starting || backend.training.phase == .stopping ||
+            backend.inference.phase == .starting || backend.inference.phase == .stopping
     }
 
     private var navList: some View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(SidebarItem.allCases) { item in
+                let isSelected = appState.selection == item
                 Button {
                     appState.selection = item
                 } label: {
                     Label(item.label, systemImage: item.systemImage)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
                 .buttonStyle(.plain)
-                .padding(.vertical, 6)
-                .padding(.horizontal, 12)
-                .background(appState.selection == item ? Color.accentColor.opacity(0.15) : .clear,
-                            in: .rect)
+                .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+                .background(
+                    isSelected ? Color.accentColor.opacity(0.15) : .clear,
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
+                .padding(.horizontal, 8)
             }
         }
     }
@@ -90,32 +113,103 @@ struct Sidebar: View {
             Text("模型")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            HStack {
-                Text(appState.modelPath.isEmpty ? "(未选)" :
-                     URL(fileURLWithPath: appState.modelPath).lastPathComponent)
-                    .font(.caption)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .foregroundStyle(appState.modelPath.isEmpty ? .secondary : .primary)
-                Spacer()
-                Button("选…") { pickModel() }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+            Button {
+                // 用户每次展开列表都重新校验，路径失效的项不会继续显示。
+                appState.validateRecentModels()
+                showingModelList.toggle()
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "shippingbox")
+                        .foregroundStyle(.secondary)
+                    Text(appState.modelPath.isEmpty ? "选择模型" :
+                         URL(fileURLWithPath: appState.modelPath).lastPathComponent)
+                        .font(.caption)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .foregroundStyle(appState.modelPath.isEmpty ? .secondary : .primary)
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 7)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .preenGlassSurface(cornerRadius: 7, interactive: true)
+            .popover(isPresented: $showingModelList, arrowEdge: .trailing) {
+                recentModelList
             }
         }
+    }
+
+    private var recentModelList: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("最近使用的模型")
+                .font(.headline)
+                .padding(.horizontal, 10)
+                .padding(.top, 8)
+
+            if appState.recentModels.isEmpty {
+                Text("还没有模型记录")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+            } else {
+                ForEach(appState.recentModels) { model in
+                    Button {
+                        appState.selectModel(path: model.path)
+                        showingModelList = false
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "checkmark")
+                                .frame(width: 12)
+                                .opacity(appState.modelPath == model.path ? 1 : 0)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(model.displayName)
+                                    .lineLimit(1)
+                                Text(model.path)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            Spacer()
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                }
+            }
+
+            Divider()
+            Button {
+                showingModelList = false
+                pickModel()
+            } label: {
+                Label("选择其他模型…", systemImage: "folder")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(10)
+        }
+        .frame(width: 330)
     }
 
     private func pickModel() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
         panel.prompt = "选择模型目录"
         if panel.runModal() == .OK, let url = panel.url {
-            // 换模型 = 重启 serve(design.md §3 铁律)。
-            if appState.chatStore.isConnected {
-                appState.chatStore.disconnect()
-            }
-            appState.modelPath = url.path
+            appState.selectModel(path: url.path)
         }
     }
 }

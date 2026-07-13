@@ -22,6 +22,8 @@ struct ChatPanel: View {
     var modelPath: String
     /// 外部「去对话」入口注入的 state 路径(训练完成 → 跳对话,自动设上)。
     @Binding var injectedStatePath: String?
+    var onConnect: () -> Void
+    var onDisconnect: () -> Void
 
     @State private var inputText: String = ""
     @State private var showSampler: Bool = false
@@ -31,6 +33,9 @@ struct ChatPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             topBar
+                .padding(.horizontal, 8)
+                .padding(.top, 6)
+                .padding(.bottom, 4)
             Divider()
             messageList
             Divider()
@@ -94,10 +99,10 @@ struct ChatPanel: View {
 
             // 连接 / 断开。
             if store.isConnected {
-                Button("断开") { store.disconnect() }
+                Button("断开", action: onDisconnect)
             } else {
                 Button {
-                    store.connect(model: URL(fileURLWithPath: modelPath))
+                    onConnect()
                     // 弹出启动日志窗口,实时看后端输出,ready 自动关。
                     isShowingStartupLog = true
                 } label: {
@@ -109,6 +114,7 @@ struct ChatPanel: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .frame(height: 44)
+        .preenGlassSurface(cornerRadius: 14)
     }
 
     private var samplerControls: some View {

@@ -145,6 +145,21 @@ final class ChatStore {
         startupError = nil
     }
 
+    /// 终止 serve 并等待进程真正退出，供训练/推理互斥切换使用。
+    func disconnectAndWait() async {
+        let departingClient = client
+        disconnect()
+        await departingClient?.waitUntilExit()
+    }
+
+    var hasActiveProcess: Bool {
+        client?.isRunning == true
+    }
+
+    var processID: Int32? {
+        client?.pid
+    }
+
     // MARK: - 用户动作
 
     /// 发送一条消息。

@@ -150,6 +150,31 @@ final class TrainStore {
         runner?.cancel()
     }
 
+    /// 请求取消并等待训练子进程真正退出，供训练/推理互斥切换使用。
+    func cancelAndWait() async {
+        if state == .preparing {
+            cancel()
+            return
+        }
+        guard let runner, runner.isRunning else { return }
+        backendStore.updateTraining(
+            phase: .stopping,
+            pid: runner.pid,
+            message: "正在停止训练以启动推理"
+        )
+        runner.cancel()
+        await runner.waitUntilExit()
+    }
+
+    var hasActiveProcess: Bool {
+        switch state {
+        case .preparing, .running, .finishing:
+            return true
+        case .idle, .completed, .failed, .cancelled:
+            return runner?.isRunning == true
+        }
+    }
+
     /// 重置到 idle(清空所有状态,准备再训一个)。
     func reset() {
         preparationTask?.cancel()

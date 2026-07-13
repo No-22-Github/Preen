@@ -57,7 +57,7 @@ struct ChatInputBar: View {
                     Label("发送", systemImage: "arrow.up")
                         .frame(minWidth: 70)
                 }
-                .buttonStyle(.borderedProminent)
+                .preenGlassButton(prominent: true)
                 .controlSize(.large)
                 .disabled(!canSend || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .keyboardShortcut(.return, modifiers: .command)
