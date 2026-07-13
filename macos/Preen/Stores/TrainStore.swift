@@ -21,6 +21,7 @@ import Observation
 /// 训练状态机。
 enum TrainState: Equatable {
     case idle
+    case preparing
     case running
     case finishing  // final 收到,completed 没到
     case completed  // 唯一可信完成
@@ -90,37 +91,68 @@ final class TrainStore {
 
     // === runner 持有(取消用)===
     private var runner: TrainJobRunner?
+    private let repository: RunRepository
+    private let backendStore: BackendStore
+    private var preparationTask: Task<Void, Never>?
+    private(set) var currentRun: TrainingRun?
+    private(set) var currentRunDirectory: URL?
+
+    init(repository: RunRepository, backendStore: BackendStore) {
+        self.repository = repository
+        self.backendStore = backendStore
+    }
+
+    convenience init() {
+        self.init(repository: RunRepository(), backendStore: BackendStore())
+    }
 
     // MARK: - 生命周期
 
     /// 配置 + runner 注入,开始训练。UI 调用。
     func start(config: TrainingConfig) {
         reset()
-        state = .running
-        startedAt = Date()
-        let runner = TrainJobRunner()
-        self.runner = runner
-        let cwd = PythonResolver.repoRoot  // 让相对路径可用
-        let stream = runner.start(argv: config.commandLineArguments(), currentDirectory: cwd)
-        // 后台消费事件流(每条都 hop 回 MainActor)。
-        Task { [weak self] in
-            for await event in stream {
-                self?.consume(event: event)
+        state = .preparing
+        let run = TrainingRun(config: config.persisted)
+        currentRun = run
+        backendStore.updateTraining(phase: .starting, message: "正在准备训练记录")
+
+        preparationTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let directory = try await repository.create(run)
+                guard !Task.isCancelled else {
+                    markPreparingRunCancelled()
+                    return
+                }
+                currentRunDirectory = directory
+                var resolvedConfig = config
+                resolvedConfig.eventsFilePath = directory
+                    .appendingPathComponent(RunRepository.eventsFilename).path
+                let stderrURL = directory.appendingPathComponent(RunRepository.stderrFilename)
+                launch(config: resolvedConfig, stderrURL: stderrURL)
+            } catch {
+                let message = "无法创建训练记录:\(error.localizedDescription)"
+                errorMessage = message
+                state = .failed
+                backendStore.updateTraining(phase: .failed, message: message)
             }
-            // 流结束(stream finish = 进程退出 + 事件 drain 完)。
-            // 如果此时仍是 running/finishing,说明进程异常退出没发终结事件,
-            // 退回失败态让 UI 能恢复。
-            self?.handleStreamEnd()
         }
     }
 
     /// SIGINT 取消。UI 的「取消」按钮调用。
     func cancel() {
+        if state == .preparing {
+            preparationTask?.cancel()
+            markPreparingRunCancelled()
+            return
+        }
         runner?.cancel()
     }
 
     /// 重置到 idle(清空所有状态,准备再训一个)。
     func reset() {
+        preparationTask?.cancel()
+        preparationTask = nil
         state = .idle
         lossPoints.removeAll()
         heldOutPoints.removeAll()
@@ -142,6 +174,8 @@ final class TrainStore {
         cancelledMessage = nil
         unknownEventCount = 0
         runner = nil
+        currentRun = nil
+        currentRunDirectory = nil
     }
 
     // MARK: - 事件消费(穷举,不许 default — design.md §4.2)
@@ -192,12 +226,15 @@ final class TrainStore {
             self.outputPath = path
             self.elapsed = elapsed
             state = .completed
+            backendStore.updateTraining(phase: .idle, message: "训练已完成")
         case .failed(let message, _, _):
             self.errorMessage = message
             state = .failed
+            backendStore.updateTraining(phase: .failed, message: message)
         case .cancelled(let message, _):
             self.cancelledMessage = message
             state = .cancelled
+            backendStore.updateTraining(phase: .idle, message: "训练已取消")
         case .unknown:
             // 演进兜底:Python 加新事件类型不让旧 app 崩。
             // 不切状态,只计数(UI 可提示「收到未知事件 N 次,建议升级」)。
@@ -206,6 +243,7 @@ final class TrainStore {
             print("[TrainStore] unknown event: \(event)")
             #endif
         }
+        updatePersistedRun(with: event)
     }
 
     // MARK: - 内部
@@ -229,8 +267,96 @@ final class TrainStore {
                 errorMessage = "训练进程异常退出(未发出 completed/failed/cancelled 事件)"
             }
             state = .failed
-        case .idle, .completed, .failed, .cancelled:
+            updatePersistedRun(with: .failed(
+                message: errorMessage ?? "训练进程异常退出",
+                path: outputPath,
+                timestamp: Date().timeIntervalSince1970
+            ))
+            backendStore.updateTraining(phase: .failed, message: errorMessage ?? "训练进程异常退出")
+        case .idle, .preparing, .completed, .failed, .cancelled:
             break
+        }
+    }
+
+    private func launch(config: TrainingConfig, stderrURL: URL) {
+        state = .running
+        startedAt = Date()
+        let runner = TrainJobRunner()
+        self.runner = runner
+        runner.onStderr = { [weak self] chunk in
+            Task { @MainActor [weak self] in self?.backendStore.appendTrainingLog(chunk) }
+        }
+        runner.onExit = { [weak self] info in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if info.status == 0, self.state == .completed {
+                    self.backendStore.updateTraining(phase: .idle, message: "训练已完成")
+                }
+            }
+        }
+        let stream = runner.start(
+            argv: config.commandLineArguments(),
+            currentDirectory: PythonResolver.repoRoot,
+            stderrFile: stderrURL
+        )
+        backendStore.updateTraining(phase: .running, pid: runner.pid, message: "训练中")
+        Task { [weak self] in
+            for await event in stream {
+                self?.consume(event: event)
+            }
+            self?.handleStreamEnd()
+        }
+    }
+
+    private func markPreparingRunCancelled() {
+        guard state == .preparing else { return }
+        cancelledMessage = "训练在启动前已取消"
+        state = .cancelled
+        if var run = currentRun {
+            let now = Date()
+            run.status = .cancelled
+            run.updatedAt = now
+            run.finishedAt = now
+            run.failureMessage = cancelledMessage
+            currentRun = run
+            Task { try? await repository.save(run) }
+        }
+        backendStore.updateTraining(phase: .idle, message: "训练已取消")
+    }
+
+    private func updatePersistedRun(with event: TrainEvent) {
+        guard var run = currentRun else { return }
+        run.apply(event: event)
+        if case .completed(let path, _, _, _) = event {
+            associateArtifacts(statePath: path, with: &run)
+        }
+        currentRun = run
+
+        let shouldSave: Bool
+        switch event {
+        case .start, .epochEnd, .checkpoint, .final, .completed, .failed, .cancelled:
+            shouldSave = true
+        case .resume, .epochStart, .step, .stdWarning, .earlyStop, .unknown:
+            shouldSave = false
+        }
+        if shouldSave {
+            Task { try? await repository.save(run) }
+        }
+    }
+
+    private func associateArtifacts(statePath: String, with run: inout TrainingRun) {
+        let stateURL = URL(fileURLWithPath: statePath)
+        let baseURL = stateURL.deletingPathExtension()
+        let metadataURL = baseURL.appendingPathExtension("meta.json")
+        if FileManager.default.fileExists(atPath: metadataURL.path) {
+            run.artifacts.metadataPath = metadataURL.path
+        }
+        if let config = run.config {
+            let pthURL = config.pthOutputPath.map(URL.init(fileURLWithPath:))
+                ?? URL(fileURLWithPath: config.outputPath).deletingPathExtension().appendingPathExtension("pth")
+            if config.exportPth, FileManager.default.fileExists(atPath: pthURL.path) {
+                run.artifacts.pthPath = pthURL.path
+            }
         }
     }
 

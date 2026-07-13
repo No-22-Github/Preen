@@ -37,7 +37,10 @@ final class RunRepositoryTests: XCTestCase {
         let loaded = try await repository.load(id: run.id)
         XCTAssertEqual(loaded.status, .completed)
         let directory = temporaryRoot.appendingPathComponent(run.id.uuidString.lowercased())
-        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path), [RunRepository.runFilename])
+        XCTAssertEqual(
+            Set(try FileManager.default.contentsOfDirectory(atPath: directory.path)),
+            Set([RunRepository.runFilename, RunRepository.eventsFilename, RunRepository.stderrFilename])
+        )
     }
 
     func testScanSortsRecordsAndSkipsMalformedDirectories() async throws {

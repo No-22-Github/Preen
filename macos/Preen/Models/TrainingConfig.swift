@@ -130,4 +130,27 @@ struct TrainingConfig: Equatable {
         parts.append("seed \(seed)")
         return parts.joined(separator: " · ")
     }
+
+    var persisted: PersistedTrainingConfig {
+        PersistedTrainingConfig(
+            modelPath: modelPath,
+            dataPath: dataPath,
+            outputPath: outPath,
+            template: template.rawValue,
+            learningRate: lr,
+            learningRateFloor: lrFloor,
+            warmup: warmup,
+            contextLength: ctxLen,
+            epochs: epochs,
+            gradientClip: gradClip,
+            earlyStop: earlyStop,
+            earlyStopPatience: earlyStopPatience,
+            testRatio: testRatio,
+            seed: seed,
+            cacheLimitGB: cacheLimitGb,
+            checkpointDirectory: checkpointDir.isEmpty ? nil : checkpointDir,
+            exportPth: exportPth,
+            pthOutputPath: pthOutPath.isEmpty ? nil : pthOutPath
+        )
+    }
 }

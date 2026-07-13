@@ -16,7 +16,9 @@ struct PreenApp: App {
             ContentView(appState: appState)
                 .frame(minWidth: 1000, minHeight: 680)  // 兜底最小尺寸(macOS 14)
                 .task {
-                    await appState.backendStore.checkRuntime()
+                    async let runtime: Void = appState.backendStore.checkRuntime()
+                    async let runs: Void = appState.restoreRuns()
+                    _ = await (runtime, runs)
                 }
         }
         .defaultSize(width: 1180, height: 760)  // design.md §3 默认尺寸(macOS 15+)

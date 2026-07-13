@@ -40,6 +40,9 @@ struct PersistedTrainingConfig: Codable, Equatable {
     var testRatio: Double
     var seed: Int
     var cacheLimitGB: String
+    var checkpointDirectory: String? = nil
+    var exportPth: Bool = false
+    var pthOutputPath: String? = nil
 }
 
 struct TrainingRunArtifacts: Codable, Equatable {
@@ -93,5 +96,46 @@ struct TrainingRun: Codable, Identifiable, Equatable {
         self.config = config
         self.artifacts = .empty
         self.summary = .empty
+    }
+}
+
+extension TrainingRun {
+    mutating func apply(event: TrainEvent) {
+        let date = Date(timeIntervalSince1970: event.timestamp)
+        updatedAt = date
+        switch event {
+        case .start:
+            status = .running
+            startedAt = date
+        case .resume, .epochStart, .step, .stdWarning, .earlyStop, .unknown:
+            break
+        case .epochEnd(let epoch, let loss, let stateStd, _, let heldOutLoss, _, _, _):
+            summary.actualEpochs = epoch + 1
+            summary.finalLoss = loss
+            summary.heldOutLoss = heldOutLoss
+            summary.stateStd = stateStd
+        case .checkpoint(_, let path, _):
+            if !artifacts.checkpoints.contains(path) {
+                artifacts.checkpoints.append(path)
+            }
+        case .final(let path, let elapsed, let best, _):
+            status = .finishing
+            artifacts.statePath = path
+            summary.elapsedSeconds = elapsed
+            if let best { summary.heldOutLoss = best }
+        case .completed(let path, let elapsed, _, _):
+            status = .completed
+            artifacts.statePath = path
+            summary.elapsedSeconds = elapsed
+            finishedAt = date
+        case .failed(let message, _, _):
+            status = .failed
+            failureMessage = message
+            finishedAt = date
+        case .cancelled(let message, _):
+            status = .cancelled
+            failureMessage = message
+            finishedAt = date
+        }
     }
 }

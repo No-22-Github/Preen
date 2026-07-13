@@ -49,6 +49,19 @@ struct TrainingPanel: View {
                     }
                 }
 
+            case .preparing:
+                VStack(spacing: 12) {
+                    ProgressView()
+                    Text("正在创建训练记录")
+                        .font(.headline)
+                    Text("events 与日志目录就绪后将启动训练进程")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("取消") { store.cancel() }
+                        .buttonStyle(.bordered)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
             case .running:
                 TrainingRunningView(store: store)
 

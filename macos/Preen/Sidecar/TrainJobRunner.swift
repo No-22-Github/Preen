@@ -39,6 +39,7 @@ final class TrainJobRunner {
     private let stateLock = NSLock()
     private var _pid: Int32?
     private var _exitInfo: ProcessExitInfo?
+    private var stderrFileHandle: FileHandle?
 
     var onStderr: ((String) -> Void)?
     var onExit: ((ProcessExitInfo) -> Void)?
@@ -47,7 +48,7 @@ final class TrainJobRunner {
 
     /// 启动训练进程,返回事件流。
     /// - Parameters 在 Models/TrainingConfig 里组装;此处接收 argv + cwd。
-    func start(argv: [String], currentDirectory: URL?) -> AsyncStream<TrainEvent> {
+    func start(argv: [String], currentDirectory: URL?, stderrFile: URL? = nil) -> AsyncStream<TrainEvent> {
         process.executableURL = PythonResolver.executable
         process.arguments = argv
         process.environment = PythonResolver.childEnvironment
@@ -60,6 +61,11 @@ final class TrainJobRunner {
         let stderrPipe = Pipe()
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
+
+        if let stderrFile {
+            FileManager.default.createFile(atPath: stderrFile.path, contents: nil)
+            stderrFileHandle = try? FileHandle(forWritingTo: stderrFile)
+        }
 
         // stderr 后台读 → 累积到 _stderrLog。
         readStderrInBackground(handle: stderrPipe.fileHandleForReading)
@@ -75,7 +81,9 @@ final class TrainJobRunner {
             stateLock.unlock()
         } catch {
             // 启动失败:推一个合成 failed 事件,让 UI 能感知。
-            continuation.yield(.failed(message: "无法启动训练进程:\(error.localizedDescription)", path: nil, timestamp: Date().timeIntervalSince1970))
+            let message = "无法启动训练进程:\(error.localizedDescription)"
+            appendStderr(message + "\n")
+            continuation.yield(.failed(message: message, path: nil, timestamp: Date().timeIntervalSince1970))
             continuation.finish()
             return stream
         }
@@ -156,6 +164,8 @@ final class TrainJobRunner {
         )
         stateLock.withLock { _exitInfo = info }
         onExit?(info)
+        try? stderrFileHandle?.close()
+        stderrFileHandle = nil
         continuation.finish()
     }
 
@@ -177,6 +187,9 @@ final class TrainJobRunner {
         // 防止无限增长(诊断用,留最后 32KB)。
         if _stderrLog.count > 32 * 1024 {
             _stderrLog = String(_stderrLog.suffix(32 * 1024))
+        }
+        if let data = s.data(using: .utf8) {
+            try? stderrFileHandle?.write(contentsOf: data)
         }
         stderrLock.unlock()
         onStderr?(s)

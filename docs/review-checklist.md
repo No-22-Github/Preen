@@ -58,11 +58,11 @@
 - `macos/Preen/Persistence/RunRepository.swift`
 - `macos/Preen/Models/TrainingConfig.swift`
 
-- [ ] 点击开始训练即创建 UUID run，不等训练完成。
-- [ ] 自动指定 `events.jsonl`，并持续写入 `stderr.log`。
-- [ ] 状态穷举：preparing / running / finishing / completed / failed / cancelled / interrupted。
-- [ ] completed 后关联现有 `.meta.json`、state、pth、checkpoint。
-- [ ] App 重启扫描 runs；没有终结事件的旧 running 记录标记 interrupted。
+- [x] 点击开始训练即创建 UUID run，不等训练完成。
+- [x] 自动指定 `events.jsonl`，并持续写入 `stderr.log`。
+- [x] 状态穷举：preparing / running / finishing / completed / failed / cancelled / interrupted。
+- [x] completed 后关联现有 `.meta.json`、state、pth、checkpoint。
+- [x] App 重启扫描 runs；没有终结事件的旧 running 记录标记 interrupted。
 
 验收：成功、失败、取消和 App 异常退出四条路径都留下可读记录；重启 App 后仍能打开曲线与日志。
 

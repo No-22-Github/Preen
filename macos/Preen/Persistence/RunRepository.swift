@@ -34,6 +34,14 @@ actor RunRepository {
     func create(_ run: TrainingRun) throws -> URL {
         let directory = directoryURL(for: run.id)
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        fileManager.createFile(
+            atPath: directory.appendingPathComponent(Self.eventsFilename).path,
+            contents: nil
+        )
+        fileManager.createFile(
+            atPath: directory.appendingPathComponent(Self.stderrFilename).path,
+            contents: nil
+        )
         try save(run)
         return directory
     }
