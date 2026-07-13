@@ -6,8 +6,19 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXContainerItemProxy section */
+		C00000000000000000000007 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = B2CB0A103004148A00B5B165 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = B2CB0A173004148A00B5B165;
+			remoteInfo = Preen;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		B2CB0A183004148A00B5B165 /* Preen.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Preen.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C00000000000000000000001 /* PreenTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PreenTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -16,10 +27,22 @@
 			path = Preen;
 			sourceTree = "<group>";
 		};
+		C00000000000000000000002 /* PreenTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = PreenTests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		B2CB0A153004148A00B5B165 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C00000000000000000000003 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -33,6 +56,7 @@
 			isa = PBXGroup;
 			children = (
 				B2CB0A1A3004148A00B5B165 /* Preen */,
+				C00000000000000000000002 /* PreenTests */,
 				B2CB0A193004148A00B5B165 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -41,6 +65,7 @@
 			isa = PBXGroup;
 			children = (
 				B2CB0A183004148A00B5B165 /* Preen.app */,
+				C00000000000000000000001 /* PreenTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -69,6 +94,29 @@
 			productName = Preen;
 			productReference = B2CB0A183004148A00B5B165 /* Preen.app */;
 			productType = "com.apple.product-type.application";
+		};
+		C00000000000000000000006 /* PreenTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C0000000000000000000000B /* Build configuration list for PBXNativeTarget "PreenTests" */;
+			buildPhases = (
+				C00000000000000000000005 /* Sources */,
+				C00000000000000000000003 /* Frameworks */,
+				C00000000000000000000004 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				C00000000000000000000008 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				C00000000000000000000002 /* PreenTests */,
+			);
+			name = PreenTests;
+			packageProductDependencies = (
+			);
+			productName = PreenTests;
+			productReference = C00000000000000000000001 /* PreenTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
 
@@ -100,12 +148,20 @@
 			projectRoot = "";
 			targets = (
 				B2CB0A173004148A00B5B165 /* Preen */,
+				C00000000000000000000006 /* PreenTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		B2CB0A163004148A00B5B165 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C00000000000000000000004 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -122,7 +178,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C00000000000000000000005 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		C00000000000000000000008 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = B2CB0A173004148A00B5B165 /* Preen */;
+			targetProxy = C00000000000000000000007 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		B2CB0A213004148A00B5B165 /* Debug */ = {
@@ -321,6 +392,40 @@
 			};
 			name = Release;
 		};
+		C00000000000000000000009 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = no22.PreenTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Preen.app/Contents/MacOS/Preen";
+			};
+			name = Debug;
+		};
+		C0000000000000000000000A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = no22.PreenTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Preen.app/Contents/MacOS/Preen";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -338,6 +443,15 @@
 			buildConfigurations = (
 				B2CB0A243004148A00B5B165 /* Debug */,
 				B2CB0A253004148A00B5B165 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C0000000000000000000000B /* Build configuration list for PBXNativeTarget "PreenTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C00000000000000000000009 /* Debug */,
+				C0000000000000000000000A /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

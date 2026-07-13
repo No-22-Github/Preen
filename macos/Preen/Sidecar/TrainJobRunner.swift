@@ -36,6 +36,12 @@ final class TrainJobRunner {
     /// stderr 累积的人类日志(诊断用)。原子访问。
     private let stderrLock = NSLock()
     private var _stderrLog = ""
+    private let stateLock = NSLock()
+    private var _pid: Int32?
+    private var _exitInfo: ProcessExitInfo?
+
+    var onStderr: ((String) -> Void)?
+    var onExit: ((ProcessExitInfo) -> Void)?
 
     init() {}
 
@@ -64,6 +70,9 @@ final class TrainJobRunner {
 
         do {
             try process.run()
+            stateLock.lock()
+            _pid = process.processIdentifier
+            stateLock.unlock()
         } catch {
             // 启动失败:推一个合成 failed 事件,让 UI 能感知。
             continuation.yield(.failed(message: "无法启动训练进程:\(error.localizedDescription)", path: nil, timestamp: Date().timeIntervalSince1970))
@@ -88,6 +97,18 @@ final class TrainJobRunner {
     /// 进程是否仍在跑。
     var isRunning: Bool {
         process.isRunning
+    }
+
+    var pid: Int32? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return _pid
+    }
+
+    var exitInfo: ProcessExitInfo? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return _exitInfo
     }
 
     /// 取 stderr 累积(诊断失败时用)。
@@ -129,6 +150,12 @@ final class TrainJobRunner {
 
         // 进程已退出 + stdout drain 完。等进程完全收尾,然后 finish stream。
         process.waitUntilExit()
+        let info = ProcessExitInfo(
+            status: process.terminationStatus,
+            reason: process.terminationReason == .exit ? .exit : .uncaughtSignal
+        )
+        stateLock.withLock { _exitInfo = info }
+        onExit?(info)
         continuation.finish()
     }
 
@@ -152,5 +179,6 @@ final class TrainJobRunner {
             _stderrLog = String(_stderrLog.suffix(32 * 1024))
         }
         stderrLock.unlock()
+        onStderr?(s)
     }
 }

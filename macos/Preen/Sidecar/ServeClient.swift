@@ -66,6 +66,9 @@ final class ServeClient {
     /// stderr 累积(诊断用)。
     private let stderrLock = NSLock()
     private var _stderrLog = ""
+    private let processStateLock = NSLock()
+    private var _pid: Int32?
+    private var _exitInfo: ProcessExitInfo?
 
     /// stderr 增量回调:每收到一段后端输出就触发(供 UI 实时展示启动日志)。
     /// 在后台线程(readabilityHandler 队列)触发,调用方自行切线程。
@@ -74,6 +77,7 @@ final class ServeClient {
     /// stdout 增量回调:每读到一行 JSON 事件就触发原始行(诊断启动期 ready 是否到达)。
     /// 在读循环 Task 线程触发。调用方通常只在启动期(未 ready)关心它。
     var onStdout: ((String) -> Void)?
+    var onExit: ((ProcessExitInfo) -> Void)?
 
     init() {}
 
@@ -125,6 +129,9 @@ final class ServeClient {
 
         do {
             try process.run()
+            processStateLock.lock()
+            _pid = process.processIdentifier
+            processStateLock.unlock()
         } catch {
             // 启动失败:用合成 error 事件通知 UI。
             continuation.yield(.error(id: nil, code: .internal,
@@ -157,6 +164,18 @@ final class ServeClient {
     /// 进程是否仍在跑。
     var isRunning: Bool {
         process.isRunning
+    }
+
+    var pid: Int32? {
+        processStateLock.lock()
+        defer { processStateLock.unlock() }
+        return _pid
+    }
+
+    var exitInfo: ProcessExitInfo? {
+        processStateLock.lock()
+        defer { processStateLock.unlock() }
+        return _exitInfo
     }
 
     /// 是否已收到 ready(可发指令)。
@@ -249,6 +268,13 @@ final class ServeClient {
         }
 
         // stdout 关闭 = 进程退出。所有挂起的 continuation resume processExited。
+        process.waitUntilExit()
+        let info = ProcessExitInfo(
+            status: process.terminationStatus,
+            reason: process.terminationReason == .exit ? .exit : .uncaughtSignal
+        )
+        processStateLock.withLock { _exitInfo = info }
+        onExit?(info)
         drainPendingContinuations()
         continuation.finish()
     }

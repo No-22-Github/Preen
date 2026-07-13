@@ -52,7 +52,7 @@ enum PythonResolver {
         return nil
     }
 
-    /// 应用数据根目录(放 models / states / datasets / hf-cache)。
+    /// 应用数据根目录(放 models / states / datasets / runs / logs / hf-cache)。
     /// `~/Library/Application Support/Preen/`。
     static var dataRoot: URL {
         let fm = FileManager.default
@@ -66,7 +66,24 @@ enum PythonResolver {
 
     /// HF 缓存目录(`HF_HOME` 指这里,禁止污染 ~/.cache)。
     static var hfCache: URL {
-        dataRoot.appendingPathComponent("hf-cache", isDirectory: true)
+        directory(named: "hf-cache")
+    }
+
+    static var modelsDirectory: URL { directory(named: "models") }
+    static var statesDirectory: URL { directory(named: "states") }
+    static var datasetsDirectory: URL { directory(named: "datasets") }
+    static var runsDirectory: URL { directory(named: "runs") }
+    static var logsDirectory: URL { directory(named: "logs") }
+
+    @discardableResult
+    static func ensureApplicationDirectories() -> [URL] {
+        [modelsDirectory, statesDirectory, datasetsDirectory, runsDirectory, logsDirectory, hfCache]
+    }
+
+    private static func directory(named name: String) -> URL {
+        let url = dataRoot.appendingPathComponent(name, isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
     }
 
     /// spawn 子进程时注入的环境变量。

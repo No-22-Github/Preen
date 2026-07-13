@@ -38,12 +38,12 @@
 - `macos/Preen/Sidecar/PythonResolver.swift`
 - `macos/Preen/PreenApp.swift`
 
-- [ ] 新增 `BackendStore`：统一暴露 runtime / inference / training 状态。
-- [ ] App 启动执行 `statetuner doctor --json`，不调用 `load_model`。
-- [ ] `TrainJobRunner` / `ServeClient` 暴露 PID、退出原因和日志增量。
-- [ ] 新增 `RunRepository` 与 `TrainingRun` Codable 模型，写入采用临时文件 + replace。
-- [ ] `PythonResolver` 统一提供 `runs/`、`states/`、`datasets/`、`logs/` 路径。
-- [ ] 新增 macOS 单测 target，先覆盖 Codable round-trip、原子写和目录扫描。
+- [x] 新增 `BackendStore`：统一暴露 runtime / inference / training 状态。
+- [x] App 启动执行 `statetuner doctor --json`，不调用 `load_model`。
+- [x] `TrainJobRunner` / `ServeClient` 暴露 PID、退出原因和日志增量。
+- [x] 新增 `RunRepository` 与 `TrainingRun` Codable 模型，写入采用临时文件 + replace。
+- [x] `PythonResolver` 统一提供 `runs/`、`states/`、`datasets/`、`logs/` 路径。
+- [x] 新增 macOS 单测 target，先覆盖 Codable round-trip、原子写和目录扫描。
 
 验收：启动后左下角 3 秒内显示运行时状态；未选模型时 Python/MLX 检查可完成，模型内存保持未加载。
 

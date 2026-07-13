@@ -15,6 +15,9 @@ struct PreenApp: App {
         WindowGroup {
             ContentView(appState: appState)
                 .frame(minWidth: 1000, minHeight: 680)  // 兜底最小尺寸(macOS 14)
+                .task {
+                    await appState.backendStore.checkRuntime()
+                }
         }
         .defaultSize(width: 1180, height: 760)  // design.md §3 默认尺寸(macOS 15+)
     }

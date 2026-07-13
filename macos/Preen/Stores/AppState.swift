@@ -43,6 +43,12 @@ final class AppState {
     // === 子 store ===
     let trainStore = TrainStore()
     let chatStore = ChatStore()
+    let backendStore = BackendStore()
+    let runRepository = RunRepository()
+
+    init() {
+        PythonResolver.ensureApplicationDirectories()
+    }
 
     // === 跨面板:训练完成 → 跳对话,自动设上产物 state ===
     var injectedStatePath: String?
