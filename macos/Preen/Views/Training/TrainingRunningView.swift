@@ -8,7 +8,7 @@
 //  不点击不滚动,3 秒内能读到:
 //   - 机器是否在换页 / 当前第几轮第几步 / loss 是否在降 / 预计剩余时间
 //
-//  本期不画 RSS(留 #7 双轨共轴图),先把 loss 折线 + 摘要做出来。
+//  loss / RSS 双轨共用 step 轴，机器压力同时固定在摘要区。
 //
 
 import SwiftUI
@@ -71,6 +71,13 @@ struct TrainingRunningView: View {
                           systemImage: "clock")
                         .foregroundStyle(.secondary)
                 }
+                if let metric = store.latestProcessMetric {
+                    Label(String(format: "RSS %.2f G", metric.physicalFootprintGB),
+                          systemImage: "memorychip")
+                        .foregroundStyle(.secondary)
+                    Text(pressureLabel(metric.pressure))
+                        .foregroundStyle(metric.pressure == .normal ? Color.secondary : Color.orange)
+                }
             }
             .font(.subheadline)
 
@@ -90,6 +97,14 @@ struct TrainingRunningView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func pressureLabel(_ pressure: MemoryPressureLevel) -> String {
+        switch pressure {
+        case .normal: return "压力正常"
+        case .warning: return "压力警告"
+        case .critical: return "压力严重"
+        }
     }
 
 }

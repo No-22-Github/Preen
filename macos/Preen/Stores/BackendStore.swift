@@ -10,11 +10,20 @@ final class BackendStore {
     private(set) var runtimeLog = ""
     private(set) var inferenceLog = ""
     private(set) var trainingLog = ""
+    private(set) var processMetrics: [ProcessMetric] = []
+    private(set) var currentTrainingStep = 0
+    private(set) var currentSecondsPerStep: Double?
 
     private let runtimeRunner: RuntimeCheckRunner
+    private let metricsSampler: ProcessMetricsSampler
+    private var metricsTask: Task<Void, Never>?
 
-    init(runtimeRunner: RuntimeCheckRunner = RuntimeCheckRunner()) {
+    init(
+        runtimeRunner: RuntimeCheckRunner = RuntimeCheckRunner(),
+        metricsSampler: ProcessMetricsSampler = ProcessMetricsSampler()
+    ) {
         self.runtimeRunner = runtimeRunner
+        self.metricsSampler = metricsSampler
     }
 
     func checkRuntime() async {
@@ -44,6 +53,23 @@ final class BackendStore {
 
     func updateTraining(phase: WorkerPhase, pid: Int32? = nil, message: String) {
         training = WorkerStatus(phase: phase, pid: pid, message: message)
+        if phase == .running, let pid {
+            startMetrics(pid: pid)
+        } else if phase == .idle || phase == .failed {
+            metricsTask?.cancel()
+            metricsTask = nil
+        }
+    }
+
+    func resetTrainingMetrics() {
+        processMetrics.removeAll()
+        currentTrainingStep = 0
+        currentSecondsPerStep = nil
+    }
+
+    func updateTrainingProgress(step: Int, secondsPerStep: Double?) {
+        currentTrainingStep = step
+        currentSecondsPerStep = secondsPerStep
     }
 
     func appendInferenceLog(_ text: String) {
@@ -57,5 +83,24 @@ final class BackendStore {
     private static func appending(_ text: String, to existing: String) -> String {
         let combined = existing + text
         return combined.count > 128 * 1024 ? String(combined.suffix(128 * 1024)) : combined
+    }
+
+    private func startMetrics(pid: Int32) {
+        metricsTask?.cancel()
+        metricsTask = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                let step = currentTrainingStep
+                let seconds = currentSecondsPerStep
+                let sampler = metricsSampler
+                if let metric = await Task.detached(priority: .utility, operation: {
+                    sampler.sample(pid: pid, step: step, secondsPerStep: seconds)
+                }).value {
+                    processMetrics.append(metric)
+                    if processMetrics.count > 3_600 { processMetrics.removeFirst(processMetrics.count - 3_600) }
+                }
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
     }
 }

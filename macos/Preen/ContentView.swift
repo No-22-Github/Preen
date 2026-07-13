@@ -15,11 +15,15 @@ struct ContentView: View {
     @Bindable var appState: AppState
 
     var body: some View {
-        NavigationSplitView {
-            Sidebar(appState: appState)
-                .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 280)
-        } detail: {
-            detail
+        VStack(spacing: 0) {
+            NavigationSplitView {
+                Sidebar(appState: appState)
+                    .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 280)
+            } detail: {
+                detail
+            }
+            Divider()
+            GlobalStatusBar(appState: appState)
         }
         .frame(minWidth: 1000, minHeight: 680)
     }

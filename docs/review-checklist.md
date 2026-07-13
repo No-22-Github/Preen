@@ -146,10 +146,10 @@
 - `macos/Preen/System/DockProgressController.swift`
 - `macos/Preen/System/TrainingNotificationController.swift`
 
-- [ ] Swift 侧 1 Hz 采集训练子进程 phys_footprint、系统压力、swap 和 s/步。
-- [ ] loss/RSS 双轨共用 step 轴，单位统一 GB（除以 1e9）。
-- [ ] 全局状态栏显示健康状态；Dock 显示进度；完成/失败/取消发送系统通知。
-- [ ] 日志面板聚合 runtime、serve、train 三个来源并明确标记来源。
+- [x] Swift 侧 1 Hz 采集训练子进程 phys_footprint、系统压力、swap 和 s/步。
+- [x] loss/RSS 双轨共用 step 轴，单位统一 GB（除以 1e9）。
+- [x] 全局状态栏显示健康状态；Dock 显示进度；完成/失败/取消发送系统通知。
+- [x] 日志面板聚合 runtime、serve、train 三个来源并明确标记来源。
 
 验收：训练窗口从后台切回后，3 秒内能读到机器压力、当前进度、loss 趋势和预计剩余时间。
 

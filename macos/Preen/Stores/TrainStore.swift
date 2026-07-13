@@ -65,6 +65,7 @@ final class TrainStore {
     private(set) var currentLr: Double = 0
     private(set) var startedAt: Date?
     private(set) var estimatedRemainingSeconds: Double?
+    private(set) var currentSecondsPerStep: Double?
     private var stepTimingSamples: [(step: Int, timestamp: Double)] = []
 
     // === 配置(start 事件填,UI 顶部摘要回显)===
@@ -88,6 +89,8 @@ final class TrainStore {
     private var runner: TrainJobRunner?
     private let repository: RunRepository
     private let backendStore: BackendStore
+    private let dockProgress = DockProgressController()
+    private let notifications = TrainingNotificationController()
     private var preparationTask: Task<Void, Never>?
     private(set) var currentRun: TrainingRun?
     private(set) var currentRunDirectory: URL?
@@ -106,6 +109,8 @@ final class TrainStore {
     /// 配置 + runner 注入,开始训练。UI 调用。
     func start(config: TrainingConfig) {
         reset()
+        backendStore.resetTrainingMetrics()
+        dockProgress.update(progress: 0)
         state = .preparing
         let run = TrainingRun(config: config.persisted)
         currentRun = run
@@ -130,6 +135,7 @@ final class TrainStore {
                 errorMessage = message
                 state = .failed
                 backendStore.updateTraining(phase: .failed, message: message)
+                finishBackgroundFeedback(title: "训练启动失败", body: message)
             }
         }
     }
@@ -160,6 +166,7 @@ final class TrainStore {
         currentLr = 0
         startedAt = nil
         estimatedRemainingSeconds = nil
+        currentSecondsPerStep = nil
         stepTimingSamples.removeAll()
         configSnapshot = nil
         outputPath = nil
@@ -173,6 +180,8 @@ final class TrainStore {
         runner = nil
         currentRun = nil
         currentRunDirectory = nil
+        backendStore.resetTrainingMetrics()
+        dockProgress.clear()
     }
 
     // MARK: - 事件消费(穷举,不许 default — design.md §4.2)
@@ -196,6 +205,8 @@ final class TrainStore {
                 step: step, loss: loss, learningRate: lr, epoch: currentEpoch, timestamp: timestamp
             ))
             updateEta(step: step, timestamp: timestamp)
+            backendStore.updateTrainingProgress(step: step, secondsPerStep: currentSecondsPerStep)
+            dockProgress.update(progress: progress)
         case .epochEnd(let epoch, let loss, let stateStd, _, let heldOut, let best, _, _):
             currentEpoch = epoch
             let epochEndStep = actualEpochEndStep(epoch: epoch)
@@ -226,20 +237,31 @@ final class TrainStore {
             }
         case .completed(let path, let elapsed, _, _):
             // ✅ 唯一可信完成信号。
+            let shouldNotify = state == .running || state == .finishing
             self.outputPath = path
             self.elapsed = elapsed
             if totalSteps > 0 { currentStep = totalSteps - 1 }
             estimatedRemainingSeconds = 0
             state = .completed
             backendStore.updateTraining(phase: .idle, message: "训练已完成")
+            if shouldNotify {
+                finishBackgroundFeedback(
+                    title: "训练已完成",
+                    body: "State 已写入 \(URL(fileURLWithPath: path).lastPathComponent)"
+                )
+            }
         case .failed(let message, _, _):
+            let shouldNotify = state == .running || state == .finishing
             self.errorMessage = message
             state = .failed
             backendStore.updateTraining(phase: .failed, message: message)
+            if shouldNotify { finishBackgroundFeedback(title: "训练失败", body: message) }
         case .cancelled(let message, _):
+            let shouldNotify = state == .running || state == .finishing
             self.cancelledMessage = message
             state = .cancelled
             backendStore.updateTraining(phase: .idle, message: "训练已取消")
+            if shouldNotify { finishBackgroundFeedback(title: "训练已取消", body: message) }
         case .unknown:
             // 演进兜底:Python 加新事件类型不让旧 app 崩。
             // 不切状态,只计数(UI 可提示「收到未知事件 N 次,建议升级」)。
@@ -264,6 +286,7 @@ final class TrainStore {
         }
         guard stepTimingSamples.count >= 2, totalSteps > 0 else {
             estimatedRemainingSeconds = nil
+            currentSecondsPerStep = nil
             return
         }
         let pairs = zip(stepTimingSamples, stepTimingSamples.dropFirst())
@@ -272,8 +295,13 @@ final class TrainStore {
             guard stepDelta > 0 else { return nil }
             return (newer.timestamp - older.timestamp) / Double(stepDelta)
         }
-        guard !perStep.isEmpty else { estimatedRemainingSeconds = nil; return }
+        guard !perStep.isEmpty else {
+            estimatedRemainingSeconds = nil
+            currentSecondsPerStep = nil
+            return
+        }
         let average = perStep.reduce(0, +) / Double(perStep.count)
+        currentSecondsPerStep = average
         estimatedRemainingSeconds = average * Double(max(0, totalSteps - step - 1))
     }
 
@@ -297,6 +325,7 @@ final class TrainStore {
                 timestamp: Date().timeIntervalSince1970
             ))
             backendStore.updateTraining(phase: .failed, message: errorMessage ?? "训练进程异常退出")
+            finishBackgroundFeedback(title: "训练异常退出", body: errorMessage ?? "训练进程异常退出")
         case .idle, .preparing, .completed, .failed, .cancelled:
             break
         }
@@ -346,6 +375,12 @@ final class TrainStore {
             Task { try? await repository.save(run) }
         }
         backendStore.updateTraining(phase: .idle, message: "训练已取消")
+        finishBackgroundFeedback(title: "训练已取消", body: cancelledMessage ?? "训练在启动前已取消")
+    }
+
+    private func finishBackgroundFeedback(title: String, body: String) {
+        dockProgress.clear()
+        notifications.send(title: title, body: body)
     }
 
     private func updatePersistedRun(with event: TrainEvent) {
@@ -430,6 +465,10 @@ final class TrainStore {
         if currentLr == 0 { return "—" }
         return String(format: "%.4f", currentLr)
     }
+
+    var processMetrics: [ProcessMetric] { backendStore.processMetrics }
+
+    var latestProcessMetric: ProcessMetric? { backendStore.processMetrics.last }
 
     /// 把秒数格式化成 `Mm Ss` / `Hh Mm`。
     nonisolated static func formatDuration(_ seconds: Double) -> String {
