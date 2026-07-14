@@ -72,6 +72,19 @@ def validate_training_request(request: TrainingRequest) -> None:
         raise ValueError("test_ratio 必须在 (0, 1) 范围内")
     if request.pth_out is not None and not request.export_pth:
         raise ValueError("pth_out 必须配合 export_pth")
+    # 训练精度契约:权重 bf16 + state fp32(docs/decision-precision.md)。
+    # int8 量化模型是推理专用产物(state tuning 的 S₀ 叠加到量化权重上会破坏
+    # 精度契约)→ 读 config.json 的 quantization 字段早期拦下。
+    _config_path = request.model / "config.json"
+    if _config_path.is_file():
+        import json
+
+        _cfg = json.loads(_config_path.read_text())
+        if _cfg.get("quantization") or _cfg.get("quantization_config"):
+            raise ValueError(
+                "检测到量化模型(config 含 quantization 字段),训练要求 bf16 权重。"
+                "请用未量化的模型目录训练(量化模型仅用于推理)。"
+            )
 
 
 def _check_data_warnings(summary, ctx_len: int, notify: StatusCallback) -> None:

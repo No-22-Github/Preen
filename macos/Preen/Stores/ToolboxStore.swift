@@ -25,6 +25,21 @@ struct ModelConversionResult: Decodable, Equatable {
     }
 }
 
+struct QuantizationResult: Decodable, Equatable {
+    let bits: Int
+    let groupSize: Int
+    let quantizedLayers: Int
+    let src: String
+    let out: String
+    let elapsed: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case bits, src, out, elapsed
+        case groupSize = "group_size"
+        case quantizedLayers = "quantized_layers"
+    }
+}
+
 struct DatasetDetectionResult: Decodable, Equatable {
     let schema: String
     let promptKeys: [String]
@@ -157,6 +172,11 @@ final class ToolboxStore {
     private(set) var modelState: ToolJobState = .idle
     private(set) var modelResult: ModelConversionResult?
 
+    var quantizeSourcePath = ""
+    var quantizeOutputPath = ""
+    private(set) var quantizeState: ToolJobState = .idle
+    private(set) var quantizeResult: QuantizationResult?
+
     var datasetSourcePath = ""
     var datasetOutputPath = ""
     var datasetTurnPolicy = "first"
@@ -198,6 +218,19 @@ final class ToolboxStore {
         let contents = try? FileManager.default.contentsOfDirectory(atPath: modelOutputPath)
         return contents?.isEmpty == false
     }
+    var canQuantize: Bool {
+        Self.quantizeSourceValidationError(for: quantizeSourcePath) == nil
+            && !quantizeOutputPath.isEmpty
+            && !isRunning
+    }
+    var quantizeOutputRequiresConfirmation: Bool {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(
+            atPath: quantizeOutputPath, isDirectory: &isDirectory
+        ), isDirectory.boolValue else { return false }
+        let contents = try? FileManager.default.contentsOfDirectory(atPath: quantizeOutputPath)
+        return contents?.isEmpty == false
+    }
     var canPreviewDataset: Bool {
         !datasetSourcePath.isEmpty && !isRunning
     }
@@ -218,6 +251,25 @@ final class ToolboxStore {
             "--rwkv7", modelSourcePath,
             "--out", modelOutputPath,
             "--precision", modelPrecision,
+        ]
+        if overwrite {
+            argv.append("--overwrite")
+        }
+        consume(runner: runner!, stream: runner!.start(argv: argv, currentDirectory: PythonResolver.repoRoot))
+    }
+
+    func quantizeModel(overwrite: Bool = false) {
+        if let validationError = Self.quantizeSourceValidationError(for: quantizeSourcePath) {
+            errorMessage = validationError
+            return
+        }
+        guard canQuantize else { return }
+        begin(tool: "quantize")
+        quantizeState = .running
+        var argv = [
+            "-m", "statetuner.cli", "quantize",
+            "--model", quantizeSourcePath,
+            "--out", quantizeOutputPath,
         ]
         if overwrite {
             argv.append("--overwrite")
@@ -315,6 +367,21 @@ final class ToolboxStore {
         return true
     }
 
+    /// 量化源目录选择校验(目录 + config.json)。与 selectModelSource 同构。
+    @discardableResult
+    func selectQuantizeSource(path: String) -> Bool {
+        guard !isRunning else { return false }
+        if let validationError = Self.quantizeSourceValidationError(for: path) {
+            errorMessage = validationError
+            return false
+        }
+        quantizeSourcePath = path
+        quantizeState = .idle
+        quantizeResult = nil
+        errorMessage = nil
+        return true
+    }
+
     /// 工具详情页切换时清理瞬时展示；输入和已完成产物保留。
     func clearPresentationForNavigation() {
         progress = nil
@@ -360,6 +427,7 @@ final class ToolboxStore {
         errorMessage = nil
         presentationTool = tool
         if tool == "model" { modelResult = nil }
+        if tool == "quantize" { quantizeResult = nil }
         if tool == "dataset" { importedDatasetPath = nil }
     }
 
@@ -373,6 +441,20 @@ final class ToolboxStore {
         guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory),
               !isDirectory.boolValue else {
             return "找不到所选的 .pth 模型文件"
+        }
+        return nil
+    }
+
+    /// 量化源校验:必须是含 config.json 的模型目录(转换产物),而非 .pth 文件。
+    private static func quantizeSourceValidationError(for path: String) -> String? {
+        guard !path.isEmpty else { return "请选择源 BF16 模型目录" }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            return "源路径必须是模型目录(转换后的 HF 目录)"
+        }
+        guard FileManager.default.fileExists(atPath: "\(path)/config.json") else {
+            return "源目录缺少 config.json，不是有效的模型目录"
         }
         return nil
     }
@@ -441,6 +523,9 @@ final class ToolboxStore {
                 } else if event.tool == "dataset_import" {
                     importedDatasetPath = event.path
                     datasetState = .completed
+                } else if event.tool == "quantization", let result = event.result {
+                    quantizeResult = try result.decode(QuantizationResult.self)
+                    quantizeState = .completed
                 }
             } catch {
                 fail("无法解析工具结果：\(error.localizedDescription)")
@@ -449,6 +534,7 @@ final class ToolboxStore {
             fail(event.message ?? "工具任务失败")
         case .cancelled:
             modelState = modelState == .running ? .cancelled : modelState
+            quantizeState = quantizeState == .running ? .cancelled : quantizeState
             datasetState = datasetState == .running ? .cancelled : datasetState
         }
     }
@@ -456,6 +542,7 @@ final class ToolboxStore {
     private func fail(_ message: String) {
         errorMessage = message
         if modelState == .running { modelState = .failed }
+        if quantizeState == .running { quantizeState = .failed }
         if datasetState == .running { datasetState = .failed }
     }
 

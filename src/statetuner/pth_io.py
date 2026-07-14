@@ -68,6 +68,9 @@ def read_pth(path: PathLike) -> Dict[str, np.ndarray]:
 
     storages: Dict[str, tuple] = {}  # key -> (np_dtype, numel)
 
+    def _rebuild_tensor_v2(storage, offset, size, stride, *rest):
+        return ("TENSOR", storage[1], offset, tuple(size), tuple(stride))
+
     class _Unpickler(pickle.Unpickler):
         def persistent_load(self, pid):
             _, stype, key, _loc, numel = pid
@@ -76,16 +79,18 @@ def read_pth(path: PathLike) -> Dict[str, np.ndarray]:
             return ("STORAGE", str(key))
 
         def find_class(self, module, name):
+            # 白名单反序列化:.pth 常来自网络(RWKV 官方/社区权重),
+            # 而 pickle 的 GLOBAL+REDUCE 可执行任意代码。只放行 torch state_dict
+            # 真正需要的三类符号,其余一律拒绝——不 fallback 到 super().find_class。
             if name == "_rebuild_tensor_v2":
-                def _rec(storage, offset, size, stride, *rest):
-                    return ("TENSOR", storage[1], offset, tuple(size), tuple(stride))
-                return _rec
+                return _rebuild_tensor_v2
             if name == "OrderedDict":
                 return OrderedDict
-            try:
-                return super().find_class(module, name)
-            except Exception:
+            # storage 类型只被 persistent_load 读 __name__,从不调用;
+            # 返回同名惰性 stub 即可,与其自称的 module 无关(故不校验 module)。
+            if name in _STORAGE_TO_NP:
                 return type(name, (), {})
+            raise pickle.UnpicklingError(f"pth_io 拒绝反序列化 {module}.{name}(不在白名单)")
 
     obj = _Unpickler(io.BytesIO(zf.read(pkl_name))).load()
 

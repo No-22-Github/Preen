@@ -5,6 +5,7 @@ struct ToolboxView: View {
     private enum Destination: Equatable {
         case home
         case modelConversion
+        case modelQuantization
         case datasetPreview
         case datasetConversion
 
@@ -12,6 +13,7 @@ struct ToolboxView: View {
             switch self {
             case .home: return "工具箱"
             case .modelConversion: return "模型转换"
+            case .modelQuantization: return "模型量化"
             case .datasetPreview: return "数据集预览"
             case .datasetConversion: return "数据集转换"
             }
@@ -24,6 +26,7 @@ struct ToolboxView: View {
 
     @State private var destination: Destination = .home
     @State private var showingOverwriteConfirmation = false
+    @State private var showingQuantizeOverwriteConfirmation = false
     @State private var advancedModelOptions = false
 
     var body: some View {
@@ -71,6 +74,18 @@ struct ToolboxView: View {
         } message: {
             Text("将替换目录中的模型权重、配置和 tokenizer 文件；目录中的其他文件会保留。")
         }
+        .confirmationDialog(
+            "输出目录已有内容",
+            isPresented: $showingQuantizeOverwriteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("覆盖并继续", role: .destructive) {
+                store.quantizeModel(overwrite: true)
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("将替换目录中的量化模型权重、配置和 tokenizer 文件；目录中的其他文件会保留。")
+        }
     }
 
     private var header: some View {
@@ -106,6 +121,7 @@ struct ToolboxView: View {
         switch destination {
         case .home: return "选择一个工具开始，不会启动常驻推理进程"
         case .modelConversion: return "把 BlinkDL 原生 RWKV-7 权重转换为 Preen 可用模型"
+        case .modelQuantization: return "把 BF16 模型量化为 int8，推理更快、内存更省近一半"
         case .datasetPreview: return "查看真实模板文本、token 长度与截断风险"
         case .datasetConversion: return "把外部数据集转换为训练可直接读取的标准 JSONL"
         }
@@ -118,6 +134,8 @@ struct ToolboxView: View {
             toolboxHome
         case .modelConversion:
             modelConversionView
+        case .modelQuantization:
+            modelQuantizationView
         case .datasetPreview:
             datasetPreviewView
         case .datasetConversion:
@@ -138,6 +156,13 @@ struct ToolboxView: View {
                             icon: "shippingbox.and.arrow.backward",
                             tint: .blue
                         ) { destination = .modelConversion }
+
+                        toolRow(
+                            title: "模型量化",
+                            description: "把 BF16 模型转为 int8，推理更快、内存更省近一半。",
+                            icon: "speedometer",
+                            tint: .orange
+                        ) { destination = .modelQuantization }
 
                         toolRow(
                             title: "数据集预览",
@@ -218,25 +243,45 @@ struct ToolboxView: View {
 
                 Divider()
 
-                DisclosureGroup("高级选项", isExpanded: $advancedModelOptions) {
-                    HStack {
-                        Text("权重精度")
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Picker("权重精度", selection: $store.modelPrecision) {
-                            Text("BF16（推荐）").tag("bf16")
-                            Text("FP16").tag("fp16")
-                            Text("FP32").tag("fp32")
+                VStack(alignment: .leading, spacing: 0) {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            advancedModelOptions.toggle()
                         }
-                        .labelsHidden()
-                        .frame(width: 180)
-                        .disabled(store.isRunning)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                                .rotationEffect(.degrees(advancedModelOptions ? 90 : 0))
+                            Text("高级选项")
+                            Spacer(minLength: 0)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                     }
-                    .padding(.top, 10)
+                    .buttonStyle(.plain)
 
-                    Text("仅决定转换后模型权重格式。State 训练仍保持 fp32 累加。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    if advancedModelOptions {
+                        HStack {
+                            Text("权重精度")
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Picker("权重精度", selection: $store.modelPrecision) {
+                                Text("BF16（推荐）").tag("bf16")
+                                Text("FP16").tag("fp16")
+                                Text("FP32").tag("fp32")
+                            }
+                            .labelsHidden()
+                            .frame(width: 180)
+                            .disabled(store.isRunning)
+                        }
+                        .padding(.top, 10)
+
+                        Text("仅决定转换后模型权重格式。State 训练仍保持 fp32 累加。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
 
@@ -274,6 +319,77 @@ struct ToolboxView: View {
                             .buttonStyle(.borderedProminent)
                         Button("在 Finder 中显示") {
                             reveal(path: result.outputPath)
+                        }
+                    }
+                    .padding(.top, 4)
+                }
+            }
+        }
+    }
+
+    // MARK: - 模型量化
+
+    private var modelQuantizationView: some View {
+        toolScroll {
+            surface {
+                toolPathRow("源模型", detail: "BF16 目录", path: store.quantizeSourcePath,
+                            acceptsDrop: true,
+                            onDropPath: { url in
+                        selectQuantizeSource(url)
+                    }) {
+                    if let url = pickDirectory() {
+                        selectQuantizeSource(url)
+                    }
+                }
+
+                Divider()
+
+                toolPathRow("输出目录", detail: nil, path: store.quantizeOutputPath) {
+                    if let url = pickSave(defaultName: quantizeDefaultName) {
+                        store.quantizeOutputPath = url.path
+                    }
+                }
+            }
+
+            Text("int8 量化仅用于推理加速（实测 decode 提速约 1.7 倍、内存减半）。量化模型不可训练——state tuning 需要 BF16 权重。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            HStack {
+                if store.isRunning {
+                    Button("取消") { store.cancel() }
+                        .buttonStyle(.bordered)
+                }
+                Spacer()
+                Button {
+                    if store.quantizeOutputRequiresConfirmation {
+                        showingQuantizeOverwriteConfirmation = true
+                    } else {
+                        store.quantizeModel()
+                    }
+                } label: {
+                    Label("开始量化", systemImage: "speedometer")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(!store.canQuantize)
+            }
+
+            jobStatus(for: "quantize")
+
+            if let result = store.quantizeResult {
+                successSurface(title: "量化完成") {
+                    LabeledContent("模型目录", value: result.out)
+                    LabeledContent("量化", value: "int\(result.bits) · \(result.quantizedLayers) 个量化层")
+                    if let elapsed = result.elapsed {
+                        LabeledContent("耗时", value: String(format: "%.1f 秒", elapsed))
+                    }
+                    HStack {
+                        Button("设为当前模型") { onSelectModel(result.out) }
+                            .buttonStyle(.borderedProminent)
+                        Button("在 Finder 中显示") {
+                            reveal(path: result.out)
                         }
                     }
                     .padding(.top, 4)
@@ -384,6 +500,13 @@ struct ToolboxView: View {
         guard store.selectModelSource(path: url.path) else { return }
         store.modelOutputPath = PythonResolver.modelsDirectory
             .appendingPathComponent(url.deletingPathExtension().lastPathComponent)
+            .path
+    }
+
+    private func selectQuantizeSource(_ url: URL) {
+        guard store.selectQuantizeSource(path: url.path) else { return }
+        store.quantizeOutputPath = PythonResolver.modelsDirectory
+            .appendingPathComponent(url.lastPathComponent + "-int8")
             .path
     }
 
@@ -791,6 +914,12 @@ struct ToolboxView: View {
             .lastPathComponent
     }
 
+    private var quantizeDefaultName: String {
+        guard !store.quantizeSourcePath.isEmpty else { return "rwkv7-int8" }
+        return URL(fileURLWithPath: store.quantizeSourcePath)
+            .lastPathComponent + "-int8"
+    }
+
     private var datasetDefaultName: String {
         guard !store.datasetSourcePath.isEmpty else { return "dataset.standard.jsonl" }
         return URL(fileURLWithPath: store.datasetSourcePath)
@@ -808,6 +937,15 @@ struct ToolboxView: View {
         if !allowedContentTypes.isEmpty {
             panel.allowedContentTypes = allowedContentTypes
         }
+        return panel.runModal() == .OK ? panel.url : nil
+    }
+
+    /// 选择目录(量化源是模型目录,不是文件)。参考 ContentView.pickModel 范式。
+    private func pickDirectory() -> URL? {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
         return panel.runModal() == .OK ? panel.url : nil
     }
 

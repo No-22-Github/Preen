@@ -65,3 +65,45 @@ def test_validate_accepts_instruction_with_import_sidecar(tmp_path):
     sidecar.write_text("{}", encoding="utf-8")
     # 不应抛(其余校验项已满足)
     validate_training_request(request)
+
+
+def test_validate_rejects_quantized_model(tmp_path):
+    """量化模型(config 含 quantization 字段)不能训练,应在校验阶段被拦下。
+
+    训练精度契约:权重 bf16 + state fp32(docs/decision-precision.md)。
+    int8 量化模型是推理专用产物。
+    """
+    import json
+
+    request = _request(tmp_path)
+    (request.model / "config.json").write_text(
+        json.dumps({"quantization": {"bits": 8, "group_size": 64}}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="量化模型"):
+        validate_training_request(request)
+
+
+def test_validate_rejects_quantized_model_via_config_alias(tmp_path):
+    """quantization_config(HF 镜像字段)同样应触发训练拦截。"""
+    import json
+
+    request = _request(tmp_path)
+    (request.model / "config.json").write_text(
+        json.dumps({"quantization_config": {"bits": 8}}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="量化模型"):
+        validate_training_request(request)
+
+
+def test_validate_accepts_unquantized_model(tmp_path):
+    """无 quantization 字段的普通 bf16 模型正常放行(回归保护)。"""
+    import json
+
+    request = _request(tmp_path)
+    (request.model / "config.json").write_text(
+        json.dumps({"model_type": "rwkv7", "torch_dtype": "bfloat16"}),
+        encoding="utf-8",
+    )
+    validate_training_request(request)

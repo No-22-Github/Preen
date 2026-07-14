@@ -3,6 +3,8 @@
 覆盖 write_pth → read_pth 的 round-trip 一致性,含 bf16(RWKV 原始权重的 dtype)。
 外部 oracle(torch.load)在 test_export.py::test_torch_can_load,torch 在场时才跑。
 """
+import os
+
 import numpy as np
 import ml_dtypes
 import pytest
@@ -43,6 +45,26 @@ def test_1d_and_scalar_like(tmp_path):
     back = read_pth(p)
     for k, v in tensors.items():
         assert back[k].tobytes() == v.tobytes()
+
+
+def test_rejects_malicious_global(tmp_path):
+    """read_pth 走白名单反序列化:.pth 常来自网络,不能让 pickle 的
+    GLOBAL+REDUCE 执行任意代码。构造一个引用 os.system 的恶意 data.pkl,
+    read_pth 必须拒绝而非导入/执行。"""
+    import pickle
+    import zipfile
+
+    class _Evil:
+        def __reduce__(self):
+            return (os.system, ("echo pwned > pwned.txt",))
+
+    p = tmp_path / "evil.pth"
+    with zipfile.ZipFile(p, "w") as zf:
+        zf.writestr("evil/data.pkl", pickle.dumps(_Evil()))
+
+    with pytest.raises(pickle.UnpicklingError):
+        read_pth(p)
+    assert not (tmp_path / "pwned.txt").exists(), "恶意 payload 被执行了!"
 
 
 def test_torch_reads_bf16(tmp_path):

@@ -894,6 +894,68 @@ def convert_model(
     emitter.emit(tool_completed(tool, result, path=str(out)))
 
 
+@app.command("quantize")
+def quantize_cmd(
+    model: Path = typer.Option(..., "--model", "-m", help="源 bf16 HF 模型目录"),
+    out: Path = typer.Option(..., "--out", "-o", help="输出 int8 量化模型目录"),
+    bits: int = typer.Option(8, "--bits", help="量化位数(默认 8 = int8)"),
+    group_size: int = typer.Option(64, "--group-size", help="量化组大小(默认 64)"),
+    overwrite: bool = typer.Option(False, "--overwrite", help="允许写入非空输出目录"),
+):
+    """bf16 HF 模型 → int8 量化模型(二阶段量化的第二步)。
+
+    产物是标准 mlx 量化格式,推理命令(preview/chat/serve/eval/export)直接
+    加载 int8 目录即可,无需任何开关。量化模型不可训练(精度契约:训练 bf16)。
+    stdout 只输出工具任务 JSON Lines；人类日志走 stderr。
+    """
+    if not model.is_dir():
+        _bad_input(ValueError(f"源模型目录不存在: {model}"))
+    if not (model / "config.json").is_file():
+        _bad_input(ValueError(f"源目录缺少 config.json: {model}"))
+    if out.exists() and not out.is_dir():
+        _bad_input(ValueError(f"输出路径已存在且不是目录: {out}"))
+    if out.is_dir() and any(out.iterdir()) and not overwrite:
+        _bad_input(ValueError(f"输出目录非空: {out};如需覆盖请传 --overwrite"))
+    if overwrite and out.is_dir():
+        import shutil
+
+        shutil.rmtree(out)
+
+    import time
+    from .quantizer import quantize
+    from .tool_events import (
+        ToolEventEmitter, cancelled as tool_cancelled, completed as tool_completed,
+        failed as tool_failed, progress as tool_progress, started as tool_started,
+    )
+
+    tool = "quantization"
+    emitter = ToolEventEmitter()
+    emitter.emit(tool_started(tool, f"开始量化 {model.name} (bits={bits})"))
+    began = time.monotonic()
+
+    def _progress(phase: str, message: str, current: Optional[int], total: Optional[int]) -> None:
+        fraction = {"load": 0.15, "quantize": 0.6, "save": 0.9}.get(phase, None)
+        emitter.emit(tool_progress(
+            tool, phase, message, current=current, total=total, fraction=fraction,
+        ))
+
+    try:
+        result = quantize(
+            model, out, bits=bits, group_size=group_size,
+            progress_callback=_progress,
+            log=lambda message: typer.echo(f"# {message}", err=True),
+        )
+    except KeyboardInterrupt:
+        emitter.emit(tool_cancelled(tool))
+        raise typer.Exit(130)
+    except (OSError, ValueError, TypeError, KeyError, AssertionError) as exc:
+        emitter.emit(tool_failed(tool, str(exc)))
+        raise typer.Exit(1) from None
+
+    result["elapsed"] = round(time.monotonic() - began, 3)
+    emitter.emit(tool_completed(tool, result, path=str(out)))
+
+
 @app.command("dataset-preview")
 def dataset_preview(
     model: Path = typer.Option(..., "--model", "-m", help="HF 模型目录(tokenizer 来源)"),

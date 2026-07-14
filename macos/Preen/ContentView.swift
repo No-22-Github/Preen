@@ -34,39 +34,91 @@ struct ContentView: View {
         .frame(minWidth: 1000, minHeight: 680)
     }
 
-    /// 模型选择器(toolbar 下拉菜单,靠近窗口右边缘)。
+    /// 模型选择器(toolbar 下拉菜单 + 精度胶囊,靠近窗口右边缘)。
     private var modelPickerMenu: some View {
-        Menu {
-            if appState.recentModels.isEmpty {
-                Text("还没有模型记录")
-            } else {
-                ForEach(appState.recentModels) { model in
-                    Button {
-                        appState.selectModel(path: model.path)
-                    } label: {
-                        if appState.modelPath == model.path {
-                            Label(model.displayName, systemImage: "checkmark")
-                        } else {
-                            Text(model.displayName)
+        HStack(spacing: 8) {
+            Menu {
+                if appState.recentModels.isEmpty {
+                    Text("还没有模型记录")
+                } else {
+                    ForEach(appState.recentModels) { model in
+                        Button {
+                            appState.selectModel(path: model.path)
+                        } label: {
+                            menuItemLabel(for: model, isSelected: appState.modelPath == model.path)
                         }
                     }
                 }
+                Divider()
+                Button("选择其他模型…") {
+                    pickModel()
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "shippingbox")
+                    Text(menuLabelText)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
             }
-            Divider()
-            Button("选择其他模型…") {
-                pickModel()
-            }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "shippingbox")
-                Text(appState.modelPath.isEmpty
-                     ? "选择模型"
-                     : URL(fileURLWithPath: appState.modelPath).lastPathComponent)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+            .help("选择 RWKV-7 模型")
+
+            // 精度胶囊:独立于 Menu label,避免 Menu 对多视图渲染的限制。
+            if !appState.modelPath.isEmpty {
+                precisionBadge
             }
         }
-        .help("选择 RWKV-7 模型")
+    }
+
+    /// 下拉菜单项:模型名 + 右对齐精度标记(int8 附带橙色"仅推理")。
+    /// 已选中项用 Label 显示 checkmark;否则纯 Text。
+    /// 用 AttributedString 拼成单一 Text,避免 Menu item 对多视图的渲染限制。
+    private func menuItemLabel(for model: RecentModel, isSelected: Bool) -> some View {
+        let badge = ModelConfigProbe.precisionBadge(for: model.path)
+        var label = AttributedString(model.displayName)
+        var detail = AttributedString("\t\(badge.uppercased())")
+        detail.foregroundColor = .secondary
+        if badge == "int8" {
+            var hint = AttributedString(" · 仅推理")
+            hint.foregroundColor = .orange
+            detail += hint
+        }
+        label += detail
+        if isSelected {
+            return AnyView(Label(title: { Text(label) }, icon: { Image(systemName: "checkmark") }))
+        } else {
+            return AnyView(Text(label))
+        }
+    }
+
+    /// 精度胶囊标签:圆角背景 + 大写文字,颜色按精度语义区分。
+    /// int8=橙色(提速量化),bf16=灰色(标准)。
+    private var precisionBadge: some View {
+        let badge = ModelConfigProbe.precisionBadge(for: appState.modelPath)
+        let isQuantized = badge == "int8"
+        return Text(badge.uppercased())
+            .font(.caption.weight(.semibold))
+            .monospacedDigit()
+            .foregroundStyle(isQuantized ? Color.orange : Color.secondary)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(
+                (isQuantized ? Color.orange : Color.secondary).opacity(0.15),
+                in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+            )
+            .help(isQuantized ? "INT8 · 仅支持推理,不支持训练" : "BF16 标准精度")
+            .contentShape(Rectangle())
+    }
+
+    /// Menu label 文字:模型名用 semibold。用 AttributedString 携带 font 属性,
+    /// 能穿透 Menu label 的系统样式覆盖(.fontWeight 修饰符会被 Menu 忽略)。
+    private var menuLabelText: AttributedString {
+        if appState.modelPath.isEmpty {
+            return AttributedString("选择模型")
+        }
+        var attr = AttributedString(URL(fileURLWithPath: appState.modelPath).lastPathComponent)
+        attr.font = .body.weight(.semibold)
+        return attr
     }
 
     private func pickModel() {
