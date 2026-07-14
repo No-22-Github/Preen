@@ -10,6 +10,7 @@
 //
 
 import SwiftUI
+import MarkdownUI
 
 struct ChatMessageView: View {
     let message: ChatMessage
@@ -94,7 +95,7 @@ struct ChatMessageView: View {
         } else {
             // answer 段。
             if !seg.text.isEmpty {
-                Text(seg.text)
+                Markdown(seg.text)
                     .font(.body)
                     .textSelection(.enabled)
             }

@@ -3,7 +3,7 @@
 //  Preen
 //
 //  侧边栏。主导航列表(训练/对话/训练记录/工具箱)。
-//   - 模型选择器已移至主窗口 toolbar primaryAction(靠近窗口右边缘)。
+//   - 模型选择器已移至主窗口 toolbar principal(窗口中央)。
 //   - 后端状态入口已移至 GlobalStatusBar(绿点区可点击)。
 //
 

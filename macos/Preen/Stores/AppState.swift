@@ -41,7 +41,7 @@ final class AppState {
     var selection: SidebarItem = .training
     var selectedRunID: UUID?
 
-    // === 模型(右上角 toolbar 选,全 app 共享)===
+    // === 模型(顶部中央 toolbar 选,全 app 共享)===
     private var modelCatalog: RecentModelCatalog
     var modelPath: String {
         get { modelCatalog.selectedPath }

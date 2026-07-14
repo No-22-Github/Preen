@@ -279,7 +279,7 @@ final class ToolboxStore {
 
     func previewDataset(modelPath: String) {
         guard canPreviewDataset, !modelPath.isEmpty else {
-            errorMessage = "请先在窗口右上角选择模型，数据预览需要对应 tokenizer"
+            errorMessage = "请先在窗口顶部选择模型，数据预览需要对应 tokenizer"
             return
         }
         removeDatasetPreviewCache()

@@ -3,7 +3,7 @@
 //  Preen
 //
 //  对话面板最小版(单栏)。design.md §6 但本期只做单栏:
-//   - 顶部:state 选择器 + 连接 / 断开按钮 + 采样配置(简化版,折叠)。
+//   - 对话操作位于系统 toolbar,连接按钮位于未连接空态。
 //   - 主体:消息列表(自动滚到底)。
 //   - 底部:输入栏。
 //
@@ -19,16 +19,15 @@ import AppKit
 
 struct ChatPanel: View {
     @Bindable var store: ChatStore
-    /// 模型路径(右上角 toolbar 选的,从 app-wide 注入)。
+    /// 模型路径(顶部中央 toolbar 选的,从 app-wide 注入)。
     var modelPath: String
     /// 外部「去对话」入口注入的 state 路径(训练完成 → 跳对话,自动设上)。
     @Binding var injectedStatePath: String?
+    /// 由窗口 toolbar 打开的生成参数 sheet。
+    @Binding var isShowingGenerationParameters: Bool
     var onConnect: () -> Void
-    var onDisconnect: () -> Void
 
     @State private var inputText: String = ""
-    /// 采样配置 sheet(独立弹窗,不再塞顶栏)。
-    @State private var showSamplerSheet: Bool = false
     /// 启动日志弹窗:点「连接」后显示,ready 自动关 / 失败保留排查。
     @State private var isShowingStartupLog: Bool = false
     /// 清除会话确认弹窗。
@@ -38,11 +37,6 @@ struct ChatPanel: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            topBar
-                .padding(.horizontal, 8)
-                .padding(.top, 6)
-                .padding(.bottom, 4)
-            Divider()
             messageList
             Divider()
             if let error = store.lastError {
@@ -79,10 +73,10 @@ struct ChatPanel: View {
             StartupLogSheet(
                 store: store,
                 onDismiss: { isShowingStartupLog = false },
-                onRetry: { onConnect() }
+                onRetry: { startConnection() }
             )
         }
-        .sheet(isPresented: $showSamplerSheet) {
+        .sheet(isPresented: $isShowingGenerationParameters) {
             samplerSheet
         }
         .onChange(of: injectedStatePath) { _, newPath in
@@ -93,125 +87,142 @@ struct ChatPanel: View {
         }
     }
 
-    // MARK: - 顶栏
-
-    private var topBar: some View {
-        HStack(spacing: 12) {
-            // 连接状态指示。
-            Circle()
-                .fill(store.isConnected ? Color.green : Color.secondary)
-                .frame(width: 8, height: 8)
-            Text(store.isConnected ? "已连接" : "未连接")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            Spacer()
-
-            // state 显示。
-            if let path = store.statePath {
-                let name: String = URL(fileURLWithPath: path).lastPathComponent
-                Label(name, systemImage: "cpu")
-                    .font(.caption)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-            }
-
-            // 选择 state。
-            Button {
-                pickState()
-            } label: {
-                Label("选 state", systemImage: "folder")
-            }
-            .disabled(!store.isConnected)
-
-            // 采样配置(独立 sheet,省略号表示打开新界面)。
-            Button {
-                showSamplerSheet = true
-            } label: {
-                Label("采样…", systemImage: "slider.horizontal.3")
-            }
-            .disabled(!store.isConnected)
-            .help("温度、top_p、惩罚等生成参数")
-
-            // 连接 / 断开。
-            if store.isConnected {
-                Button("断开", action: onDisconnect)
-            } else {
-                Button {
-                    onConnect()
-                    // 弹出启动日志窗口,实时看后端输出,ready 自动关。
-                    isShowingStartupLog = true
-                } label: {
-                    Label("连接", systemImage: "link")
-                }
-                .disabled(modelPath.isEmpty)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .frame(height: 44)
-        .preenGlassSurface(cornerRadius: 14)
-    }
-
     private var samplerSheet: some View {
         VStack(spacing: 0) {
-            Text("采样配置")
-                .font(.headline)
-                .padding(.top, 20)
-                .padding(.bottom, 4)
-            Text("修改后点「应用」,下一轮回复生效")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.bottom, 16)
+            HStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("生成参数")
+                        .font(.headline)
+                    Text("修改将从下一轮回复开始生效")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
 
-            Form {
-                Section("采样") {
-                    HStack {
-                        LabeledDoubleField(label: "temp", value: $store.genConfig.temperature, default: 1.2)
-                        LabeledDoubleField(label: "top_p", value: $store.genConfig.topP, default: 0.5)
-                        LabeledIntField(label: "max_tokens", value: $store.genConfig.maxTokens, default: 300)
-                    }
+                Spacer()
+
+                Button("恢复默认") {
+                    store.genConfig = .defaultConfig
                 }
-                Section("惩罚") {
-                    HStack {
-                        LabeledDoubleField(label: "presence", value: $store.genConfig.presencePenalty, default: 0.4)
-                        LabeledDoubleField(label: "frequency", value: $store.genConfig.frequencyPenalty, default: 0.4)
-                        LabeledDoubleField(label: "decay", value: $store.genConfig.penaltyDecay, default: 0.996)
-                    }
-                }
-                Section("可复现性") {
-                    LabeledIntField(label: "seed", value: $store.genConfig.seed, default: 42)
-                }
+                .disabled(store.genConfig == .defaultConfig)
             }
-            .formStyle(.grouped)
+            .padding(20)
+
+            Divider()
+
+            ScrollView {
+                VStack(spacing: 14) {
+                    parameterSection(title: "采样") {
+                        GenerationDoubleField(
+                            title: "温度",
+                            detail: "控制回答的随机性",
+                            value: $store.genConfig.temperature,
+                            defaultValue: 1.2
+                        )
+                        Divider()
+                        GenerationDoubleField(
+                            title: "核采样",
+                            detail: "限制候选 token 范围",
+                            value: $store.genConfig.topP,
+                            defaultValue: 0.5
+                        )
+                        Divider()
+                        GenerationIntField(
+                            title: "最大长度",
+                            detail: "单次回复的 token 上限",
+                            value: $store.genConfig.maxTokens,
+                            defaultValue: 300
+                        )
+                    }
+
+                    parameterSection(title: "重复惩罚") {
+                        GenerationDoubleField(
+                            title: "出现惩罚",
+                            detail: "降低已出现内容再次生成的概率",
+                            value: $store.genConfig.presencePenalty,
+                            defaultValue: 0.4
+                        )
+                        Divider()
+                        GenerationDoubleField(
+                            title: "频率惩罚",
+                            detail: "按出现次数增加惩罚",
+                            value: $store.genConfig.frequencyPenalty,
+                            defaultValue: 0.4
+                        )
+                        Divider()
+                        GenerationDoubleField(
+                            title: "惩罚衰减",
+                            detail: "控制重复惩罚随时间衰减",
+                            value: $store.genConfig.penaltyDecay,
+                            defaultValue: 0.996
+                        )
+                    }
+
+                    parameterSection(title: "可复现性") {
+                        GenerationIntField(
+                            title: "随机种子",
+                            detail: "相同参数下复现采样结果",
+                            value: $store.genConfig.seed,
+                            defaultValue: 42
+                        )
+                    }
+                }
+                .padding(20)
+            }
+
+            Divider()
 
             HStack {
-                Button("取消", role: .cancel) { showSamplerSheet = false }
+                Button("取消", role: .cancel) { isShowingGenerationParameters = false }
                 Spacer()
                 Button("应用") {
                     store.applyConfig()
-                    showSamplerSheet = false
+                    isShowingGenerationParameters = false
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
             }
-            .padding(16)
+            .padding(20)
         }
-        .frame(width: 460)
+        .frame(width: 520, height: 600)
+    }
+
+    private func parameterSection<Content: View>(
+        title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 4)
+
+            VStack(spacing: 10) {
+                content()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
     }
 
     // MARK: - 消息列表
 
     private var messageList: some View {
+        Group {
+            if store.isConnected {
+                connectedMessageList
+            } else {
+                emptyState
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var connectedMessageList: some View {
         ScrollViewReader { proxy in
             ZStack(alignment: .bottomTrailing) {
                 ScrollView {
                     LazyVStack(spacing: 4) {
-                        if store.messages.isEmpty {
-                            emptyState
-                                .padding(.top, 80)
-                        }
                         ForEach(store.messages) { msg in
                             ChatMessageView(message: msg)
                                 .id(msg.id)
@@ -243,6 +254,10 @@ struct ChatPanel: View {
                     proxy.scrollTo("chat-bottom", anchor: .bottom)
                 }
 
+                if store.messages.isEmpty {
+                    emptyState
+                }
+
                 if !isFollowingLatest && !store.messages.isEmpty {
                     Button {
                         isFollowingLatest = true
@@ -268,9 +283,27 @@ struct ChatPanel: View {
             Image(systemName: "bubble.left.and.bubble.right")
                 .font(.system(size: 40))
                 .foregroundStyle(.secondary)
-            Text(store.isConnected ? "开始对话" : "点击「连接」开始对话")
+            Text(store.isConnected ? "开始对话" : "连接本地模型")
                 .font(.title3)
                 .foregroundStyle(.secondary)
+            if !store.isConnected {
+                Button {
+                    startConnection()
+                } label: {
+                    if store.hasActiveProcess {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("正在连接…")
+                        }
+                    } else {
+                        Label("连接", systemImage: "link")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(modelPath.isEmpty || store.hasActiveProcess)
+            }
             if store.isConnected && store.statePath == nil {
                 Text("未选 state —— 当前是基线(无 state)模式")
                     .font(.caption)
@@ -281,7 +314,7 @@ struct ChatPanel: View {
                 .foregroundStyle(.secondary)
                 .padding(.top, 8)
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func chatErrorBanner(_ error: String) -> some View {
@@ -309,14 +342,105 @@ struct ChatPanel: View {
 
     // MARK: - 内部
 
-    private func pickState() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = false
-        panel.allowedContentTypes = [.data]  // .npz 走 UTI data
-        panel.allowsMultipleSelection = false
-        if panel.runModal() == .OK, let url = panel.url {
-            store.setState(path: url.path)
+    private func startConnection() {
+        onConnect()
+        // 弹出启动日志窗口,实时看后端输出,ready 自动关。
+        isShowingStartupLog = true
+    }
+
+}
+
+/// 生成参数面板专用的小数输入行。恢复按钮始终占位，避免值变化时布局跳动。
+private struct GenerationDoubleField: View {
+    let title: String
+    let detail: String
+    @Binding var value: Double
+    let defaultValue: Double
+
+    var body: some View {
+        GenerationParameterRow(title: title, detail: detail) {
+            TextField(title, value: $value, format: .number)
+                .labelsHidden()
+                .multilineTextAlignment(.trailing)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 92)
+
+            resetButton
         }
+    }
+
+    private var resetButton: some View {
+        Button {
+            value = defaultValue
+        } label: {
+            Image(systemName: "arrow.counterclockwise")
+                .frame(width: 18, height: 18)
+        }
+        .buttonStyle(.borderless)
+        .disabled(value == defaultValue)
+        .opacity(value == defaultValue ? 0 : 1)
+        .help("恢复默认值 \(defaultValue)")
+        .frame(width: 24)
+    }
+}
+
+/// 生成参数面板专用的整数输入行。
+private struct GenerationIntField: View {
+    let title: String
+    let detail: String
+    @Binding var value: Int
+    let defaultValue: Int
+
+    var body: some View {
+        GenerationParameterRow(title: title, detail: detail) {
+            TextField(title, value: $value, format: .number.grouping(.never))
+                .labelsHidden()
+                .multilineTextAlignment(.trailing)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 92)
+
+            resetButton
+        }
+    }
+
+    private var resetButton: some View {
+        Button {
+            value = defaultValue
+        } label: {
+            Image(systemName: "arrow.counterclockwise")
+                .frame(width: 18, height: 18)
+        }
+        .buttonStyle(.borderless)
+        .disabled(value == defaultValue)
+        .opacity(value == defaultValue ? 0 : 1)
+        .help("恢复默认值 \(defaultValue)")
+        .frame(width: 24)
+    }
+}
+
+private struct GenerationParameterRow<Controls: View>: View {
+    let title: String
+    let detail: String
+    @ViewBuilder let controls: () -> Controls
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.body)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 16)
+
+            HStack(spacing: 4) {
+                controls()
+            }
+        }
+        .frame(minHeight: 38)
     }
 }
 

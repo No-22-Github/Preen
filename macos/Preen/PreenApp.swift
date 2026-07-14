@@ -37,6 +37,7 @@ struct PreenApp: App {
                     openWindow(id: "about")
                 }
             }
+            InspectorCommands()
         }
     }
 }

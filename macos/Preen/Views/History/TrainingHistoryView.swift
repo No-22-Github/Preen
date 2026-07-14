@@ -6,6 +6,7 @@ struct TrainingHistoryView: View {
     @State private var importError: String?
     @State private var deleteCandidate: TrainingRun?
     @State private var deleteError: String?
+    @SceneStorage("trainingHistoryInspectorPresentedV3") private var isInspectorPresented = true
 
     private var filteredRuns: [TrainingRun] {
         appState.runs.filter { statusFilter == nil || $0.status == statusFilter }
@@ -75,87 +76,136 @@ struct TrainingHistoryView: View {
     }
 
     private var historySplitView: some View {
-        HSplitView {
-            VStack(spacing: 0) {
-                HStack {
-                    Picker("状态", selection: $statusFilter) {
-                        Text("全部").tag(TrainingRunStatus?.none)
-                        ForEach(TrainingRunStatus.allCases, id: \.self) { status in
-                            Text(status.label).tag(Optional(status))
-                        }
-                    }
-                    Button { importState() } label: {
-                        Image(systemName: "plus")
-                    }
-                    .help("登记外部 State…")
-                    .labelStyle(.iconOnly)
+        historyLayout
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .toolbar {
+            ToolbarItem(
+                id: "training-history-inspector",
+                placement: .primaryAction,
+                showsByDefault: true
+            ) {
+                Button {
+                    isInspectorPresented.toggle()
+                } label: {
+                    Label("训练详情", systemImage: "sidebar.trailing")
                 }
-                .padding(10)
-
-                if filteredRuns.isEmpty {
-                    ContentUnavailableView {
-                        Label("没有符合筛选条件的记录", systemImage: "line.3.horizontal.decrease.circle")
-                    } description: {
-                        Text("当前状态筛选下没有训练记录。")
-                    } actions: {
-                        Button("显示全部") { statusFilter = nil }
-                    }
-                } else {
-                    List(filteredRuns, selection: $appState.selectedRunID) { run in
-                        HStack(spacing: 9) {
-                            Image(systemName: run.status.systemImage)
-                                .foregroundStyle(run.status.color)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(run.config.map {
-                                    URL(fileURLWithPath: $0.dataPath).lastPathComponent
-                                } ?? URL(
-                                    fileURLWithPath: run.artifacts.statePath ?? "State"
-                                ).lastPathComponent)
-                                .lineLimit(1)
-                                HStack {
-                                    Text(run.kind == .imported ? "外部导入" : run.status.label)
-                                    Text(run.createdAt, format: .dateTime.month().day().hour().minute())
-                                }
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                            }
-                        }
-                        .tag(run.id)
-                        .contextMenu {
-                            Button("删除记录…", role: .destructive) {
-                                requestDelete(run)
-                            }
-                            .disabled(!run.status.isTerminal)
-                        }
-                    }
-                    .listStyle(.inset)
-                    .onDeleteCommand {
-                        if let selectedRun { requestDelete(selectedRun) }
-                    }
-                }
+                .labelStyle(.iconOnly)
+                .help(isInspectorPresented ? "隐藏训练详情" : "显示训练详情")
+                .accessibilityValue(isInspectorPresented ? "已显示" : "已隐藏")
+                .disabled(selectedRun == nil)
             }
-            .frame(minWidth: 260, idealWidth: 300, maxWidth: 360)
-
+        }
+        .inspector(isPresented: $isInspectorPresented) {
             if let run = selectedRun {
-                TrainingRunDetailView(
-                    run: run,
-                    appState: appState,
-                    onDelete: { requestDelete(run) }
-                )
-            } else if filteredRuns.isEmpty {
-                ContentUnavailableView(
-                    "没有符合筛选条件的记录",
-                    systemImage: "line.3.horizontal.decrease.circle",
-                    description: Text("请调整状态筛选。")
-                )
+                TrainingRunInspectorView(run: run)
+                    .inspectorColumnWidth(min: 260, ideal: 300, max: 360)
             } else {
                 ContentUnavailableView(
-                    "选择一条训练记录",
-                    systemImage: "clock.arrow.circlepath",
-                    description: Text("成功、失败、取消和中断记录都会保留。")
+                    "没有选中的记录",
+                    systemImage: "sidebar.trailing",
+                    description: Text("选择一条训练记录查看参数与结果。")
                 )
             }
         }
+    }
+
+    private var historyLayout: some View {
+        HStack(spacing: 0) {
+            recordListPane
+                .frame(width: 260)
+
+            Divider()
+
+            selectedRunDetail
+        }
+    }
+
+    private var recordListPane: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Picker("状态", selection: $statusFilter) {
+                    Text("全部").tag(TrainingRunStatus?.none)
+                    ForEach(TrainingRunStatus.allCases, id: \.self) { status in
+                        Text(status.label).tag(Optional(status))
+                    }
+                }
+                Button { importState() } label: {
+                    Image(systemName: "plus")
+                }
+                .help("登记外部 State…")
+                .labelStyle(.iconOnly)
+            }
+            .padding(10)
+
+            if filteredRuns.isEmpty {
+                ContentUnavailableView {
+                    Label("没有符合筛选条件的记录", systemImage: "line.3.horizontal.decrease.circle")
+                } description: {
+                    Text("当前状态筛选下没有训练记录。")
+                } actions: {
+                    Button("显示全部") { statusFilter = nil }
+                }
+            } else {
+                List(filteredRuns, selection: $appState.selectedRunID) { run in
+                    HStack(spacing: 9) {
+                        Image(systemName: run.status.systemImage)
+                            .foregroundStyle(run.status.color)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(runDisplayName(run))
+                                .lineLimit(1)
+                            HStack {
+                                Text(run.kind == .imported ? "外部导入" : run.status.label)
+                                Text(run.createdAt, format: .dateTime.month().day().hour().minute())
+                            }
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        }
+                    }
+                    .tag(run.id)
+                    .contextMenu {
+                        Button("删除记录…", role: .destructive) {
+                            requestDelete(run)
+                        }
+                        .disabled(!run.status.isTerminal)
+                    }
+                }
+                .listStyle(.inset)
+                .onDeleteCommand {
+                    if let selectedRun { requestDelete(selectedRun) }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var selectedRunDetail: some View {
+        if let run = selectedRun {
+            TrainingRunDetailView(
+                run: run,
+                appState: appState,
+                onDelete: { requestDelete(run) }
+            )
+        } else if filteredRuns.isEmpty {
+            ContentUnavailableView {
+                Label("没有符合筛选条件的记录", systemImage: "line.3.horizontal.decrease.circle")
+            } description: {
+                Text("请调整状态筛选。")
+            } actions: {
+                Button("显示全部") { statusFilter = nil }
+            }
+        } else {
+            ContentUnavailableView(
+                "选择一条训练记录",
+                systemImage: "clock.arrow.circlepath",
+                description: Text("成功、失败、取消和中断记录都会保留。")
+            )
+        }
+    }
+
+    private func runDisplayName(_ run: TrainingRun) -> String {
+        run.config.map {
+            URL(fileURLWithPath: $0.dataPath).lastPathComponent
+        } ?? URL(fileURLWithPath: run.artifacts.statePath ?? "State").lastPathComponent
     }
 
     private var noRunsView: some View {

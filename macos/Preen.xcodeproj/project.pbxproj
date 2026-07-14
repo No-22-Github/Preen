@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		D00000000000000000000001 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = D00000000000000000000003 /* MarkdownUI */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		C00000000000000000000007 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -39,6 +43,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D00000000000000000000001 /* MarkdownUI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -90,6 +95,7 @@
 			);
 			name = Preen;
 			packageProductDependencies = (
+				D00000000000000000000003 /* MarkdownUI */,
 			);
 			productName = Preen;
 			productReference = B2CB0A183004148A00B5B165 /* Preen.app */;
@@ -142,6 +148,9 @@
 			);
 			mainGroup = B2CB0A0F3004148A00B5B165;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				D00000000000000000000002 /* XCRemoteSwiftPackageReference "swift-markdown-ui" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = B2CB0A193004148A00B5B165 /* Products */;
 			projectDirPath = "";
@@ -457,6 +466,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		D00000000000000000000002 /* XCRemoteSwiftPackageReference "swift-markdown-ui" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/gonzalezreal/swift-markdown-ui";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.4.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		D00000000000000000000003 /* MarkdownUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D00000000000000000000002 /* XCRemoteSwiftPackageReference "swift-markdown-ui" */;
+			productName = MarkdownUI;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = B2CB0A103004148A00B5B165 /* Project object */;
 }

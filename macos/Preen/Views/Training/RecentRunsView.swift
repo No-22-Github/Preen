@@ -40,8 +40,11 @@ struct RecentRunsView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .listRowBackground(Color.clear)
                 }
-                .listStyle(.inset)
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .background(Color.clear)
                 .frame(minHeight: 190)
             }
         }

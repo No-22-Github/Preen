@@ -5,7 +5,7 @@
 //  主容器。NavigationSplitView 两栏:
 //   - Sidebar(训练/对话/训练记录/工具箱)
 //   - detail(按 selection 切面板)
-//   - 模型选择器位于 detail toolbar 右上角
+//   - 模型选择器位于 detail toolbar 中央
 //
 //  最小 1000×680(design.md §3)。
 //
@@ -14,6 +14,7 @@ import SwiftUI
 
 struct ContentView: View {
     @Bindable var appState: AppState
+    @State private var isShowingChatGenerationParameters = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -23,7 +24,41 @@ struct ContentView: View {
             } detail: {
                 detail
                     .toolbar {
-                        ToolbarItem(placement: .primaryAction) {
+                        if appState.selection == .chat && appState.chatStore.isConnected {
+                            ToolbarItemGroup(placement: .primaryAction) {
+                                Button(action: appState.disconnectInference) {
+                                    HStack(spacing: 6) {
+                                        if #available(macOS 15.0, *) {
+                                            Image(systemName: "personalhotspot.slash")
+                                        } else {
+                                            Image(systemName: "xmark.circle")
+                                        }
+                                        Text("断开")
+                                    }
+                                }
+                                .help("断开推理连接")
+
+                                Button(action: pickChatState) {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "folder")
+                                        Text("加载State…")
+                                    }
+                                }
+                                .help("加载State…")
+
+                                Button {
+                                    isShowingChatGenerationParameters = true
+                                } label: {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "slider.horizontal.3")
+                                        Text("生成参数…")
+                                    }
+                                }
+                                .help("温度、top_p、惩罚等生成参数")
+                            }
+                        }
+
+                        ToolbarItem(id: "model-picker", placement: .principal) {
                             modelPickerMenu
                         }
                     }
@@ -34,7 +69,7 @@ struct ContentView: View {
         .frame(minWidth: 1000, minHeight: 680)
     }
 
-    /// 模型选择器(toolbar 下拉菜单 + 精度胶囊,靠近窗口右边缘)。
+    /// 模型选择器(toolbar 下拉菜单 + 精度胶囊,位于窗口中央)。
     private var modelPickerMenu: some View {
         HStack(spacing: 8) {
             Menu {
@@ -132,6 +167,16 @@ struct ContentView: View {
         }
     }
 
+    private func pickChatState() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.data]  // .npz 走 UTI data
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url {
+            appState.chatStore.setState(path: url.path)
+        }
+    }
+
     @ViewBuilder
     private var detail: some View {
         switch appState.selection {
@@ -154,8 +199,8 @@ struct ContentView: View {
                 ChatPanel(store: appState.chatStore,
                           modelPath: appState.modelPath,
                           injectedStatePath: $appState.injectedStatePath,
-                          onConnect: { appState.connectInference() },
-                          onDisconnect: { appState.disconnectInference() })
+                          isShowingGenerationParameters: $isShowingChatGenerationParameters,
+                          onConnect: { appState.connectInference() })
             }
         case .history:
             TrainingHistoryView(appState: appState)
@@ -190,7 +235,7 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
             Button("选择模型…") { pickModel() }
                 .buttonStyle(.borderedProminent)
-            Text("也可以使用窗口右上角的模型菜单。")
+            Text("也可以使用窗口顶部的模型菜单。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

@@ -16,26 +16,37 @@ struct TrainingEmptyView: View {
     var onConfigured: () -> Void  // 选完数据,进配置态
 
     @State private var isDropTargeted = false
+    @SceneStorage("trainingRecentRunsInspectorPresented") private var isInspectorPresented = true
 
+    @ViewBuilder
     var body: some View {
-        HStack(spacing: 0) {
-            // 左半:开始新训练。
+        if recentRuns.isEmpty {
             newRunSection
-                .frame(maxWidth: .infinity)
-                .frame(maxHeight: .infinity)
-
-            if !recentRuns.isEmpty {
-                Divider()
-                // 右半:最近训练。
-                RecentRunsView(runs: recentRuns, onSelect: onSelectRun)
-                    .frame(maxWidth: 320)
-                    .padding(.vertical, 32)
-                    .padding(.trailing, 32)
-                    .padding(.leading, 24)
-                    .frame(maxHeight: .infinity)
-            }
+        } else {
+            newRunSection
+                .toolbar {
+                    ToolbarItem(
+                        id: "training-recent-runs-inspector",
+                        placement: .primaryAction,
+                        showsByDefault: true
+                    ) {
+                        Button {
+                            isInspectorPresented.toggle()
+                        } label: {
+                            Label("最近训练", systemImage: "sidebar.trailing")
+                        }
+                        .labelStyle(.iconOnly)
+                        .help(isInspectorPresented ? "隐藏最近训练" : "显示最近训练")
+                        .accessibilityValue(isInspectorPresented ? "已显示" : "已隐藏")
+                    }
+                }
+                .inspector(isPresented: $isInspectorPresented) {
+                    RecentRunsView(runs: recentRuns, onSelect: onSelectRun)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 16)
+                        .inspectorColumnWidth(min: 250, ideal: 280, max: 340)
+                }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var newRunSection: some View {
@@ -67,7 +78,7 @@ struct TrainingEmptyView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .frame(width: 200, alignment: .leading)
-                    Text(config.modelPath.isEmpty ? "请在窗口右上角选择模型" : URL(fileURLWithPath: config.modelPath).lastPathComponent)
+                    Text(config.modelPath.isEmpty ? "请在窗口顶部选择模型" : URL(fileURLWithPath: config.modelPath).lastPathComponent)
                         .lineLimit(1)
                         .foregroundStyle(config.modelPath.isEmpty ? .secondary : .primary)
                     Spacer()

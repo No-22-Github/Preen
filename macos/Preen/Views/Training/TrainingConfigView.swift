@@ -106,7 +106,7 @@ struct TrainingConfigView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(width: 200, alignment: .leading)
-                Text(config.modelPath.isEmpty ? "请在窗口右上角选择模型" : config.modelPath)
+                Text(config.modelPath.isEmpty ? "请在窗口顶部选择模型" : config.modelPath)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer()

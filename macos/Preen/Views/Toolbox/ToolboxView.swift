@@ -391,7 +391,7 @@ struct ToolboxView: View {
                 HStack {
                     Label(
                         modelPath.isEmpty
-                            ? "请先在窗口右上角选择模型"
+                            ? "请先在窗口顶部选择模型"
                             : URL(fileURLWithPath: modelPath).lastPathComponent,
                         systemImage: "textformat.abc"
                     )

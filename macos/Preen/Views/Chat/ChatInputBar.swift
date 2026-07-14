@@ -4,7 +4,7 @@
 //
 //  输入栏。design.md §6:
 //   - TextEditor + 发送按钮(生成中变 abort 红按钮)。
-//   - busy 时禁用发送。
+//   - busy 时仍可编辑,但禁用发送。
 //   - 回车发送(Command+Return 也可,Shift+Return 换行)。
 //
 
@@ -32,14 +32,9 @@ struct ChatInputBar: View {
                 .padding(.vertical, 6)
                 .background(.quaternary.opacity(0.7), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .focused($isFocused)
-                .disabled(isGenerating)  // 生成时不让编辑
-                .onChange(of: text) { _, new in
-                    // 单行最大高度限制。
-                    if new.count > 2000 { text = String(new.prefix(2000)) }
-                }
                 .onKeyPress(.return, phases: .down) { press in
                     // 普通回车发送(无 modifiers);Shift+Return 换行。
-                    if press.modifiers.isEmpty {
+                    if press.modifiers.isEmpty && canSend {
                         send()
                         return .handled
                     }
