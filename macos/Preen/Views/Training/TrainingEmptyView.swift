@@ -40,9 +40,11 @@ struct TrainingEmptyView: View {
 
     private var newRunSection: some View {
         VStack(spacing: 16) {
-            Image(systemName: "tray.and.arrow.down")
-                .font(.system(size: 48))
-                .foregroundStyle(.secondary)
+            Image("PreenTitle")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 240)
+                .padding(.bottom, 24)
                 .accessibilityHidden(true)
 
             Text("选择训练数据开始")
