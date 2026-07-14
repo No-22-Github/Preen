@@ -79,9 +79,14 @@ final class AppState {
     func selectModel(path: String) {
         let previousPath = modelCatalog.selectedPath
         modelCatalog.select(path: path)
-        if modelCatalog.selectedPath != previousPath, chatStore.hasActiveProcess {
+        if modelCatalog.selectedPath != previousPath {
             // 换模型不会自动重连；先终止旧模型，避免 Metal 内存池继续驻留。
-            chatStore.disconnect()
+            if chatStore.hasActiveProcess {
+                chatStore.disconnect()
+            }
+            // state 针对特定模型训练,换模型必须清,否则旧模型的 state 会继承给新模型。
+            chatStore.clearState()
+            injectedStatePath = nil
         }
     }
 
@@ -89,8 +94,13 @@ final class AppState {
     func validateRecentModels() {
         let previousPath = modelCatalog.selectedPath
         modelCatalog.validate()
-        if previousPath != modelCatalog.selectedPath, chatStore.hasActiveProcess {
-            chatStore.disconnect()
+        if previousPath != modelCatalog.selectedPath {
+            if chatStore.hasActiveProcess {
+                chatStore.disconnect()
+            }
+            // 同 selectModel:被移除的模型其 state 也应失效。
+            chatStore.clearState()
+            injectedStatePath = nil
         }
     }
 

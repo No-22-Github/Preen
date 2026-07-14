@@ -242,6 +242,17 @@ final class ChatStore {
         }
     }
 
+    /// 清除当前 state(切模型 / 用户卸下时调用)。
+    /// 已连接时走后端 set_state(nil)(会重置会话);未连接只清本地字段,
+    /// 这样下次连接 newSession() 不会把旧模型的 state 带给新模型。
+    func clearState() {
+        if sessionId != nil, isConnected {
+            setState(path: nil)
+        } else {
+            statePath = nil
+        }
+    }
+
     /// 新建会话(连接后自动调,或换模板/切 state 后重建)。
     func newSession(template: String = "qa", reasoning: Bool? = nil, think: String? = nil) {
         Task { [weak self] in

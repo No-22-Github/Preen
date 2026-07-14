@@ -15,6 +15,8 @@ import SwiftUI
 struct ContentView: View {
     @Bindable var appState: AppState
     @State private var isShowingChatGenerationParameters = false
+    /// 待执行的 state 动作(有聊天记录时拦截,确认后才执行,与垃圾桶同逻辑)。
+    @State private var pendingStateAction: PendingStateAction?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -38,13 +40,44 @@ struct ContentView: View {
                                 }
                                 .help("断开推理连接")
 
-                                Button(action: pickChatState) {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: "folder")
-                                        Text("加载State…")
+                                if let badge = chatStateBadgeLabel {
+                                    // 已选 state:文件名按钮(点此重选,透明底)+ 紧邻的 ×(点此卸下)。
+                                    // 两者用 plain 样式去掉系统 bezel,避免被渲染成两个分离气泡;
+                                    // 只有 × 带圆形淡色背景,主区域保持 toolbar 原底色。
+                                    Button(action: requestLoadState) {
+                                        HStack(spacing: 6) {
+                                            Image(systemName: "doc.fill")
+                                            Text(badge).lineLimit(1).truncationMode(.middle)
+                                        }
+                                        // plain toolbar 按钮不套强调色且可能塌缩成零宽:
+                                        // primary 保证内容可见,fixedSize 强制按内容撑开。
+                                        .foregroundStyle(.primary)
+                                        .fixedSize(horizontal: true, vertical: false)
+                                        .padding(.vertical, 5)
+                                        .contentShape(Rectangle())
                                     }
+                                    .buttonStyle(.plain)
+                                    .help("加载或替换对话用的 State")
+
+                                    Button(action: requestClearState) {
+                                        Image(systemName: "xmark")
+                                            .font(.system(size: 9, weight: .bold))
+                                            .frame(width: 18, height: 18)
+                                            .foregroundStyle(.secondary)
+                                            .background(Color.secondary.opacity(0.18), in: Circle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("卸下当前 State，回到基线模式")
+                                } else {
+                                    // 未选 state:加载入口(原生单按钮)。
+                                    Button(action: requestLoadState) {
+                                        HStack(spacing: 6) {
+                                            Image(systemName: "folder")
+                                            Text("加载State…")
+                                        }
+                                    }
+                                    .help("加载或替换对话用的 State")
                                 }
-                                .help("加载State…")
 
                                 Button {
                                     isShowingChatGenerationParameters = true
@@ -67,6 +100,27 @@ struct ContentView: View {
             GlobalStatusBar(appState: appState)
         }
         .frame(minWidth: 1000, minHeight: 680)
+        .confirmationDialog(
+            pendingStateAction == .load ? "替换 State 会清空当前会话？" : "卸下 State 会清空当前会话？",
+            isPresented: Binding(
+                get: { pendingStateAction != nil },
+                set: { if !$0 { pendingStateAction = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button(pendingStateAction == .load ? "替换" : "卸下", role: .destructive) {
+                let action = pendingStateAction
+                pendingStateAction = nil
+                switch action {
+                case .load: performLoadState()
+                case .clear: performClearState()
+                case .none: break
+                }
+            }
+            Button("取消", role: .cancel) { pendingStateAction = nil }
+        } message: {
+            Text("加载或卸下 State 都会重置会话历史，此操作无法撤销。")
+        }
     }
 
     /// 模型选择器(toolbar 下拉菜单 + 精度胶囊,位于窗口中央)。
@@ -167,7 +221,26 @@ struct ContentView: View {
         }
     }
 
-    private func pickChatState() {
+    /// 请求加载/替换 state:有聊天记录时先拦截确认(加载会清空会话)。
+    private func requestLoadState() {
+        if appState.chatStore.messages.isEmpty {
+            performLoadState()
+        } else {
+            pendingStateAction = .load
+        }
+    }
+
+    /// 请求卸下 state:有聊天记录时先拦截确认(卸下会清空会话)。
+    private func requestClearState() {
+        if appState.chatStore.messages.isEmpty {
+            performClearState()
+        } else {
+            pendingStateAction = .clear
+        }
+    }
+
+    /// 实际执行:弹文件选择器 → 应用 state。
+    private func performLoadState() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = false
         panel.allowedContentTypes = [.data]  // .npz 走 UTI data
@@ -175,6 +248,18 @@ struct ContentView: View {
         if panel.runModal() == .OK, let url = panel.url {
             appState.chatStore.setState(path: url.path)
         }
+    }
+
+    /// 实际执行:卸下 state(已连接走后端 set_state(nil) 重置会话) + 清跨面板意图。
+    private func performClearState() {
+        appState.chatStore.clearState()
+        appState.injectedStatePath = nil
+    }
+
+    /// 当前对话 state 的文件名(nil = 未选);驱动 toolbar 胶囊显示。
+    private var chatStateBadgeLabel: String? {
+        guard let path = appState.chatStore.statePath else { return nil }
+        return URL(fileURLWithPath: path).lastPathComponent
     }
 
     @ViewBuilder
@@ -244,4 +329,10 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+}
+
+/// 待执行的对话 state 动作(加载/卸下),用于有聊天记录时的确认拦截。
+private enum PendingStateAction {
+    case load   // 加载/替换 state
+    case clear  // 卸下 state
 }

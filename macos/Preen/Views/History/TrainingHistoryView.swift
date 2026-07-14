@@ -6,7 +6,9 @@ struct TrainingHistoryView: View {
     @State private var importError: String?
     @State private var deleteCandidate: TrainingRun?
     @State private var deleteError: String?
-    @SceneStorage("trainingHistoryInspectorPresentedV3") private var isInspectorPresented = true
+    // 默认收起:inspector 默认展开会占 220pt,把中间详情夹窄甚至撑窗(见 min 220 注释)。
+    // 换 V4 key 让默认收起对所有人生效(V3 存过 true 的老用户不会卡在展开态)。
+    @SceneStorage("trainingHistoryInspectorPresentedV4") private var isInspectorPresented = false
 
     private var filteredRuns: [TrainingRun] {
         appState.runs.filter { statusFilter == nil || $0.status == statusFilter }
@@ -87,10 +89,12 @@ struct TrainingHistoryView: View {
                 Button {
                     isInspectorPresented.toggle()
                 } label: {
-                    Label("训练详情", systemImage: "sidebar.trailing")
+                    HStack(spacing: 6) {
+                        Image(systemName: "sidebar.trailing")
+                        Text(isInspectorPresented ? "隐藏参数" : "参数")
+                    }
                 }
-                .labelStyle(.iconOnly)
-                .help(isInspectorPresented ? "隐藏训练详情" : "显示训练详情")
+                .help(isInspectorPresented ? "隐藏参数与结果" : "显示参数与结果")
                 .accessibilityValue(isInspectorPresented ? "已显示" : "已隐藏")
                 .disabled(selectedRun == nil)
             }
@@ -98,7 +102,7 @@ struct TrainingHistoryView: View {
         .inspector(isPresented: $isInspectorPresented) {
             if let run = selectedRun {
                 TrainingRunInspectorView(run: run)
-                    .inspectorColumnWidth(min: 260, ideal: 300, max: 360)
+                    .inspectorColumnWidth(min: 240, ideal: 300, max: 360)
             } else {
                 ContentUnavailableView(
                     "没有选中的记录",
@@ -112,7 +116,8 @@ struct TrainingHistoryView: View {
     private var historyLayout: some View {
         HStack(spacing: 0) {
             recordListPane
-                .frame(width: 260)
+                // 可压缩范围,避免窗口偏窄时硬固定撑出 detail 区(原 width: 260)。
+                .frame(minWidth: 200, idealWidth: 240, maxWidth: 260)
 
             Divider()
 
