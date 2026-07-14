@@ -14,9 +14,23 @@ struct TrainingEmptyView: View {
     var recentRuns: [TrainingRun]
     var onSelectRun: (TrainingRun) -> Void
     var onConfigured: () -> Void  // 选完数据,进配置态
+    var onConvertModel: () -> Void  // 无模型时跳工具箱·模型转换
+    var welcomePresented: Bool  // 欢迎窗口在前台时强制收起右侧「最近训练」inspector
 
     @State private var isDropTargeted = false
     @SceneStorage("trainingRecentRunsInspectorPresented") private var isInspectorPresented = true
+
+    /// inspector 实际是否展示:欢迎窗口在前台时强制收起,但不写回用户偏好。
+    /// 欢迎窗口关闭后恢复到用户上次的 isInspectorPresented。
+    private var inspectorBinding: Binding<Bool> {
+        Binding(
+            get: { isInspectorPresented && !welcomePresented },
+            set: { newValue in
+                // 欢迎窗口强制关闭期间,系统回调不应覆盖用户偏好。
+                if !welcomePresented { isInspectorPresented = newValue }
+            }
+        )
+    }
 
     @ViewBuilder
     var body: some View {
@@ -40,7 +54,7 @@ struct TrainingEmptyView: View {
                         .accessibilityValue(isInspectorPresented ? "已显示" : "已隐藏")
                     }
                 }
-                .inspector(isPresented: $isInspectorPresented) {
+                .inspector(isPresented: inspectorBinding) {
                     RecentRunsView(runs: recentRuns, onSelect: onSelectRun)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 16)
@@ -78,13 +92,33 @@ struct TrainingEmptyView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .frame(width: 200, alignment: .leading)
-                    Text(config.modelPath.isEmpty ? "请在窗口顶部选择模型" : URL(fileURLWithPath: config.modelPath).lastPathComponent)
-                        .lineLimit(1)
-                        .foregroundStyle(config.modelPath.isEmpty ? .secondary : .primary)
+                    if config.modelPath.isEmpty {
+                        // 无模型:第一步不是选数据,而是要有一个转换好的 RWKV-7 模型。
+                        // 给可点入口,直接跳工具箱·模型转换(顶部菜单仍可选已有模型)。
+                        Button(action: onConvertModel) {
+                            Label("去工具箱转换模型", systemImage: "wrench.and.screwdriver")
+                        }
+                        .buttonStyle(.link)
+                        .help("把 BlinkDL / HF 权重转换为 Preen 可用模型；已有模型可用窗口顶部菜单选择")
+                    } else {
+                        Text(URL(fileURLWithPath: config.modelPath).lastPathComponent)
+                            .lineLimit(1)
+                            .foregroundStyle(.primary)
+                    }
                     Spacer()
                 }
             }
             .frame(maxWidth: 440)
+
+            // INT8 模型只能推理:在第一步就拦下,不让进配置态。
+            if !config.modelPath.isEmpty && !ModelConfigProbe.isTrainable(modelPath: config.modelPath) {
+                Label("当前模型为 INT8 量化，仅支持推理。State 训练需要 BF16 权重，请在工具箱转换或另选 BF16 模型。",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .font(.caption)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 440)
+            }
 
             if !config.dataPath.isEmpty && !config.modelPath.isEmpty {
                 Button {
@@ -95,6 +129,9 @@ struct TrainingEmptyView: View {
                 }
                 .preenGlassButton(prominent: true)
                 .controlSize(.large)
+                .disabled(!ModelConfigProbe.isTrainable(modelPath: config.modelPath))
+                .help(ModelConfigProbe.isTrainable(modelPath: config.modelPath)
+                      ? "" : "该模型为 INT8 量化，仅支持推理，不能用于训练")
                 .transition(.opacity)
             }
         }

@@ -12,6 +12,9 @@ struct PreenApp: App {
     @State private var appState = AppState()
     @Environment(\.openWindow) private var openWindow
 
+    // 启动时是否显示欢迎窗口(欢迎窗口底部开关写同一个 key)。
+    @AppStorage("welcomeShowsAtLaunch") private var welcomeShowsAtLaunch = true
+
     var body: some Scene {
         WindowGroup {
             ContentView(appState: appState)
@@ -20,6 +23,12 @@ struct PreenApp: App {
                     async let runtime: Void = appState.backendStore.checkRuntime()
                     async let runs: Void = appState.restoreRuns()
                     _ = await (runtime, runs)
+                }
+                .task {
+                    // 首启(或用户保留「启动时显示」)自动弹欢迎窗口作为落脚点。
+                    if welcomeShowsAtLaunch {
+                        openWindow(id: "welcome")
+                    }
                 }
         }
         .defaultSize(width: 1180, height: 760)  // design.md §3 默认尺寸(macOS 15+)
@@ -30,11 +39,23 @@ struct PreenApp: App {
         }
         .windowResizability(.contentSize)
 
+        // 欢迎使用 Preen 启动器窗口(首启自动弹 / 窗口菜单可再开)。
+        WindowGroup("欢迎使用 Preen", id: "welcome") {
+            WelcomeView(appState: appState)
+        }
+        .windowResizability(.contentSize)
+
         // app 菜单「关于」项也指向同一窗口。
         .commands {
             CommandGroup(replacing: .appInfo) {
                 Button("关于 Preen") {
                     openWindow(id: "about")
+                }
+            }
+            // 「窗口」菜单增加重新打开欢迎窗口的入口(对齐 Xcode 的 Welcome to Xcode)。
+            CommandGroup(after: .windowList) {
+                Button("欢迎使用 Preen") {
+                    openWindow(id: "welcome")
                 }
             }
             InspectorCommands()

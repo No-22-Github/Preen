@@ -55,6 +55,7 @@ struct TrainingConfig: Equatable {
     var seed: Int = 42
     var template: TrainingTemplate = .qa
     var cacheLimitGb: String = "auto"  // "auto" 或 GB 数字字符串
+    var dropTruncated: Bool = false  // true = 丢弃超长样本;false(默认)= 截头保尾继续训练
 
     // === 额外(训完顺手导出 pth)===
     var exportPth: Bool = false
@@ -97,6 +98,7 @@ struct TrainingConfig: Equatable {
 
         // 布尔开关(裸 flag,不带值)。
         argv.append(earlyStop ? "--early-stop" : "--no-early-stop")
+        argv.append(dropTruncated ? "--drop-truncated" : "--keep-truncated")
 
         if !checkpointDir.isEmpty {
             argv.append(contentsOf: ["--checkpoint-dir", checkpointDir])

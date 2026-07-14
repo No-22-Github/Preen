@@ -189,6 +189,8 @@ struct ContentView: View {
                     appState.selectedRunID = run.id
                     appState.selection = .history
                 },
+                onConvertModel: { appState.goToModelConversion() },
+                welcomePresented: appState.isWelcomePresented,
                 onStart: { appState.startTraining(config: $0) },
                 onGoToChat: { appState.goToChat(stateURL: $0) }
             )

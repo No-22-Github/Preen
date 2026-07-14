@@ -20,6 +20,8 @@ struct TrainingPanel: View {
     @Binding var modelPath: String
     var recentRuns: [TrainingRun]
     var onSelectRun: (TrainingRun) -> Void
+    var onConvertModel: () -> Void
+    var welcomePresented: Bool
     @State private var config: TrainingConfig = .defaultConfig
     @State private var phase: Phase = .empty  // idle 态下的子阶段
     @State private var showingChart = false
@@ -44,17 +46,23 @@ struct TrainingPanel: View {
                     TrainingEmptyView(
                         config: $config,
                         recentRuns: recentRuns,
-                        onSelectRun: onSelectRun
-                    ) {
-                        phase = .configuring
-                    }
+                        onSelectRun: onSelectRun,
+                        onConfigured: { phase = .configuring },
+                        onConvertModel: onConvertModel,
+                        welcomePresented: welcomePresented
+                    )
                 case .configuring:
                     TrainingConfigView(config: $config) {
                         onStart(config)
                     }
                     .toolbar {
                         ToolbarItem(placement: .navigation) {
-                            Button("返回") { phase = .empty }
+                            Button {
+                                phase = .empty
+                            } label: {
+                                Image(systemName: "chevron.backward")
+                            }
+                            .help("返回")
                         }
                     }
                 }

@@ -201,6 +201,10 @@ final class ToolboxStore {
     private(set) var presentationTool: String?
     private(set) var datasetNeedsRefresh = false
 
+    /// 深链请求:外部(欢迎窗口 / 训练空态)要求打开某个工具页。
+    /// ToolboxView 消费后清空,把对应工具推入导航栈。取值对齐 Destination 的 rawValue。
+    var pendingTool: String?
+
     private var runner: ToolJobRunner?
     private var datasetPreviewCachePath: String?
 

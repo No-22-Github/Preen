@@ -21,4 +21,11 @@ enum ModelConfigProbe {
         }
         return "bf16"
     }
+
+    /// 该模型是否可训练。int8 量化模型仅用于推理(state tuning 需 bf16 权重,
+    /// 对齐 service.validate_training_request 的 quantization 早拦),故返回 false。
+    /// 空路径 / 读取失败降级为 bf16 → 视为可训练,不提前阻塞 UI(真失败仍由 Python 侧兜底)。
+    static func isTrainable(modelPath: String) -> Bool {
+        precisionBadge(for: modelPath) != "int8"
+    }
 }

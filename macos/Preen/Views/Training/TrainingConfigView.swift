@@ -16,6 +16,19 @@ import SwiftUI
 struct TrainingConfigView: View {
     @Binding var config: TrainingConfig
     @State private var expanded = false
+    @State private var dataExpanded = false
+    @State private var dataPreview: TrainingDataPreview = .empty
+
+    // 训练前数据检查(tokenizer 统计有效数/截断/步数)。
+    @State private var recordCount: Int?
+    @State private var inspection: DataInspectionResult?
+    @State private var inspectionError: String?
+    @State private var isInspecting = false
+    @State private var inspectTask: Task<Void, Never>?
+    private let inspector = DataInspectionRunner()
+    /// 超过此条数不在改动时即时检查(避免大数据集卡顿),改由手动「检查数据」触发。
+    private let autoCheckCap = 30_000
+
     var onStart: () -> Void
 
     var body: some View {
@@ -24,6 +37,11 @@ struct TrainingConfigView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     // 数据 & 模型选择(选完才有配置)。
                     pathsSection
+
+                    Divider()
+
+                    // 轻量训练集预览(读前几条原始记录,看训练集里到底有啥)。
+                    dataPreviewSection
 
                     Divider()
 
@@ -77,22 +95,177 @@ struct TrainingConfigView: View {
                 .background(.regularMaterial)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear { onDataChanged() }
+        .onChange(of: config.dataPath) { _, _ in onDataChanged() }
+        .onChange(of: config.modelPath) { _, _ in onDataChanged() }
+        .onChange(of: config.ctxLen) { _, _ in onCtxChanged() }
+        .onDisappear { inspectTask?.cancel() }
+    }
+
+    /// 读文件前几条记录填预览(纯 Swift,瞬时;失败降级为 error 文案不阻塞)。
+    private func reloadDataPreview() {
+        dataPreview = TrainingDataPreview.load(path: config.dataPath)
+    }
+
+    // MARK: - 训练前数据检查
+
+    /// 数据/模型变化:刷新预览 + 数条数;≤30K 即时自动检查,>30K 等手动触发。
+    private func onDataChanged() {
+        reloadDataPreview()
+        recordCount = TrainingDataPreview.countRecords(path: config.dataPath)
+        inspection = nil
+        inspectionError = nil
+        if let count = recordCount, count <= autoCheckCap {
+            runInspection(debounceMs: 0)
+        }
+    }
+
+    /// ctx_len 变化会改变截断结果:≤30K 防抖后重查;>30K 使旧结果失效,等手动重查。
+    private func onCtxChanged() {
+        if let count = recordCount, count <= autoCheckCap {
+            runInspection(debounceMs: 400)
+        } else {
+            inspection = nil
+        }
+    }
+
+    /// 起一次 data-info 检查(debounce 用于 ctx_len 连续输入)。model/数据缺失或 int8 时跳过。
+    private func runInspection(debounceMs: Int) {
+        inspectTask?.cancel()
+        guard !config.modelPath.isEmpty, !config.dataPath.isEmpty, isModelTrainable else { return }
+        let model = config.modelPath
+        let data = config.dataPath
+        let ctx = config.ctxLen
+        inspectTask = Task {
+            if debounceMs > 0 {
+                try? await Task.sleep(for: .milliseconds(debounceMs))
+                if Task.isCancelled { return }
+            }
+            await MainActor.run { isInspecting = true; inspectionError = nil }
+            let outcome = await inspector.inspect(modelPath: model, dataPath: data, ctxLen: ctx)
+            if Task.isCancelled { return }
+            await MainActor.run {
+                isInspecting = false
+                switch outcome {
+                case .success(let result): inspection = result
+                case .failure(let message): inspection = nil; inspectionError = message
+                }
+            }
+        }
+    }
+
+    /// 模型是否可训练(int8 → false)。顶部 toolbar 可在配置态中途换模型,故这里兜底。
+    private var isModelTrainable: Bool {
+        ModelConfigProbe.isTrainable(modelPath: config.modelPath)
+    }
+
+    /// 不能开始训练的原因(按优先级取第一个)。nil 表示可以开始。
+    /// 直接展示在按钮左侧,省得用户从上往下扫找缺哪项。
+    private var blockingReason: String? {
+        if config.modelPath.isEmpty { return "请在窗口顶部选择模型" }
+        if !isModelTrainable { return "当前模型为 INT8，仅支持推理，请另选 BF16 模型" }
+        if config.dataPath.isEmpty { return "请选择训练数据" }
+        if config.outPath.isEmpty { return "请选择输出 state 路径（.npz）" }
+        // 截断(含完全截断)只警告不阻断,见 dataSummary。这里不再拦截。
+        return nil
     }
 
     private var trainingActionBar: some View {
-        HStack {
-            Spacer()
+        HStack(spacing: 10) {
+            statusArea
+            Spacer(minLength: 8)
             Button(action: onStart) {
                 Label("开始训练", systemImage: "play.fill")
                     .frame(minWidth: 140)
             }
             .preenGlassButton(prominent: true)
             .controlSize(.large)
-            .disabled(!config.canStart)
+            .disabled(blockingReason != nil)
+            .help(blockingReason ?? "开始训练")
             .keyboardShortcut(.return, modifiers: .command)
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 12)
+    }
+
+    /// 按钮左侧状态区:阻断原因 > 检查中 > 数据摘要 > 大数据集手动检查 > 检查失败。
+    @ViewBuilder
+    private var statusArea: some View {
+        if let reason = blockingReason {
+            Label(reason, systemImage: "exclamationmark.circle.fill")
+                .foregroundStyle(.orange)
+                .font(.callout)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        } else if isInspecting {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("检查数据中…").foregroundStyle(.secondary)
+            }
+            .font(.callout)
+        } else if let insp = inspection {
+            dataSummary(insp)
+        } else if let count = recordCount, count > autoCheckCap {
+            HStack(spacing: 8) {
+                Text("约 \(count) 条 · 超过 \(autoCheckCap / 1000)K 未自动检查")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Button("检查数据") { runInspection(debounceMs: 0) }
+                    .controlSize(.small)
+            }
+        } else if let error = inspectionError {
+            // 检查失败不阻断训练(启动时 Python 侧会再兜底一次),仅提示。
+            Label("数据检查未完成：\(error)", systemImage: "exclamationmark.triangle")
+                .foregroundStyle(.secondary)
+                .font(.caption)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+    }
+
+    /// 数据摘要:有效条数 · 预计步数 · 截断处理(只警告不阻断)。
+    /// 丢弃模式:有效数扣掉截断条,步数据此重算,显示丢弃数。
+    /// 保留模式:完全截断橙色警告(target 前段丢失),仅部分截断黄色提示(截头保尾)。
+    private func dataSummary(_ insp: DataInspectionResult) -> some View {
+        let effectiveValid = config.dropTruncated ? insp.valid - insp.truncated : insp.valid
+        let steps = max(0, effectiveValid) * config.epochs
+        // 严重度:丢弃模式无警告(已处理) > 完全截断(橙) > 仅部分截断(黄) > 无(绿)
+        let hasFullyTruncated = !config.dropTruncated && insp.targetFullyTruncated > 0
+        let hasPartialOnly = !config.dropTruncated && insp.truncated > 0 && !hasFullyTruncated
+        let icon: String
+        let tint: Color
+        if hasFullyTruncated { icon = "exclamationmark.triangle.fill"; tint = .orange }
+        else if hasPartialOnly { icon = "info.circle.fill"; tint = .yellow }
+        else { icon = "checkmark.seal.fill"; tint = .green }
+
+        return HStack(spacing: 6) {
+            Image(systemName: icon).foregroundStyle(tint)
+            Text("\(max(0, effectiveValid)) 条有效 · 预计 ~\(steps) 步")
+            if config.dropTruncated, insp.truncated > 0 {
+                Text("· 丢弃 \(insp.truncated) 条超长").foregroundStyle(.secondary)
+            } else if hasFullyTruncated {
+                Text("· \(insp.targetFullyTruncated) 条 target 完全截断（可训练，建议增大 ctx_len）")
+                    .foregroundStyle(.secondary)
+            } else if hasPartialOnly {
+                Text("· \(insp.truncated) 条部分截断（截头保尾）").foregroundStyle(.secondary)
+            }
+        }
+        .font(.callout)
+        .lineLimit(1)
+        .truncationMode(.tail)
+        .help(summaryTooltip(insp))
+    }
+
+    private func summaryTooltip(_ insp: DataInspectionResult) -> String {
+        var lines = [
+            "总记录 \(insp.total) · 有效 \(insp.valid)",
+            "token: 均值 \(Int(insp.meanTokens)) · p95 \(Int(insp.p95Tokens)) · max \(insp.maxTokens)",
+            "ctx_len \(insp.ctxLen)",
+        ]
+        if insp.truncated > 0 {
+            lines.append("\(insp.truncated) 条超长,截头部保尾部 stop(target 保留,可训练)")
+        }
+        return lines.joined(separator: "\n")
     }
 
     // MARK: - 路径区
@@ -126,21 +299,133 @@ struct TrainingConfigView: View {
         }
     }
 
+    // MARK: - 训练数据预览(轻量)
+
+    @ViewBuilder
+    private var dataPreviewSection: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) { dataExpanded.toggle() }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: dataExpanded ? "chevron.down" : "chevron.right")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 16)
+                    .accessibilityHidden(true)
+                Text("训练数据预览")
+                    .font(.headline)
+                Text(dataPreviewSummary)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer()
+            }
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("训练数据预览")
+        .accessibilityHint(dataExpanded ? "折叠训练数据预览" : "展开训练数据预览")
+
+        if dataExpanded {
+            dataPreviewBody
+                .padding(.top, 4)
+                .transition(.opacity)
+        }
+    }
+
+    /// 折叠行的一句话摘要:错误 / 前 N 条 / 空。
+    private var dataPreviewSummary: String {
+        if let error = dataPreview.error { return error }
+        if dataPreview.samples.isEmpty { return "无可预览记录" }
+        let base = "前 \(dataPreview.samples.count) 条原始记录"
+        return dataPreview.hasMore ? base + "（还有更多）" : base
+    }
+
+    @ViewBuilder
+    private var dataPreviewBody: some View {
+        if let error = dataPreview.error {
+            Label(error, systemImage: "exclamationmark.triangle")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        } else if dataPreview.samples.isEmpty {
+            Text("这个文件里读不到记录，训练前请确认数据内容。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(dataPreview.samples) { sample in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("样本 \(sample.id + 1)")
+                            .font(.caption.bold())
+                            .foregroundStyle(.secondary)
+                        ForEach(Array(sample.fields.enumerated()), id: \.offset) { _, field in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(field.key)
+                                    .font(.caption2.weight(.medium))
+                                    .foregroundStyle(.secondary)
+                                Text(field.value.isEmpty ? "（空）" : field.value)
+                                    .font(.callout)
+                                    .foregroundStyle(field.value.isEmpty ? .tertiary : .primary)
+                                    .textSelection(.enabled)
+                                    .lineLimit(6)
+                                    .truncationMode(.tail)
+                            }
+                        }
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+                }
+                Text("原始字段直读，不含模板渲染；token 长度与截断风险见工具箱 · 数据集预览。")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    // MARK: - 学习率调度器行(只读,写死 cosine)
+
+    /// 点明学习率调度策略:固定 cosine + 线性 warmup。右侧胶囊只读,与其他行右边缘对齐。
+    private var schedulerRow: some View {
+        LabeledContent {
+            HStack(spacing: RowLayout.spacing) {
+                Text("Cosine + Warmup")
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(.quaternary.opacity(0.5), in: Capsule())
+                    .frame(width: RowLayout.controlWidth, alignment: .trailing)
+                Color.clear.frame(width: RowLayout.resetSlot, height: RowLayout.resetSlot)
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("学习率调度")
+                Text("warmup 线性升到峰值 → cosine 衰减到下限")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
     // MARK: - 超参 Form
 
     private var hyperparamsForm: some View {
         Form {
             Section("学习率") {
+                // 调度器写死 cosine(state tuning 实测最稳),这一行点明下面三个参数构成一条调度曲线。
+                schedulerRow
                 TrainingDoubleParameterRow(
-                    title: "学习率", key: "lr", detail: "State 更新步长",
+                    title: "学习率", key: "lr", detail: "调度峰值(warmup 升到此)",
                     value: $config.lr, default: 0.01
                 )
                 TrainingDoubleParameterRow(
-                    title: "最低学习率", key: "lr_floor", detail: "余弦衰减下限",
+                    title: "最低学习率", key: "lr_floor", detail: "cosine 衰减终点(下限)",
                     value: $config.lrFloor, default: 1e-4
                 )
                 TrainingIntParameterRow(
-                    title: "预热步数", key: "warmup", detail: "学习率预热时长",
+                    title: "预热步数", key: "warmup", detail: "前 N 步从 0 线性升到峰值",
                     value: $config.warmup, default: 10
                 )
             }
@@ -157,6 +442,11 @@ struct TrainingConfigView: View {
                 TrainingIntParameterRow(
                     title: "日志间隔", key: "log_every", detail: "每 N 步记录一次指标",
                     value: $config.logEvery, default: 1
+                )
+                TrainingToggleParameterRow(
+                    title: "丢弃超长样本", key: "drop_truncated",
+                    detail: "关=截头保尾继续训练(默认) · 开=直接丢弃",
+                    value: $config.dropTruncated
                 )
             }
 
@@ -202,13 +492,16 @@ struct TrainingConfigView: View {
                     value: $config.seed, default: 42
                 )
                 LabeledContent {
-                    Picker("任务模板", selection: $config.template) {
-                        ForEach(TrainingTemplate.allCases) { template in
-                            Text(template.label).tag(template)
+                    HStack(spacing: RowLayout.spacing) {
+                        Picker("任务模板", selection: $config.template) {
+                            ForEach(TrainingTemplate.allCases) { template in
+                                Text(template.label).tag(template)
+                            }
                         }
+                        .labelsHidden()
+                        .frame(width: RowLayout.controlWidth)
+                        Color.clear.frame(width: RowLayout.resetSlot, height: RowLayout.resetSlot)
                     }
-                    .labelsHidden()
-                    .frame(width: 220)
                 } label: {
                     TrainingParameterLabel(title: "任务模板", key: "template", detail: "训练与推理必须一致")
                 }
@@ -241,6 +534,33 @@ struct TrainingConfigView: View {
 
 // MARK: - 训练参数行
 
+/// 所有参数行共享的右侧布局:控件等宽 + 固定复位槽,保证左右边缘对齐。
+private enum RowLayout {
+    static let controlWidth: CGFloat = 200   // 输入框 / 选择器 / 开关的统一宽度
+    static let resetSlot: CGFloat = 28        // 复位按钮槽(无按钮时留等宽透明占位)
+    static let spacing: CGFloat = 8
+}
+
+/// 复位按钮槽:偏离默认值时显示复位按钮,否则等宽透明占位(保证右边缘不跳)。
+private struct ResetSlot: View {
+    let show: Bool
+    let help: String
+    let action: () -> Void
+
+    var body: some View {
+        if show {
+            Button(action: action) {
+                Image(systemName: "arrow.counterclockwise")
+                    .frame(width: RowLayout.resetSlot, height: RowLayout.resetSlot)
+            }
+            .buttonStyle(.borderless)
+            .help(help)
+        } else {
+            Color.clear.frame(width: RowLayout.resetSlot, height: RowLayout.resetSlot)
+        }
+    }
+}
+
 private struct TrainingParameterLabel: View {
     let title: String
     let key: String
@@ -265,31 +585,17 @@ private struct TrainingDoubleParameterRow: View {
 
     var body: some View {
         LabeledContent {
-            HStack(spacing: 8) {
+            HStack(spacing: RowLayout.spacing) {
                 TextField(title, value: $value, format: .number)
                     .labelsHidden()
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 140)
-                resetButton
+                    .frame(width: RowLayout.controlWidth)
+                ResetSlot(show: value != `default`, help: "恢复默认 \(`default`)") {
+                    value = `default`
+                }
             }
         } label: {
             TrainingParameterLabel(title: title, key: key, detail: detail)
-        }
-    }
-
-    @ViewBuilder
-    private var resetButton: some View {
-        if value != `default` {
-            Button {
-                value = `default`
-            } label: {
-                Image(systemName: "arrow.counterclockwise")
-                    .frame(width: 28, height: 28)
-            }
-            .buttonStyle(.borderless)
-            .help("恢复默认 \(`default`)")
-        } else {
-            Color.clear.frame(width: 28, height: 28)
         }
     }
 }
@@ -303,31 +609,17 @@ private struct TrainingIntParameterRow: View {
 
     var body: some View {
         LabeledContent {
-            HStack(spacing: 8) {
+            HStack(spacing: RowLayout.spacing) {
                 TextField(title, value: $value, format: .number)
                     .labelsHidden()
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 140)
-                resetButton
+                    .frame(width: RowLayout.controlWidth)
+                ResetSlot(show: value != `default`, help: "恢复默认 \(`default`)") {
+                    value = `default`
+                }
             }
         } label: {
             TrainingParameterLabel(title: title, key: key, detail: detail)
-        }
-    }
-
-    @ViewBuilder
-    private var resetButton: some View {
-        if value != `default` {
-            Button {
-                value = `default`
-            } label: {
-                Image(systemName: "arrow.counterclockwise")
-                    .frame(width: 28, height: 28)
-            }
-            .buttonStyle(.borderless)
-            .help("恢复默认 \(`default`)")
-        } else {
-            Color.clear.frame(width: 28, height: 28)
         }
     }
 }
@@ -340,9 +632,13 @@ private struct TrainingToggleParameterRow: View {
 
     var body: some View {
         LabeledContent {
-            Toggle(title, isOn: $value)
-                .labelsHidden()
-                .frame(width: 176, alignment: .leading)
+            HStack(spacing: RowLayout.spacing) {
+                Toggle(title, isOn: $value)
+                    .labelsHidden()
+                    .frame(width: RowLayout.controlWidth, alignment: .leading)
+                // 开关行无复位,留等宽透明槽保持右边缘对齐。
+                Color.clear.frame(width: RowLayout.resetSlot, height: RowLayout.resetSlot)
+            }
         } label: {
             TrainingParameterLabel(title: title, key: key, detail: detail)
         }
@@ -359,10 +655,15 @@ private struct TrainingTextParameterRow: View {
 
     var body: some View {
         LabeledContent {
-            TextField(prompt, text: $text)
-                .font(monospaced ? .body.monospaced() : .body)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 220)
+            HStack(spacing: RowLayout.spacing) {
+                TextField(prompt, text: $text)
+                    .labelsHidden()  // 否则 prompt 会作为标签渲染到框外(macOS)
+                    .font(monospaced ? .body.monospaced() : .body)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: RowLayout.controlWidth)
+                // 文本行无复位,留等宽透明槽保持右边缘对齐。
+                Color.clear.frame(width: RowLayout.resetSlot, height: RowLayout.resetSlot)
+            }
         } label: {
             TrainingParameterLabel(title: title, key: key, detail: detail)
         }

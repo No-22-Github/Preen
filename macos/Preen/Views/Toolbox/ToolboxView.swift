@@ -7,7 +7,7 @@ struct ToolboxView: View {
     private static let groupedFormInset: CGFloat = 58
     private static let contentWidth = formWidth - groupedFormInset * 2
 
-    private enum Destination: Hashable {
+    private enum Destination: String, Hashable {
         case modelConversion
         case modelQuantization
         case datasetPreview
@@ -58,7 +58,9 @@ struct ToolboxView: View {
         }
         .onAppear {
             if !store.isRunning { store.clearPresentationForNavigation() }
+            consumePendingTool()
         }
+        .onChange(of: store.pendingTool) { _, _ in consumePendingTool() }
         .onDisappear {
             store.clearPresentationForNavigation()
         }
@@ -103,6 +105,18 @@ struct ToolboxView: View {
             Button("取消", role: .cancel) {}
         } message: {
             Text("将替换目录中的量化模型权重、配置和 tokenizer 文件；目录中的其他文件会保留。")
+        }
+    }
+
+    /// 消费外部深链请求(欢迎窗口 / 训练空态跳转),把对应工具推入导航栈后清空。
+    /// 任务运行中不打断当前页;目标已在栈顶则只清标记。
+    private func consumePendingTool() {
+        guard let raw = store.pendingTool,
+              let destination = Destination(rawValue: raw) else { return }
+        store.pendingTool = nil
+        guard !store.isRunning else { return }
+        if path.last != destination {
+            path = [destination]
         }
     }
 

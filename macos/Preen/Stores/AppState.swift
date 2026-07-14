@@ -41,6 +41,10 @@ final class AppState {
     var selection: SidebarItem = .training
     var selectedRunID: UUID?
 
+    /// 欢迎窗口是否在前台。为 true 时主窗口收起侧栏,让背景呈空状态(不显杂乱)。
+    /// WelcomeView 出现/消失时翻转,ContentView 据此调 NavigationSplitView 的 columnVisibility。
+    var isWelcomePresented = false
+
     // === 模型(顶部中央 toolbar 选,全 app 共享)===
     private var modelCatalog: RecentModelCatalog
     var modelPath: String {
@@ -126,6 +130,12 @@ final class AppState {
 
     func disconnectInference() {
         chatStore.disconnect()
+    }
+
+    /// 深链:切到工具箱并打开「模型转换」页(欢迎窗口 / 训练空态无模型时调用)。
+    func goToModelConversion() {
+        toolboxStore.pendingTool = "modelConversion"
+        selection = .toolbox
     }
 
     func restoreRuns() async {
