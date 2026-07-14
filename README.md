@@ -12,6 +12,10 @@
 
 首个预览版 [v0.1.0-beta.1](https://github.com/No-22-Github/Preen/releases/latest) 已发布,见[下载与安装](#下载与安装)。
 
+[![CI](https://github.com/No-22-Github/Preen/actions/workflows/ci.yml/badge.svg)](https://github.com/No-22-Github/Preen/actions/workflows/ci.yml)
+[![Build app](https://github.com/No-22-Github/Preen/actions/workflows/build-app.yml/badge.svg)](https://github.com/No-22-Github/Preen/actions/workflows/build-app.yml)
+[![Release](https://img.shields.io/github/v/release/No-22-Github/Preen?include_prereleases&sort=semver)](https://github.com/No-22-Github/Preen/releases/latest)
+
 App 底层是命令行工具 `statetuner`,同一套训练/推理引擎,可脚本化,自动化和排障走它。
 
 - P0 技术验证:梯度穿透、收敛、泛化、ops/kernel 等价,见[实验报告](experiments/p0_translate/实验报告.md)
