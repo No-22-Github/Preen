@@ -81,7 +81,7 @@ final class TrainJobRunner {
             stateLock.unlock()
         } catch {
             // 启动失败:推一个合成 failed 事件,让 UI 能感知。
-            let message = "无法启动训练进程:\(error.localizedDescription)"
+            let message = "无法启动训练进程：\(error.localizedDescription)"
             appendStderr(message + "\n")
             continuation.yield(.failed(message: message, path: nil, timestamp: Date().timeIntervalSince1970))
             continuation.finish()

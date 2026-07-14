@@ -63,7 +63,7 @@ struct TrainingConfigView: View {
 
                     // lr 警告。
                     if config.lrWarnsExplosion {
-                        Label("lr > 0.1 可能导致 state 爆炸(实测 lr=1.0 会发散),建议 lr=0.01",
+                        Label("lr > 0.1 可能导致 state 爆炸（实测 lr=1.0 会发散），建议 lr=0.01",
                               systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
                             .font(.caption)
@@ -102,7 +102,7 @@ struct TrainingConfigView: View {
             Text("数据 & 模型").font(.headline)
 
             HStack {
-                Text("模型目录(HF 转换产物)")
+                Text("模型目录（HF 转换产物）")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(width: 200, alignment: .leading)
@@ -113,7 +113,7 @@ struct TrainingConfigView: View {
             }
 
             // 训练数据。
-            PathRow(label: "训练数据(JSON / JSONL)",
+            PathRow(label: "训练数据（JSON / JSONL）",
                     path: $config.dataPath,
                     isDirectory: false)
 
@@ -385,7 +385,7 @@ struct PathRow: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(width: 200, alignment: .leading)
-            Text(path.isEmpty ? "(未选)" : URL(fileURLWithPath: path).lastPathComponent)
+            Text(path.isEmpty ? "（未选）" : URL(fileURLWithPath: path).lastPathComponent)
                 .font(.body)
                 .lineLimit(1)
                 .truncationMode(.middle)

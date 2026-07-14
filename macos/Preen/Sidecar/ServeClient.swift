@@ -102,7 +102,7 @@ final class ServeClient {
         // 最高频根因是 PREEN_SIDECAR_PYTHON 没进子进程环境 → fallback 到
         // /usr/bin/python3(系统自带,无 mlx 依赖,import 即崩)。这里一眼能看出来。
         let pythonPath = PythonResolver.repoRoot?
-            .appendingPathComponent("src").path ?? "(无 — 环境变量缺失,可能用错解释器)"
+            .appendingPathComponent("src").path ?? "（无 — 环境变量缺失，可能用错解释器）"
         let diag = """
         # [Preen] sidecar python: \(PythonResolver.executable.path)
         # [Preen] PYTHONPATH: \(pythonPath)
@@ -135,7 +135,7 @@ final class ServeClient {
         } catch {
             // 启动失败:用合成 error 事件通知 UI。
             continuation.yield(.error(id: nil, code: .internal,
-                                      message: "无法启动 serve 进程:\(error.localizedDescription)"))
+                                      message: "无法启动 serve 进程：\(error.localizedDescription)"))
             continuation.finish()
             return stream
         }
@@ -208,7 +208,7 @@ final class ServeClient {
         } catch {
             // 写失败:立刻 resume(不让 awaiter 永远挂)。
             _ = unregisterContinuation(id: request.id)
-            cont.resume(returning: .error(code: .internal, message: "写 stdin 失败:\(error.localizedDescription)"))
+            cont.resume(returning: .error(code: .internal, message: "写 stdin 失败：\(error.localizedDescription)"))
         }
         }.serving()  // 把 .error 转成 throw(详见 ServeResponse.serving)
     }

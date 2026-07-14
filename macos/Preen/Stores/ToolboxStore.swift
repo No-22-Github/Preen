@@ -451,7 +451,7 @@ final class ToolboxStore {
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory),
               isDirectory.boolValue else {
-            return "源路径必须是模型目录(转换后的 HF 目录)"
+            return "源路径必须是模型目录（转换后的 HF 目录）"
         }
         guard FileManager.default.fileExists(atPath: "\(path)/config.json") else {
             return "源目录缺少 config.json，不是有效的模型目录"

@@ -58,7 +58,7 @@ struct ChatPanel: View {
             )
         }
         .confirmationDialog(
-            "清除当前会话?",
+            "清除当前会话？",
             isPresented: $showClearConfirm,
             titleVisibility: .visible
         ) {
@@ -305,7 +305,7 @@ struct ChatPanel: View {
                 .disabled(modelPath.isEmpty || store.hasActiveProcess)
             }
             if store.isConnected && store.statePath == nil {
-                Text("未选 state —— 当前是基线(无 state)模式")
+                Text("未选 state —— 当前是基线（无 state）模式")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }

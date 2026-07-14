@@ -75,9 +75,9 @@ struct StartupLogSheet: View {
     }
 
     private var subtitle: String {
-        if store.isConnected { return "ready 事件已收到,窗口即将关闭" }
+        if store.isConnected { return "ready 事件已收到，窗口即将关闭" }
         if store.startupError != nil { return "请查看下方日志排查原因" }
-        return "加载模型可能需要数秒,请稍候"
+        return "加载模型可能需要数秒，请稍候"
     }
 
     // MARK: - 日志区
@@ -86,7 +86,7 @@ struct StartupLogSheet: View {
         ScrollViewReader { proxy in
             ScrollView {
                 // monospaced 系统日志面板。
-                Text(store.startupLog.isEmpty ? "(等待输出…)" : store.startupLog)
+                Text(store.startupLog.isEmpty ? "（等待输出…）" : store.startupLog)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(store.startupLog.isEmpty ? .secondary : .primary)
                     .frame(maxWidth: .infinity, alignment: .leading)

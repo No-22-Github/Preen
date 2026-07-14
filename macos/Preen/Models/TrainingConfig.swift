@@ -23,8 +23,8 @@ enum TrainingTemplate: String, CaseIterable, Identifiable {
     /// 中文标签(UI 用)。
     var label: String {
         switch self {
-        case .qa: return "QA(问答)"
-        case .instruction: return "Instruction(指令)"
+        case .qa: return "QA（问答）"
+        case .instruction: return "Instruction（指令）"
         }
     }
 }

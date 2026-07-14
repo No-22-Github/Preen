@@ -109,7 +109,7 @@ struct TrainingRunningView: View {
 
             // 早停旗(若触发)。
             if let early = store.earlyStopInfo {
-                Label("已停在第 \(early.epoch + 1) 轮(后续没有更好)",
+                Label("已停在第 \(early.epoch + 1) 轮（后续没有更好）",
                       systemImage: "flag.fill")
                     .foregroundStyle(.orange)
                     .font(.caption)
@@ -117,7 +117,7 @@ struct TrainingRunningView: View {
 
             // 未知事件计数(演进兜底命中提示)。
             if store.unknownEventCount > 0 {
-                Text("收到 \(store.unknownEventCount) 个未知事件(可能需升级 app)")
+                Text("收到 \(store.unknownEventCount) 个未知事件（可能需升级 app）")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

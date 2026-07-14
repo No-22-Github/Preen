@@ -141,7 +141,7 @@ struct ContentView: View {
                 (isQuantized ? Color.orange : Color.secondary).opacity(0.15),
                 in: RoundedRectangle(cornerRadius: 5, style: .continuous)
             )
-            .help(isQuantized ? "INT8 · 仅支持推理,不支持训练" : "BF16 标准精度")
+            .help(isQuantized ? "INT8 · 仅支持推理，不支持训练" : "BF16 标准精度")
             .contentShape(Rectangle())
     }
 

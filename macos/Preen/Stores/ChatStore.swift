@@ -253,7 +253,7 @@ final class ChatStore {
                 self.sessionId = sid
                 self.messages.removeAll()
             } catch {
-                self.lastError = "建会话失败:\(error.localizedDescription)"
+                self.lastError = "建会话失败：\(error.localizedDescription)"
             }
         }
     }
@@ -299,7 +299,7 @@ final class ChatStore {
         )
         guard !wasConnected else { return }
         if startupError == nil {
-            startupError = "serve 进程已退出,未发出 ready 事件(请查看日志排查)"
+            startupError = "serve 进程已退出，未发出 ready 事件（请查看日志排查）"
         }
     }
 
@@ -359,7 +359,7 @@ final class ChatStore {
             }
         case .busy:
             // busy = 已有 in-flight(理论上 UI 已禁用,这是兜底)。
-            lastError = "服务器忙:\(message)"
+            lastError = "服务器忙：\(message)"
             // 移除空占位(没生成的 assistant 消息)。
             if let idx = messages.indices.last, messages[idx].role == .assistant,
                messages[idx].segments.allSatisfy({ $0.text.isEmpty }) {

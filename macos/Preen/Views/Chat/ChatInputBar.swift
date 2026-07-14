@@ -50,7 +50,7 @@ struct ChatInputBar: View {
                 }
                 .buttonStyle(.bordered)
                 .disabled(!canClear || isGenerating)
-                .help("清除当前会话,开始新一轮")
+                .help("清除当前会话，开始新一轮")
 
                 if isGenerating {
                     Button(role: .destructive, action: onAbort) {

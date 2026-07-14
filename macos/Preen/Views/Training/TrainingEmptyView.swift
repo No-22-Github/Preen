@@ -106,7 +106,7 @@ struct TrainingEmptyView: View {
     private var dropZone: some View {
         VStack(spacing: 4) {
             if config.dataPath.isEmpty {
-                Text("拖入数据文件,或点下方「选择…」")
+                Text("拖入数据文件，或点下方「选择…」")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {

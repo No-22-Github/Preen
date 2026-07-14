@@ -131,7 +131,7 @@ final class TrainStore {
                 let stderrURL = directory.appendingPathComponent(RunRepository.stderrFilename)
                 launch(config: resolvedConfig, stderrURL: stderrURL)
             } catch {
-                let message = "无法创建训练记录:\(error.localizedDescription)"
+                let message = "无法创建训练记录：\(error.localizedDescription)"
                 errorMessage = message
                 state = .failed
                 backendStore.updateTraining(phase: .failed, message: message)
@@ -341,7 +341,7 @@ final class TrainStore {
         case .running, .finishing:
             // 没等到终结事件 → 标失败(让 UI 能恢复,不卡死在 running/finishing)。
             if errorMessage == nil {
-                errorMessage = "训练进程异常退出(未发出 completed/failed/cancelled 事件)"
+                errorMessage = "训练进程异常退出（未发出 completed/failed/cancelled 事件）"
             }
             state = .failed
             updatePersistedRun(with: .failed(

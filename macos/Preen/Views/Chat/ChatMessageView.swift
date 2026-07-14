@@ -51,7 +51,7 @@ struct ChatMessageView: View {
 
             // 中断标记。
             if message.isAborted {
-                Text("(已中断)")
+                Text("（已中断）")
                     .font(.caption)
                     .foregroundStyle(.orange)
             }

@@ -7,7 +7,7 @@ enum RunRepositoryError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unsupportedSchema(let schema):
-            return "不支持的训练记录版本: \(schema)"
+            return "不支持的训练记录版本：\(schema)"
         case .runStillActive:
             return "训练仍在运行，请先取消训练再删除记录"
         }

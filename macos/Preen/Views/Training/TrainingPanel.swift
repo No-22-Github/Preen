@@ -109,7 +109,7 @@ struct TrainingPanel: View {
                 .controlSize(.large)
             Text("收尾中…")
                 .font(.headline)
-            Text("训练循环已完成,正在落盘 state 产物")
+            Text("训练循环已完成，正在落盘 state 产物")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -161,7 +161,7 @@ struct TrainingPanel: View {
                     .foregroundStyle(.secondary)
             }
 
-            Text("训练已被取消,曲线已保留")
+            Text("训练已被取消，曲线已保留")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
