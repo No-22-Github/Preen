@@ -21,6 +21,7 @@ class TrainingRequest:
     test_ratio: float = 0.1
     export_pth: bool = False
     pth_out: Optional[Path] = None
+    drop_truncated: bool = False  # True = 丢弃截头样本;False(默认)= 截头保尾继续训练
 
 
 @dataclass(frozen=True)
@@ -139,29 +140,50 @@ def run_training(
         from .inspection import inspect_standard_jsonl as _inspect_std
         data_summary = _inspect_std(request.data, tokenizer, template=request.template, ctx_len=cfg.ctx_len)
         _check_data_warnings(data_summary, cfg.ctx_len, notify)
-        if data_summary.target_fully_truncated:
-            raise ValueError(
-                f"有 {data_summary.target_fully_truncated} 条样本的 target 被 ctx_len 完全截断"
+        # 完全截断只警告不阻断:截头保尾仍保留 stop_token,可训练(用户决定要不要练)。
+        # drop_truncated 时这些会被丢弃,无需警告。
+        if data_summary.target_fully_truncated and not request.drop_truncated:
+            notify(
+                f"⚠ {data_summary.target_fully_truncated} 条样本 target 被 ctx_len 完全截断"
+                f"(target 前段丢失,建议增大 ctx_len 或勾选丢弃超长样本)"
             )
-        samples = load_standard_jsonl(request.data, tokenizer, template=request.template, max_len=cfg.ctx_len)
+        samples = load_standard_jsonl(
+            request.data, tokenizer, template=request.template,
+            max_len=cfg.ctx_len, drop_truncated=request.drop_truncated,
+        )
         notify(f"训练样本: {len(samples)} 条 (importer 产物, template={request.template})")
     else:
         data_summary = inspect_data(request.data, tokenizer, ctx_len=cfg.ctx_len)
         _check_data_warnings(data_summary, cfg.ctx_len, notify)
-        if data_summary.target_fully_truncated:
-            raise ValueError(
-                f"有 {data_summary.target_fully_truncated} 条样本的 target 被 ctx_len 完全截断"
+        # 完全截断只警告不阻断:截头保尾仍保留 stop_token,可训练(用户决定要不要练)。
+        # drop_truncated 时这些会被丢弃,无需警告。
+        if data_summary.target_fully_truncated and not request.drop_truncated:
+            notify(
+                f"⚠ {data_summary.target_fully_truncated} 条样本 target 被 ctx_len 完全截断"
+                f"(target 前段丢失,建议增大 ctx_len 或勾选丢弃超长样本)"
             )
-        samples = load_qa_dataset(request.data, tokenizer, max_len=cfg.ctx_len)
+        samples = load_qa_dataset(
+            request.data, tokenizer, max_len=cfg.ctx_len,
+            drop_truncated=request.drop_truncated,
+        )
         notify(f"训练样本: {len(samples)} 条 (template=qa)")
+
+    # 有效样本为 0 直接拦下:否则关早停时训练循环一步不跑,静默产出未训练的 state。
+    # 常见成因:数据全空 response、导入 0 记录、或 drop_truncated 把样本全丢光。
+    if not samples:
+        hint = "（勾选了丢弃超长样本，可能已全部丢弃；可增大 ctx_len 或取消丢弃）" \
+            if request.drop_truncated else "（请检查数据是否为空或 response 全空）"
+        raise ValueError(f"没有有效训练样本{hint}")
 
     held_out = None
     if cfg.early_stop:
         if request.test_data is not None:
             test_summary = inspect_data(request.test_data, tokenizer, ctx_len=cfg.ctx_len)
+            # 只警告不阻断:held-out 截断只影响早停判据精度,不破坏训练本身。
             if test_summary.target_fully_truncated:
-                raise ValueError(
-                    f"held-out 有 {test_summary.target_fully_truncated} 条 target 被完全截断"
+                notify(
+                    f"⚠ held-out 有 {test_summary.target_fully_truncated} 条 target 被完全截断"
+                    f"(早停判据可能略失真,建议增大 ctx_len)"
                 )
             held_out = load_qa_dataset(request.test_data, tokenizer, max_len=cfg.ctx_len)
             notify(f"held-out: {len(held_out)} 条 (来自 {request.test_data})")

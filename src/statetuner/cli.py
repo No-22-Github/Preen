@@ -191,6 +191,10 @@ def train(
         help="每 N 步发一个 step 事件(默认 1 = 每步都发;事件开销微秒级,不影响训练速度)",
     ),
     early_stop: bool = typer.Option(True, "--early-stop/--no-early-stop", help="held-out 早停"),
+    drop_truncated: bool = typer.Option(
+        False, "--drop-truncated/--keep-truncated",
+        help="超长样本处理:丢弃 | 截头保尾继续训练(默认)",
+    ),
     patience: int = typer.Option(3, "--patience", help="早停耐心(连续 N 次不改善则停)"),
     test_ratio: float = typer.Option(0.1, "--test-ratio", help="无 --test-data 时从 train 划分比例"),
     checkpoint_dir: Optional[Path] = typer.Option(None, "--checkpoint-dir", help="checkpoint 目录"),
@@ -272,6 +276,7 @@ def train(
         test_ratio=test_ratio,
         export_pth=export_pth,
         pth_out=pth_out,
+        drop_truncated=drop_truncated,
     )
 
     def _status(message: str) -> None:

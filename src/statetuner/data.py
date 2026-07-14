@@ -45,6 +45,7 @@ class Sample:
     prompt_text: str
     target_text: str
     prefix_len: int
+    truncated: bool = False  # 是否因 max_len 截头(供 drop_truncated 过滤)
 
     @property
     def length(self) -> int:
@@ -100,7 +101,8 @@ def encode_template_sample(
     labels = full_ids[1:]
     mask = [1 if (i + 1) >= prefix_len else 0 for i in range(len(input_ids))]
 
-    if len(input_ids) > max_len:
+    truncated = len(input_ids) > max_len
+    if truncated:
         # S3:超长样本按 max_len 截断,且必须保尾部(含 stop_token)。
         # 旧实现切尾部 → 超长样本第一个被砍的就是 stop_token,正好毁掉
         # "让模型学会停" 这个核心设计。改为切头部:丢掉 prefix 早期 token,
@@ -116,7 +118,10 @@ def encode_template_sample(
     # 取 fields 里的近似值(兼容 q/a 与 instruction/input/a 占位符)。
     prompt_text = fields.get("prompt_text", fields.get("q", fields.get("instruction", "")))
     target_text_dbg = fields.get("target_text", fields.get("a", ""))
-    return Sample(full_ids, input_ids, labels, mask, prompt_text, target_text_dbg, prefix_len)
+    return Sample(
+        full_ids, input_ids, labels, mask, prompt_text, target_text_dbg, prefix_len,
+        truncated=truncated,
+    )
 
 
 def load_qa_dataset(
@@ -127,6 +132,7 @@ def load_qa_dataset(
     max_len: int = 512,
     question_key: str = "instruction",
     answer_key: str = "output",
+    drop_truncated: bool = False,
 ) -> List[Sample]:
     """加载 QA 格式数据集 → 编码为 Sample 列表。
 
@@ -162,6 +168,8 @@ def load_qa_dataset(
         if not a:
             continue  # 跳过无回答的条目
         s = encode_template_sample(tokenizer, template, max_len=max_len, q=q, a=a)
+        if drop_truncated and s.truncated:
+            continue  # 用户选择丢弃截断样本(宁少训完整条,不训截头条)
         samples.append(s)
     return samples
 
@@ -172,6 +180,7 @@ def load_standard_jsonl(
     *,
     template: str = "qa",
     max_len: int = 512,
+    drop_truncated: bool = False,
 ) -> List[Sample]:
     """读取内部标准 jsonl(importer.py 产物)→ 编码为 Sample 列表。
 
@@ -211,6 +220,8 @@ def load_standard_jsonl(
                 tokenizer, tmpl, max_len=max_len,
                 instruction=instruction, input=inp, a=a,
             )
+        if drop_truncated and s.truncated:
+            continue  # 用户选择丢弃截断样本
         samples.append(s)
     return samples
 

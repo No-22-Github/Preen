@@ -72,6 +72,40 @@ def test_encode_template_stop_and_mask():
     assert all(m == 1 for m in s.mask[s.prefix_len - 1 :]), "target+stop 预测区 mask 应全 1"
 
 
+def test_encode_template_sets_truncated_flag():
+    """超长样本(> max_len)应置 truncated=True;正常样本 False。"""
+    from statetuner.data import encode_template_sample
+    from statetuner.templates import QA
+
+    tok = _DummyTokenizer()
+    short = encode_template_sample(tok, QA, max_len=512, q="你好", a="Hi")
+    assert short.truncated is False
+
+    long = encode_template_sample(tok, QA, max_len=8, q="你好世界", a="很长的回答内容超出上限")
+    assert long.truncated is True
+    assert long.length == 8, "截断后长度应等于 max_len"
+
+
+def test_load_qa_dataset_drop_truncated(tmp_path):
+    """drop_truncated=True 丢弃超长样本;默认(False)保留(截头保尾)。"""
+    import json
+    from statetuner.data import load_qa_dataset
+
+    tok = _DummyTokenizer()
+    path = tmp_path / "d.jsonl"
+    rows = [
+        {"instruction": "q", "output": "很长很长很长很长很长的回答"},  # 超长
+        {"instruction": "q2", "output": "ok"},                          # 正常
+    ]
+    path.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows), encoding="utf-8")
+
+    keep = load_qa_dataset(path, tok, max_len=28)
+    drop = load_qa_dataset(path, tok, max_len=28, drop_truncated=True)
+    assert len(keep) == 2, "默认保留全部(含截断)"
+    assert len(drop) == 1, "drop_truncated 丢弃超长样本"
+    assert drop[0].truncated is False
+
+
 def test_encode_template_prefix_isomorphism():
     """验收 c:encode(prefix字符串) == encode_template_sample 的 prefix_ids。
 
