@@ -19,48 +19,80 @@ struct TrainingConfigView: View {
     var onStart: () -> Void
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                // 数据 & 模型选择(选完才有配置)。
-                pathsSection
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    // 数据 & 模型选择(选完才有配置)。
+                    pathsSection
 
-                Divider()
+                    Divider()
 
-                // 超参摘要(折叠态)。
-                summaryRow
-                    .onTapGesture { withAnimation { expanded.toggle() } }
-
-                if expanded {
-                    hyperparamsForm
-                        .transition(.opacity)
-                }
-
-                // lr 警告。
-                if config.lrWarnsExplosion {
-                    Label("lr > 0.1 可能导致 state 爆炸(实测 lr=1.0 会发散),建议 lr=0.01",
-                          systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                        .font(.caption)
-                }
-
-                Divider()
-
-                // 开始按钮。
-                HStack {
-                    Spacer()
-                    Button(action: onStart) {
-                        Label("开始训练", systemImage: "play.fill")
-                            .frame(minWidth: 140)
+                    // 超参摘要：Button 让整行成为热区，同时保留键盘和 VoiceOver 语义。
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            expanded.toggle()
+                        }
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                                .foregroundStyle(.secondary)
+                                .frame(width: 16)
+                                .accessibilityHidden(true)
+                            Text("训练参数")
+                                .font(.headline)
+                            Text(config.summaryLine)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                            Spacer()
+                        }
+                        .padding(.vertical, 7)
+                        .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+                        .contentShape(Rectangle())
                     }
-                    .preenGlassButton(prominent: true)
-                    .controlSize(.large)
-                    .disabled(!config.canStart)
-                    .keyboardShortcut(.return, modifiers: .command)
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("训练参数")
+                    .accessibilityValue(expanded ? "已展开，\(config.summaryLine)" : "已折叠，\(config.summaryLine)")
+                    .accessibilityHint(expanded ? "折叠详细训练参数" : "展开详细训练参数")
+
+                    if expanded {
+                        hyperparamsForm
+                            .padding(.top, 8)
+                            .transition(.opacity)
+                    }
+
+                    // lr 警告。
+                    if config.lrWarnsExplosion {
+                        Label("lr > 0.1 可能导致 state 爆炸(实测 lr=1.0 会发散),建议 lr=0.01",
+                              systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                            .font(.caption)
+                    }
                 }
+                .padding(24)
             }
-            .padding(24)
+
+            Divider()
+            trainingActionBar
+                .background(.regularMaterial)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var trainingActionBar: some View {
+        HStack {
+            Spacer()
+            Button(action: onStart) {
+                Label("开始训练", systemImage: "play.fill")
+                    .frame(minWidth: 140)
+            }
+            .preenGlassButton(prominent: true)
+            .controlSize(.large)
+            .disabled(!config.canStart)
+            .keyboardShortcut(.return, modifiers: .command)
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 12)
     }
 
     // MARK: - 路径区
@@ -74,7 +106,7 @@ struct TrainingConfigView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(width: 200, alignment: .leading)
-                Text(config.modelPath.isEmpty ? "请在侧边栏选择模型" : config.modelPath)
+                Text(config.modelPath.isEmpty ? "请在窗口右上角选择模型" : config.modelPath)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer()
@@ -94,78 +126,246 @@ struct TrainingConfigView: View {
         }
     }
 
-    // MARK: - 摘要行
-
-    private var summaryRow: some View {
-        HStack {
-            Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                .foregroundStyle(.secondary)
-                .frame(width: 16)
-            Text(config.summaryLine)
-                .font(.subheadline)
-                .foregroundStyle(.primary)
-            Spacer()
-        }
-        .contentShape(Rectangle())
-    }
-
     // MARK: - 超参 Form
 
     private var hyperparamsForm: some View {
         Form {
             Section("学习率") {
-                HStack {
-                    LabeledDoubleField(label: "lr", value: $config.lr, default: 0.01)
-                    LabeledDoubleField(label: "lr_floor", value: $config.lrFloor, default: 1e-4)
-                    LabeledIntField(label: "warmup", value: $config.warmup, default: 10)
-                }
+                TrainingDoubleParameterRow(
+                    title: "学习率", key: "lr", detail: "State 更新步长",
+                    value: $config.lr, default: 0.01
+                )
+                TrainingDoubleParameterRow(
+                    title: "最低学习率", key: "lr_floor", detail: "余弦衰减下限",
+                    value: $config.lrFloor, default: 1e-4
+                )
+                TrainingIntParameterRow(
+                    title: "预热步数", key: "warmup", detail: "学习率预热时长",
+                    value: $config.warmup, default: 10
+                )
             }
 
             Section("训练长度") {
-                LabeledIntField(label: "epochs(配早停后是上限)", value: $config.epochs, default: 20)
-                LabeledIntField(label: "ctx_len(单条样本最长 token)", value: $config.ctxLen, default: 512)
-                LabeledIntField(label: "log_every(每 N 步发一条 step 事件)", value: $config.logEvery, default: 1)
+                TrainingIntParameterRow(
+                    title: "训练轮数", key: "epochs", detail: "启用早停时为上限",
+                    value: $config.epochs, default: 20
+                )
+                TrainingIntParameterRow(
+                    title: "上下文长度", key: "ctx_len", detail: "单条样本最长 token",
+                    value: $config.ctxLen, default: 512
+                )
+                TrainingIntParameterRow(
+                    title: "日志间隔", key: "log_every", detail: "每 N 步记录一次指标",
+                    value: $config.logEvery, default: 1
+                )
             }
 
             Section("早停") {
-                Toggle("early_stop", isOn: $config.earlyStop)
+                TrainingToggleParameterRow(
+                    title: "启用早停", key: "early_stop", detail: "验证 loss 不再改善时提前停止",
+                    value: $config.earlyStop
+                )
                 if config.earlyStop {
-                    LabeledIntField(label: "patience", value: $config.earlyStopPatience, default: 3)
-                    LabeledDoubleField(label: "test_ratio(无 test_data 时从 train 划分)",
-                                       value: $config.testRatio, default: 0.1)
+                    TrainingIntParameterRow(
+                        title: "耐心轮数", key: "patience", detail: "允许连续无改善的轮数",
+                        value: $config.earlyStopPatience, default: 3
+                    )
+                    TrainingDoubleParameterRow(
+                        title: "验证集比例", key: "test_ratio", detail: "无 test_data 时从训练集划分",
+                        value: $config.testRatio, default: 0.1
+                    )
                 }
             }
 
             Section("梯度 & checkpoint") {
-                LabeledDoubleField(label: "grad_clip", value: $config.gradClip, default: 1.0)
-                LabeledIntField(label: "checkpoint_every(每 N epoch 存)", value: $config.checkpointEvery, default: 2)
-                TextField("checkpoint_dir(空 = 不存)", text: $config.checkpointDir)
-                    .font(.body.monospaced())
-                TextField("resume(空 = 不恢复)", text: $config.resumePath)
-                    .font(.body.monospaced())
+                TrainingDoubleParameterRow(
+                    title: "梯度裁剪", key: "grad_clip", detail: "限制梯度范数",
+                    value: $config.gradClip, default: 1.0
+                )
+                TrainingIntParameterRow(
+                    title: "Checkpoint 间隔", key: "checkpoint_every", detail: "每 N 轮保存一次",
+                    value: $config.checkpointEvery, default: 2
+                )
+                TrainingTextParameterRow(
+                    title: "Checkpoint 目录", key: "checkpoint_dir", detail: "留空则不保存",
+                    prompt: "可选目录", text: $config.checkpointDir, monospaced: true
+                )
+                TrainingTextParameterRow(
+                    title: "恢复训练", key: "resume", detail: "留空则从头开始",
+                    prompt: "可选 checkpoint", text: $config.resumePath, monospaced: true
+                )
             }
 
             Section("可复现性") {
-                LabeledIntField(label: "seed", value: $config.seed, default: 42)
-                Picker("template", selection: $config.template) {
-                    ForEach(TrainingTemplate.allCases) { t in
-                        Text(t.label).tag(t)
+                TrainingIntParameterRow(
+                    title: "随机种子", key: "seed", detail: "控制数据划分与采样",
+                    value: $config.seed, default: 42
+                )
+                LabeledContent {
+                    Picker("任务模板", selection: $config.template) {
+                        ForEach(TrainingTemplate.allCases) { template in
+                            Text(template.label).tag(template)
+                        }
                     }
+                    .labelsHidden()
+                    .frame(width: 220)
+                } label: {
+                    TrainingParameterLabel(title: "任务模板", key: "template", detail: "训练与推理必须一致")
                 }
-                TextField("cache_limit_gb('auto' 或 GB 数)", text: $config.cacheLimitGb)
+                TrainingTextParameterRow(
+                    title: "缓存上限", key: "cache_limit_gb", detail: "auto 或 GB 数值",
+                    prompt: "auto", text: $config.cacheLimitGb
+                )
             }
 
             Section("导出") {
-                Toggle("训完顺手导出 .pth", isOn: $config.exportPth)
+                TrainingToggleParameterRow(
+                    title: "导出 PTH", key: "export_pth", detail: "训练完成后同时导出",
+                    value: $config.exportPth
+                )
                 if config.exportPth {
-                    TextField("pth_out(空 = 默认)", text: $config.pthOutPath)
-                        .font(.body.monospaced())
+                    TrainingTextParameterRow(
+                        title: "PTH 输出", key: "pth_out", detail: "留空则使用默认路径",
+                        prompt: "默认路径", text: $config.pthOutPath, monospaced: true
+                    )
                 }
-                TextField("events_file(诊断用,可选)", text: $config.eventsFilePath)
-                    .font(.body.monospaced())
+                TrainingTextParameterRow(
+                    title: "事件日志", key: "events_file", detail: "诊断用，可选",
+                    prompt: "可选文件", text: $config.eventsFilePath, monospaced: true
+                )
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+// MARK: - 训练参数行
+
+private struct TrainingParameterLabel: View {
+    let title: String
+    let key: String
+    let detail: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+            Text("\(key) · \(detail)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct TrainingDoubleParameterRow: View {
+    let title: String
+    let key: String
+    let detail: String
+    @Binding var value: Double
+    let `default`: Double
+
+    var body: some View {
+        LabeledContent {
+            HStack(spacing: 8) {
+                TextField(title, value: $value, format: .number)
+                    .labelsHidden()
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 140)
+                resetButton
+            }
+        } label: {
+            TrainingParameterLabel(title: title, key: key, detail: detail)
+        }
+    }
+
+    @ViewBuilder
+    private var resetButton: some View {
+        if value != `default` {
+            Button {
+                value = `default`
+            } label: {
+                Image(systemName: "arrow.counterclockwise")
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.borderless)
+            .help("恢复默认 \(`default`)")
+        } else {
+            Color.clear.frame(width: 28, height: 28)
+        }
+    }
+}
+
+private struct TrainingIntParameterRow: View {
+    let title: String
+    let key: String
+    let detail: String
+    @Binding var value: Int
+    let `default`: Int
+
+    var body: some View {
+        LabeledContent {
+            HStack(spacing: 8) {
+                TextField(title, value: $value, format: .number)
+                    .labelsHidden()
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 140)
+                resetButton
+            }
+        } label: {
+            TrainingParameterLabel(title: title, key: key, detail: detail)
+        }
+    }
+
+    @ViewBuilder
+    private var resetButton: some View {
+        if value != `default` {
+            Button {
+                value = `default`
+            } label: {
+                Image(systemName: "arrow.counterclockwise")
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.borderless)
+            .help("恢复默认 \(`default`)")
+        } else {
+            Color.clear.frame(width: 28, height: 28)
+        }
+    }
+}
+
+private struct TrainingToggleParameterRow: View {
+    let title: String
+    let key: String
+    let detail: String
+    @Binding var value: Bool
+
+    var body: some View {
+        LabeledContent {
+            Toggle(title, isOn: $value)
+                .labelsHidden()
+                .frame(width: 176, alignment: .leading)
+        } label: {
+            TrainingParameterLabel(title: title, key: key, detail: detail)
+        }
+    }
+}
+
+private struct TrainingTextParameterRow: View {
+    let title: String
+    let key: String
+    let detail: String
+    let prompt: String
+    @Binding var text: String
+    var monospaced = false
+
+    var body: some View {
+        LabeledContent {
+            TextField(prompt, text: $text)
+                .font(monospaced ? .body.monospaced() : .body)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 220)
+        } label: {
+            TrainingParameterLabel(title: title, key: key, detail: detail)
+        }
     }
 }
 

@@ -199,6 +199,10 @@ final class ChatStore {
         }
     }
 
+    func clearLastError() {
+        lastError = nil
+    }
+
     /// 改采样配置(下一轮生效)。
     func applyConfig() {
         guard let sid = sessionId else { return }

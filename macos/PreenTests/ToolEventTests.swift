@@ -45,6 +45,35 @@ final class ToolEventTests: XCTestCase {
 
 @MainActor
 final class ToolboxStoreTests: XCTestCase {
+    func testModelSourceRequiresExistingPthFile() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let store = ToolboxStore()
+        let wrongType = root.appendingPathComponent("model.json")
+        try Data().write(to: wrongType)
+
+        XCTAssertFalse(store.selectModelSource(path: wrongType.path))
+        XCTAssertEqual(store.errorMessage, "源模型必须是 .pth 文件")
+        XCTAssertTrue(store.modelSourcePath.isEmpty)
+        XCTAssertFalse(store.canConvertModel)
+
+        let missingModel = root.appendingPathComponent("missing.pth")
+        XCTAssertFalse(store.selectModelSource(path: missingModel.path))
+        XCTAssertEqual(store.errorMessage, "找不到所选的 .pth 模型文件")
+
+        let validModel = root.appendingPathComponent("RWKV.PTH")
+        try Data().write(to: validModel)
+        XCTAssertTrue(store.selectModelSource(path: validModel.path))
+        XCTAssertEqual(store.modelSourcePath, validModel.path)
+        XCTAssertNil(store.errorMessage)
+
+        store.modelOutputPath = root.appendingPathComponent("converted").path
+        XCTAssertTrue(store.canConvertModel)
+    }
+
     func testModelOutputConfirmationOnlyForNonEmptyDirectory() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

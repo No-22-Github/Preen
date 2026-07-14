@@ -77,6 +77,15 @@ struct TrainingRunningView: View {
                 }
             }
 
+            if store.totalSteps > 0 {
+                ProgressView(value: store.progress)
+                    .progressViewStyle(.linear)
+                    .accessibilityLabel("训练进度")
+                    .accessibilityValue(
+                        "\(store.displayedCurrentStep) / \(store.totalSteps)，\(Int(store.progress * 100))%"
+                    )
+            }
+
             // 第二行:loss / lr / 预计剩余。
             HStack(spacing: 16) {
                 Label("loss \(store.lossDisplay)", systemImage: "chart.line.downtrend")

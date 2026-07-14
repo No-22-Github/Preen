@@ -151,7 +151,7 @@ struct DatasetPreviewPageResult: Decodable, Equatable {
 @Observable
 @MainActor
 final class ToolboxStore {
-    var modelSourcePath = ""
+    private(set) var modelSourcePath = ""
     var modelOutputPath = ""
     var modelPrecision = "bf16"
     private(set) var modelState: ToolJobState = .idle
@@ -173,17 +173,22 @@ final class ToolboxStore {
     private(set) var datasetPreviewTotal = 0
 
     private(set) var progress: Double?
+    private(set) var progressCurrent: Int?
+    private(set) var progressTotal: Int?
     private(set) var statusMessage = ""
     private(set) var warnings: [String] = []
     private(set) var errorMessage: String?
     private(set) var presentationTool: String?
+    private(set) var datasetNeedsRefresh = false
 
     private var runner: ToolJobRunner?
     private var datasetPreviewCachePath: String?
 
     var isRunning: Bool { runner?.isRunning == true }
     var canConvertModel: Bool {
-        !modelSourcePath.isEmpty && !modelOutputPath.isEmpty && !isRunning
+        Self.modelSourceValidationError(for: modelSourcePath) == nil
+            && !modelOutputPath.isEmpty
+            && !isRunning
     }
     var modelOutputRequiresConfirmation: Bool {
         var isDirectory: ObjCBool = false
@@ -201,6 +206,10 @@ final class ToolboxStore {
     }
 
     func convertModel(overwrite: Bool = false) {
+        if let validationError = Self.modelSourceValidationError(for: modelSourcePath) {
+            errorMessage = validationError
+            return
+        }
         guard canConvertModel else { return }
         begin(tool: "model")
         modelState = .running
@@ -218,7 +227,7 @@ final class ToolboxStore {
 
     func previewDataset(modelPath: String) {
         guard canPreviewDataset, !modelPath.isEmpty else {
-            errorMessage = "请先在侧边栏选择模型，数据预览需要对应 tokenizer"
+            errorMessage = "请先在窗口右上角选择模型，数据预览需要对应 tokenizer"
             return
         }
         removeDatasetPreviewCache()
@@ -231,6 +240,8 @@ final class ToolboxStore {
         datasetPreviewCachePath = cachePath
         begin(tool: "dataset")
         datasetState = .running
+        datasetNeedsRefresh = false
+        statusMessage = "正在启动检查进程…"
         var argv = [
             "-m", "statetuner.cli", "dataset-preview",
             "--model", modelPath,
@@ -289,9 +300,26 @@ final class ToolboxStore {
 
     func clearError() { errorMessage = nil }
 
+    /// 统一校验文件选择器与拖拽入口，避免把无效路径留到 Python 进程才报错。
+    @discardableResult
+    func selectModelSource(path: String) -> Bool {
+        guard !isRunning else { return false }
+        if let validationError = Self.modelSourceValidationError(for: path) {
+            errorMessage = validationError
+            return false
+        }
+        modelSourcePath = path
+        modelState = .idle
+        modelResult = nil
+        errorMessage = nil
+        return true
+    }
+
     /// 工具详情页切换时清理瞬时展示；输入和已完成产物保留。
     func clearPresentationForNavigation() {
         progress = nil
+        progressCurrent = nil
+        progressTotal = nil
         statusMessage = ""
         warnings = []
         errorMessage = nil
@@ -307,11 +335,14 @@ final class ToolboxStore {
         resetDatasetPreviewPage()
         manualPromptKey = ""
         manualResponseKey = ""
+        datasetState = .idle
+        datasetNeedsRefresh = false
         clearPresentationForNavigation()
     }
 
     func invalidateDatasetAnalysis() {
         guard !isRunning else { return }
+        datasetNeedsRefresh = datasetAnalysis != nil || datasetState == .completed
         removeDatasetPreviewCache()
         datasetAnalysis = nil
         importedDatasetPath = nil
@@ -322,12 +353,28 @@ final class ToolboxStore {
     private func begin(tool: String) {
         runner = ToolJobRunner()
         progress = nil
+        progressCurrent = nil
+        progressTotal = nil
         statusMessage = "准备中"
         warnings = []
         errorMessage = nil
         presentationTool = tool
         if tool == "model" { modelResult = nil }
         if tool == "dataset" { importedDatasetPath = nil }
+    }
+
+    private static func modelSourceValidationError(for path: String) -> String? {
+        guard !path.isEmpty else { return "请选择原生 RWKV-7 .pth 模型" }
+        let url = URL(fileURLWithPath: path)
+        guard url.pathExtension.lowercased() == "pth" else {
+            return "源模型必须是 .pth 文件"
+        }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory),
+              !isDirectory.boolValue else {
+            return "找不到所选的 .pth 模型文件"
+        }
+        return nil
     }
 
     private func appendManualMapping(to argv: inout [String]) {
@@ -348,7 +395,20 @@ final class ToolboxStore {
     }
 
     private func consume(_ event: ToolEvent) {
-        progress = event.progress ?? progress
+        switch event.type {
+        case .started:
+            progress = nil
+            progressCurrent = nil
+            progressTotal = nil
+        case .progress:
+            progress = event.progress
+            progressCurrent = event.current
+            progressTotal = event.total
+        case .warning, .completed, .failed, .cancelled:
+            if let eventProgress = event.progress { progress = eventProgress }
+            if let current = event.current { progressCurrent = current }
+            if let total = event.total { progressTotal = total }
+        }
         statusMessage = event.message ?? statusMessage
         switch event.type {
         case .started, .progress:

@@ -67,7 +67,7 @@ struct TrainingEmptyView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .frame(width: 200, alignment: .leading)
-                    Text(config.modelPath.isEmpty ? "请在侧边栏选择模型" : URL(fileURLWithPath: config.modelPath).lastPathComponent)
+                    Text(config.modelPath.isEmpty ? "请在窗口右上角选择模型" : URL(fileURLWithPath: config.modelPath).lastPathComponent)
                         .lineLimit(1)
                         .foregroundStyle(config.modelPath.isEmpty ? .secondary : .primary)
                     Spacer()

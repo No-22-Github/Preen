@@ -3,6 +3,7 @@ import SwiftUI
 struct TrainingRunDetailView: View {
     let run: TrainingRun
     @Bindable var appState: AppState
+    var onDelete: () -> Void
 
     @State private var events: [TrainEvent] = []
     @State private var stderrLog = ""
@@ -48,6 +49,9 @@ struct TrainingRunDetailView: View {
                         Button("去对话") { goToChat() }
                         Button("导出 .pth") { exportPth() }
                     }
+                    Divider()
+                    Button("删除记录…", role: .destructive, action: onDelete)
+                        .disabled(!run.status.isTerminal)
                 }
             }
             Text(run.id.uuidString.lowercased())

@@ -5,7 +5,7 @@
 //  后端启动日志弹窗:点「连接」后弹出,实时展示 serve 进程 stderr,
 //  收到 ready(connected)自动关闭;启动失败则保留日志 + 失败提示供排查。
 //
-//  风格借鉴前后端分离软件的「启动控制台」:黑底等宽字体,自动滚到底,
+//  使用系统日志面板背景 + 等宽字体，自动滚到底,
 //  让用户直观看到后端在干什么(加载模型 / 校验 cache / 发 ready)。
 //
 
@@ -85,7 +85,7 @@ struct StartupLogSheet: View {
     private var logView: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                // monospaced 黑底「终端」样式。
+                // monospaced 系统日志面板。
                 Text(store.startupLog.isEmpty ? "(等待输出…)" : store.startupLog)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(store.startupLog.isEmpty ? .secondary : .primary)
@@ -94,7 +94,11 @@ struct StartupLogSheet: View {
                     .padding(10)
                     .id("logEnd")
             }
-            .background(Color.black.opacity(0.06))
+            .background(Color(nsColor: .textBackgroundColor))
+            .overlay {
+                Rectangle()
+                    .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+            }
             .onChange(of: store.startupLog) { _, _ in
                 withAnimation(.easeOut(duration: 0.1)) {
                     proxy.scrollTo("logEnd", anchor: .bottom)

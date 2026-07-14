@@ -41,7 +41,7 @@ final class AppState {
     var selection: SidebarItem = .training
     var selectedRunID: UUID?
 
-    // === 模型(侧边栏底部选,全 app 共享)===
+    // === 模型(右上角 toolbar 选,全 app 共享)===
     private var modelCatalog: RecentModelCatalog
     var modelPath: String {
         get { modelCatalog.selectedPath }
@@ -135,6 +135,15 @@ final class AppState {
 
     func refreshRuns() async {
         runs = await runRepository.scan()
+    }
+
+    func deleteRun(id: UUID) async throws {
+        let deletedIndex = runs.firstIndex { $0.id == id } ?? 0
+        try await runRepository.delete(id: id)
+        await refreshRuns()
+        if selectedRunID == id {
+            selectedRunID = runs.isEmpty ? nil : runs[min(deletedIndex, runs.count - 1)].id
+        }
     }
 
     // === 跨面板:训练完成 → 跳对话,自动设上产物 state ===

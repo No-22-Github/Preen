@@ -32,6 +32,23 @@ struct TrainingChartView: View {
                     .frame(width: 160)
             }
 
+            HStack {
+                Spacer()
+                HStack(spacing: 14) {
+                    ChartLineLegend(
+                        label: "Raw", color: Color.accentColor.opacity(0.35), lineWidth: 0.8
+                    )
+                    ChartLineLegend(
+                        label: "EMA", color: Color.accentColor, lineWidth: 2
+                    )
+                    if !store.heldOutPoints.isEmpty {
+                        ChartLineLegend(
+                            label: "Held-out", color: .secondary, lineWidth: 1.5, dash: [4, 3]
+                        )
+                    }
+                }
+            }
+
             lossChart
                 .frame(minHeight: store.processMetrics.isEmpty ? 250 : 190)
 
@@ -39,9 +56,19 @@ struct TrainingChartView: View {
                 Divider()
                 HStack {
                     Text("进程内存").font(.caption.bold())
-                    Text("phys_footprint · 系统 swap · GB (÷1e9)")
+                    Text("GB (÷1e9)")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+                    Spacer()
+                    HStack(spacing: 14) {
+                        ChartLineLegend(
+                            label: "phys_footprint", color: .purple, lineWidth: 1.5
+                        )
+                        ChartLineLegend(
+                            label: "系统 Swap", color: .orange.opacity(0.75),
+                            lineWidth: 1, dash: [4, 3]
+                        )
+                    }
                 }
                 memoryChart
                     .frame(height: 115)
@@ -214,5 +241,30 @@ struct TrainingChartView: View {
         case .warning: return "压力警告"
         case .critical: return "压力严重"
         }
+    }
+}
+
+private struct ChartLineLegend: View {
+    let label: String
+    let color: Color
+    let lineWidth: CGFloat
+    var dash: [CGFloat] = []
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Path { path in
+                path.move(to: CGPoint(x: 0, y: 5))
+                path.addLine(to: CGPoint(x: 26, y: 5))
+            }
+            .stroke(color, style: StrokeStyle(lineWidth: lineWidth, dash: dash))
+            .frame(width: 26, height: 10)
+            .accessibilityHidden(true)
+
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(label) 曲线")
     }
 }

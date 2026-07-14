@@ -15,10 +15,11 @@
 //
 
 import SwiftUI
+import AppKit
 
 struct ChatPanel: View {
     @Bindable var store: ChatStore
-    /// 模型路径(侧边栏选的,从 app-wide 注入)。
+    /// 模型路径(右上角 toolbar 选的,从 app-wide 注入)。
     var modelPath: String
     /// 外部「去对话」入口注入的 state 路径(训练完成 → 跳对话,自动设上)。
     @Binding var injectedStatePath: String?
@@ -32,6 +33,8 @@ struct ChatPanel: View {
     @State private var isShowingStartupLog: Bool = false
     /// 清除会话确认弹窗。
     @State private var showClearConfirm: Bool = false
+    /// 仅当用户仍位于底部附近时，才跟随流式输出。
+    @State private var isFollowingLatest: Bool = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -42,12 +45,20 @@ struct ChatPanel: View {
             Divider()
             messageList
             Divider()
+            if let error = store.lastError {
+                chatErrorBanner(error)
+                Divider()
+            }
             ChatInputBar(
                 text: $inputText,
                 canSend: store.canSend,
                 isGenerating: store.isGenerating,
                 canClear: store.isConnected && !store.messages.isEmpty,
-                onSend: { store.send(text: inputText); inputText = "" },
+                onSend: {
+                    isFollowingLatest = true
+                    store.send(text: inputText)
+                    inputText = ""
+                },
                 onAbort: { store.abort() },
                 onClearSession: { showClearConfirm = true }
             )
@@ -194,31 +205,56 @@ struct ChatPanel: View {
 
     private var messageList: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 4) {
-                    if store.messages.isEmpty {
-                        emptyState
-                            .padding(.top, 80)
+            ZStack(alignment: .bottomTrailing) {
+                ScrollView {
+                    LazyVStack(spacing: 4) {
+                        if store.messages.isEmpty {
+                            emptyState
+                                .padding(.top, 80)
+                        }
+                        ForEach(store.messages) { msg in
+                            ChatMessageView(message: msg)
+                                .id(msg.id)
+                        }
+                        Color.clear
+                            .frame(height: 1)
+                            .id("chat-bottom")
                     }
-                    ForEach(store.messages) { msg in
-                        ChatMessageView(message: msg)
-                            .id(msg.id)
+                    .padding(.vertical, 8)
+                }
+                .background(
+                    ChatScrollPositionObserver(isNearBottom: $isFollowingLatest, tolerance: 80)
+                        .frame(width: 0, height: 0)
+                )
+                .onAppear {
+                    guard !store.messages.isEmpty else { return }
+                    DispatchQueue.main.async {
+                        proxy.scrollTo("chat-bottom", anchor: .bottom)
                     }
                 }
-                .padding(.vertical, 8)
-            }
-            .onChange(of: store.messages.count) { _, _ in
-                // 自动滚到底(新消息到达时)。
-                if let last = store.messages.last {
+                .onChange(of: store.messages.count) { _, _ in
+                    guard isFollowingLatest else { return }
                     withAnimation(.easeOut(duration: 0.15)) {
-                        proxy.scrollTo(last.id, anchor: .bottom)
+                        proxy.scrollTo("chat-bottom", anchor: .bottom)
                     }
                 }
-            }
-            .onChange(of: store.messages.last?.segments.last?.text) { _, _ in
-                // 流式追加时也滚(同一消息的段文本变长)。
-                if let last = store.messages.last {
-                    proxy.scrollTo(last.id, anchor: .bottom)
+                .onChange(of: store.messages.last?.segments.last?.text) { _, _ in
+                    guard isFollowingLatest else { return }
+                    proxy.scrollTo("chat-bottom", anchor: .bottom)
+                }
+
+                if !isFollowingLatest && !store.messages.isEmpty {
+                    Button {
+                        isFollowingLatest = true
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            proxy.scrollTo("chat-bottom", anchor: .bottom)
+                        }
+                    } label: {
+                        Label("回到最新消息", systemImage: "arrow.down")
+                    }
+                    .buttonStyle(.bordered)
+                    .padding(14)
+                    .help("恢复跟随流式输出")
                 }
             }
         }
@@ -240,15 +276,35 @@ struct ChatPanel: View {
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
-            if let err = store.lastError {
-                Text(err)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .padding(.horizontal, 16)
-                    .frame(maxWidth: 400)
-            }
+            Text("回答由本地 AI 模型生成，可能不准确，请核实重要信息。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.top, 8)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private func chatErrorBanner(_ error: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+            Text(error)
+                .font(.caption)
+                .foregroundStyle(.primary)
+                .textSelection(.enabled)
+            Spacer()
+            Button {
+                store.clearLastError()
+            } label: {
+                Image(systemName: "xmark")
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .help("关闭错误提示")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.red.opacity(0.08))
     }
 
     // MARK: - 内部
@@ -260,6 +316,92 @@ struct ChatPanel: View {
         panel.allowsMultipleSelection = false
         if panel.runModal() == .OK, let url = panel.url {
             store.setState(path: url.path)
+        }
+    }
+}
+
+/// macOS 14 没有 SwiftUI 的 scroll geometry API，通过 NSScrollView 仅观察用户滚动。
+/// 流式文本使 document 变长时不会误判为用户离开底部。
+private struct ChatScrollPositionObserver: NSViewRepresentable {
+    @Binding var isNearBottom: Bool
+    let tolerance: CGFloat
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(isNearBottom: $isNearBottom, tolerance: tolerance)
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        DispatchQueue.main.async {
+            context.coordinator.attach(from: view)
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.isNearBottom = $isNearBottom
+        if context.coordinator.scrollView == nil {
+            DispatchQueue.main.async {
+                context.coordinator.attach(from: nsView)
+            }
+        }
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.detach()
+    }
+
+    final class Coordinator {
+        var isNearBottom: Binding<Bool>
+        let tolerance: CGFloat
+        weak var scrollView: NSScrollView?
+        private var boundsObserver: NSObjectProtocol?
+
+        init(isNearBottom: Binding<Bool>, tolerance: CGFloat) {
+            self.isNearBottom = isNearBottom
+            self.tolerance = tolerance
+        }
+
+        func attach(from view: NSView) {
+            guard scrollView == nil else { return }
+            var ancestor = view.superview
+            while let current = ancestor, !(current is NSScrollView) {
+                ancestor = current.superview
+            }
+            guard let scrollView = ancestor as? NSScrollView else { return }
+            self.scrollView = scrollView
+            scrollView.contentView.postsBoundsChangedNotifications = true
+            boundsObserver = NotificationCenter.default.addObserver(
+                forName: NSView.boundsDidChangeNotification,
+                object: scrollView.contentView,
+                queue: .main
+            ) { [weak self] _ in
+                self?.updatePosition()
+            }
+            updatePosition()
+        }
+
+        func detach() {
+            if let boundsObserver {
+                NotificationCenter.default.removeObserver(boundsObserver)
+            }
+            boundsObserver = nil
+            scrollView = nil
+        }
+
+        private func updatePosition() {
+            guard let scrollView, let documentView = scrollView.documentView else { return }
+            let visible = scrollView.documentVisibleRect
+            let distance: CGFloat
+            if documentView.isFlipped {
+                distance = documentView.bounds.maxY - visible.maxY
+            } else {
+                distance = visible.minY - documentView.bounds.minY
+            }
+            let nearBottom = distance <= tolerance
+            if isNearBottom.wrappedValue != nearBottom {
+                isNearBottom.wrappedValue = nearBottom
+            }
         }
     }
 }

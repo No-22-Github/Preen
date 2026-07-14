@@ -2,11 +2,14 @@ import Foundation
 
 enum RunRepositoryError: LocalizedError {
     case unsupportedSchema(Int)
+    case runStillActive
 
     var errorDescription: String? {
         switch self {
         case .unsupportedSchema(let schema):
             return "不支持的训练记录版本: \(schema)"
+        case .runStillActive:
+            return "训练仍在运行，请先取消训练再删除记录"
         }
     }
 }
@@ -97,6 +100,13 @@ actor RunRepository {
         run.updatedAt = Date()
         try save(run)
         return run
+    }
+
+    /// 只删除 App 管理的记录目录；State/PTH/checkpoint 等外部产物不在此目录内。
+    func delete(id: UUID) throws {
+        let run = try load(id: id)
+        guard run.status.isTerminal else { throw RunRepositoryError.runStillActive }
+        try fileManager.removeItem(at: directoryURL(for: id))
     }
 
     func scan() -> [TrainingRun] {

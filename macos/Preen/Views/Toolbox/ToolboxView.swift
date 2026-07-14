@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ToolboxView: View {
     private enum Destination: Equatable {
@@ -39,6 +40,16 @@ struct ToolboxView: View {
         }
         .onDisappear {
             store.clearPresentationForNavigation()
+        }
+        .onChange(of: modelPath) { _, newModelPath in
+            guard destination == .datasetPreview,
+                  !newModelPath.isEmpty,
+                  !store.datasetSourcePath.isEmpty,
+                  store.datasetAnalysis == nil,
+                  store.datasetState == .idle,
+                  !store.isRunning
+            else { return }
+            store.previewDataset(modelPath: newModelPath)
         }
         .alert("工具任务失败", isPresented: Binding(
             get: { store.errorMessage != nil },
@@ -190,16 +201,10 @@ struct ToolboxView: View {
                 toolPathRow("原生模型", detail: ".pth", path: store.modelSourcePath,
                             acceptsDrop: true,
                             onDropPath: { url in
-                        store.modelSourcePath = url.path
-                        store.modelOutputPath = PythonResolver.modelsDirectory
-                            .appendingPathComponent(url.deletingPathExtension().lastPathComponent)
-                            .path
+                        selectModelSource(url)
                     }) {
-                    if let url = pickFile() {
-                        store.modelSourcePath = url.path
-                        store.modelOutputPath = PythonResolver.modelsDirectory
-                            .appendingPathComponent(url.deletingPathExtension().lastPathComponent)
-                            .path
+                    if let url = pickFile(allowedContentTypes: [Self.pthContentType]) {
+                        selectModelSource(url)
                     }
                 }
 
@@ -287,7 +292,7 @@ struct ToolboxView: View {
                 HStack {
                     Label(
                         modelPath.isEmpty
-                            ? "请先在侧边栏选择模型"
+                            ? "请先在窗口右上角选择模型"
                             : URL(fileURLWithPath: modelPath).lastPathComponent,
                         systemImage: "textformat.abc"
                     )
@@ -316,11 +321,24 @@ struct ToolboxView: View {
             }
 
             HStack {
+                if store.isRunning && store.presentationTool == "dataset" {
+                    Button("取消检查") { store.cancel() }
+                        .buttonStyle(.bordered)
+                }
+                if store.datasetNeedsRefresh {
+                    Label("设置已更改，需要重新检查", systemImage: "arrow.clockwise")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
                 Button {
                     store.previewDataset(modelPath: modelPath)
                 } label: {
-                    Label("检查数据集", systemImage: "doc.text.magnifyingglass")
+                    Label(
+                        store.datasetAnalysis == nil && !store.datasetNeedsRefresh
+                            ? "检查数据集" : "重新检查",
+                        systemImage: "doc.text.magnifyingglass"
+                    )
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
@@ -344,18 +362,29 @@ struct ToolboxView: View {
         toolPathRow("源数据", detail: "JSON / JSONL / CSV", path: store.datasetSourcePath,
                     acceptsDrop: true,
                     onDropPath: { url in
-                store.selectDatasetSource(path: url.path)
-                store.datasetOutputPath = PythonResolver.datasetsDirectory
-                    .appendingPathComponent(url.deletingPathExtension().lastPathComponent + ".standard.jsonl")
-                    .path
+                selectDatasetSource(url)
             }) {
             if let url = pickFile() {
-                store.selectDatasetSource(path: url.path)
-                store.datasetOutputPath = PythonResolver.datasetsDirectory
-                    .appendingPathComponent(url.deletingPathExtension().lastPathComponent + ".standard.jsonl")
-                    .path
+                selectDatasetSource(url)
             }
         }
+    }
+
+    private func selectDatasetSource(_ url: URL) {
+        store.selectDatasetSource(path: url.path)
+        store.datasetOutputPath = PythonResolver.datasetsDirectory
+            .appendingPathComponent(url.deletingPathExtension().lastPathComponent + ".standard.jsonl")
+            .path
+        if destination == .datasetPreview, !modelPath.isEmpty {
+            store.previewDataset(modelPath: modelPath)
+        }
+    }
+
+    private func selectModelSource(_ url: URL) {
+        guard store.selectModelSource(path: url.path) else { return }
+        store.modelOutputPath = PythonResolver.modelsDirectory
+            .appendingPathComponent(url.deletingPathExtension().lastPathComponent)
+            .path
     }
 
     private func analysisSummary(_ analysis: DatasetPreviewResult) -> some View {
@@ -424,12 +453,6 @@ struct ToolboxView: View {
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
-                Spacer()
-                HStack(spacing: 12) {
-                    Label("输入前缀", systemImage: "circle.fill").foregroundStyle(.blue)
-                    Label("训练目标", systemImage: "circle.fill").foregroundStyle(.green)
-                }
-                .font(.caption)
             }
             .id("dataset-preview-page-top")
 
@@ -450,11 +473,20 @@ struct ToolboxView: View {
                                 .foregroundStyle(.orange)
                         }
                     }
-                    Text(sample.prefixText).foregroundColor(.blue)
-                        + Text(sample.targetText).foregroundColor(.green)
+
+                    datasetPreviewTextSection(
+                        title: "输入前缀",
+                        text: sample.prefixText
+                    )
+
+                    Divider()
+
+                    datasetPreviewTextSection(
+                        title: "训练目标",
+                        text: sample.targetText
+                    )
                 }
                 .font(.body.monospaced())
-                .textSelection(.enabled)
                 .padding(14)
                 .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
             }
@@ -464,6 +496,22 @@ struct ToolboxView: View {
                     .padding(.top, 2)
             }
         }
+    }
+
+    private func datasetPreviewTextSection(title: String, text: String) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+
+            Text(text)
+                .foregroundStyle(.primary)
+                .textSelection(.enabled)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityValue(text)
     }
 
     private var datasetPreviewPagination: some View {
@@ -683,12 +731,28 @@ struct ToolboxView: View {
                 VStack(alignment: .leading, spacing: 7) {
                     if let progress = store.progress {
                         ProgressView(value: progress)
+                            .progressViewStyle(.linear)
+                            .accessibilityLabel(store.statusMessage)
+                            .accessibilityValue(progressAccessibilityValue)
                     } else {
                         ProgressView()
+                            .progressViewStyle(.linear)
+                            .accessibilityLabel(store.statusMessage)
+                            .accessibilityValue("正在准备")
                     }
-                    Text(store.statusMessage)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    HStack {
+                        Text(store.statusMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        if let current = store.progressCurrent,
+                           let total = store.progressTotal,
+                           total > 0 {
+                            Text("\(current.formatted()) / \(total.formatted())")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
             }
             ForEach(store.warnings, id: \.self) { warning in
@@ -697,6 +761,16 @@ struct ToolboxView: View {
                     .foregroundStyle(.orange)
             }
         }
+    }
+
+    private var progressAccessibilityValue: String {
+        guard let current = store.progressCurrent,
+              let total = store.progressTotal,
+              total > 0
+        else {
+            return store.progress.map { $0.formatted(.percent.precision(.fractionLength(0))) } ?? ""
+        }
+        return "\(current) / \(total)"
     }
 
     private func metric(_ title: String, _ value: String, warning: Bool = false) -> some View {
@@ -724,11 +798,16 @@ struct ToolboxView: View {
             .lastPathComponent + ".standard.jsonl"
     }
 
-    private func pickFile() -> URL? {
+    private static let pthContentType = UTType(filenameExtension: "pth")!
+
+    private func pickFile(allowedContentTypes: [UTType] = []) -> URL? {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
+        if !allowedContentTypes.isEmpty {
+            panel.allowedContentTypes = allowedContentTypes
+        }
         return panel.runModal() == .OK ? panel.url : nil
     }
 

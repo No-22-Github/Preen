@@ -3,8 +3,9 @@
 //  Preen
 //
 //  主容器。NavigationSplitView 两栏:
-//   - Sidebar(训练/对话/State 库 + 模型选择器钉底部)
+//   - Sidebar(训练/对话/训练记录/工具箱)
 //   - detail(按 selection 切面板)
+//   - 模型选择器位于 detail toolbar 右上角
 //
 //  最小 1000×680(design.md §3)。
 //
@@ -130,9 +131,14 @@ struct ContentView: View {
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 40))
                 .foregroundStyle(.orange)
-            Text("请先在侧边栏底部选择模型")
+            Text("需要选择模型")
                 .font(.title3)
             Text("对话面板需要一个 HF 格式的 RWKV-7 模型目录")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Button("选择模型…") { pickModel() }
+                .buttonStyle(.borderedProminent)
+            Text("也可以使用窗口右上角的模型菜单。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

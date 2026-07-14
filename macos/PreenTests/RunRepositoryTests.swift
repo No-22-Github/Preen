@@ -54,6 +54,41 @@ final class RunRepositoryTests: XCTestCase {
         XCTAssertEqual(runs.map(\.id), [newer.id, older.id])
     }
 
+    func testDeleteRemovesRecordButKeepsExternalArtifacts() async throws {
+        let repository = RunRepository(rootURL: temporaryRoot)
+        let stateURL = temporaryRoot.deletingLastPathComponent()
+            .appendingPathComponent("\(UUID().uuidString).npz")
+        defer { try? FileManager.default.removeItem(at: stateURL) }
+        try Data("state".utf8).write(to: stateURL)
+
+        var run = TrainingRun(status: .completed)
+        run.artifacts.statePath = stateURL.path
+        _ = try await repository.create(run)
+
+        try await repository.delete(id: run.id)
+
+        let deletedDirectory = await repository.directoryURL(for: run.id)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: deletedDirectory.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: stateURL.path))
+        let remaining = await repository.scan()
+        XCTAssertTrue(remaining.isEmpty)
+    }
+
+    func testDeleteRejectsActiveRun() async throws {
+        let repository = RunRepository(rootURL: temporaryRoot)
+        let run = TrainingRun(status: .running)
+        _ = try await repository.create(run)
+
+        do {
+            try await repository.delete(id: run.id)
+            XCTFail("应拒绝删除运行中的记录")
+        } catch let error as RunRepositoryError {
+            XCTAssertEqual(error.errorDescription, "训练仍在运行，请先取消训练再删除记录")
+        }
+        let activeDirectory = await repository.directoryURL(for: run.id)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: activeDirectory.path))
+    }
+
     private var fixtureConfig: PersistedTrainingConfig {
         PersistedTrainingConfig(
             modelPath: "/models/rwkv", dataPath: "/data/train.jsonl", outputPath: "/states/a.npz",
