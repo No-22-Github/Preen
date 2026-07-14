@@ -18,12 +18,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - variant: macos14
-            runner: macos-15
-          - variant: macos26
-            runner: macos-26
-    runs-on: ${{ matrix.runner }}
+        # 两个变体都在 macos-26 上编:Swift 源码引用了 macOS 26 Liquid Glass API
+        # (PreenGlass.swift,#available 护栏),编译需 Xcode 26 / macOS 26 SDK。
+        # 变体差异只在 MLX 轮子平台标签 + 部署目标,不在构建机器 SDK。
+        # macos14 变体设 MACOSX_DEPLOYMENT_TARGET=14.6,产物仍只依赖 macOS 14.6。
+        variant: [macos14, macos26]
+    runs-on: macos-26
     env:
       # pip 经 os.environ 透传,认这个变量 → 平台轮子(mlx/mlx-metal 等)缓存到工作区内。
       PIP_CACHE_DIR: ${{ github.workspace }}/.pip-cache

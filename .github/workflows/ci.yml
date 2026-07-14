@@ -32,12 +32,16 @@ jobs:
         run: uv sync --dev --python 3.12
 
       - name: Run tests
+        # 用 python -m:把仓库根加进 sys.path,test_quantize.py 的
+        # `from tests.conftest import ...` 才能解析(tests/ 无 __init__.py)。
         # 快测(~1min)。模型权重不进库,依赖模型的用例由 conftest 自动 skip。
-        run: uv run pytest -q
+        run: uv run python -m pytest -q
 
   macos:
     name: macOS (Xcode)
-    runs-on: macos-15
+    # 必须 macos-26:PreenGlass.swift 用了 macOS 26 Liquid Glass API
+    # (GlassEffectContainer/glassEffect/glassProminent),Xcode 16/macOS 15 SDK 编不了。
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
 
