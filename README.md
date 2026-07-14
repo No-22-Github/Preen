@@ -55,6 +55,24 @@ Python 引擎   (mlx-lm 训练/推理 · 本仓库)
 Python 引擎是整套东西的核心,训练、推理、导出都在这里,由 `statetuner` CLI 直接驱动。
 SwiftUI App 通过 IPC 调用这一层；CLI 仍保留为自动化与排障入口。
 
+### 构建自包含 macOS App
+
+```bash
+python3 scripts/build_app.py
+```
+
+该命令一次产出 `dist/Preen-macos14-arm64.app`（最低 macOS 14.6）和
+`dist/Preen-macos26-arm64.app`（最低 macOS 26.2）；两者均内嵌 Apple Silicon
+CPython 3.11.15、Preen 及全部运行依赖，不包含模型，接收方只需准备转换后的本地模型。
+
+平台实测结论：同一台 M5/macOS 26.5.2 上，macOS 26 wheel 相比 14/15 wheel 的 1.5B 推理 prefill 快约 94%–96%（decode 同档），相比 14 wheel 的 batch=1、200-step 完整训练吞吐在 ctx64/256 分别快 4.8%/17.3%，因此 macOS 26 用户应优先使用 26 版 App。
+
+构建机需要 Apple Silicon、Xcode Command Line Tools、`uv` 和网络；脚本会校验 PBS
+归档哈希、按精确 platform 下载 MLX wheel、构建两次 Release、执行隔离 Python/Metal
+smoke test，并做 ad-hoc 签名完整性校验（不包含 Developer ID 签名或公证）。
+当前未签名/公证的分发包在接收方机器上需要先执行
+`xattr -dr com.apple.quarantine Preen-macosXX-arm64.app`，再双击打开。
+
 **核心引擎**用的是 [ml-explore/mlx-lm](https://github.com/ml-explore/mlx-lm) 里的 `rwkv7.py`(Apple 维护)。
 wkv7 前向有两条等价路径:Metal kernel 走推理,快;纯 ops 循环可微,用于训练。
 本项目的工作是在其之上做训练改造,细节见 [docs](docs/)。
@@ -113,7 +131,8 @@ assets/
                                   + SOURCE.md (来源仓库 + 同步说明)
 
 scripts/
-└── nekoqa_smoke.sh               NekoQA × 1.5B smoke 全流程脚本
+├── build_app.py                   一次产出 macOS 14 / 26 两个自包含 .app
+└── nekoqa_smoke.sh                NekoQA × 1.5B smoke 全流程脚本
 
 experiments/                     历史归档 (保留不动, 可复现性)
 ├── p0_translate/                  P0 翻译实验 (已废弃路径)

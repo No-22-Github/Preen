@@ -131,7 +131,7 @@ design.md / Spec §5 的 abort 是**双向独立通道**:
 | Inspector 完整(⌥⌘I 会话区) | #8 |
 | 崩溃恢复重放(Spec §5 验收 c) | #8 |
 | State 库面板(侧边栏 placeholder) | #9 |
-| build_app.sh 打包 | #10 |
+| Developer ID 签名 / 公证 | 正式发布阶段 |
 
 ---
 
