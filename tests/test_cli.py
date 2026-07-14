@@ -76,6 +76,13 @@ def test_dataset_preview_emits_render_and_inspection(tmp_path, monkeypatch):
     events = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
     payload = events[-1]["result"]
     assert events[-1]["type"] == "completed"
+    render_progress = [
+        event for event in events
+        if event.get("type") == "progress" and event.get("phase") == "render"
+    ]
+    assert render_progress[-1]["current"] == 1
+    assert render_progress[-1]["total"] == 1
+    assert render_progress[-1]["progress"] == 1.0
     assert payload["inspection"]["valid"] == 1
     assert payload["preview"][0]["full_text"] == (
         payload["preview"][0]["prefix_text"] + payload["preview"][0]["target_text"]

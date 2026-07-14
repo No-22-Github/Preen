@@ -182,11 +182,13 @@ def inspect_standard_records(
     items: list[Any], tokenizer, *, template: str = "qa", ctx_len: int = 512,
     path: str = "<memory>",
     on_rendered: Optional[Callable[[dict[str, Any]], None]] = None,
+    on_progress: Optional[Callable[[int, int], None]] = None,
 ) -> DataInspection:
     """检查 importer 标准记录；可流式输出渲染样本供分页缓存使用。
 
     ``on_rendered`` 每发现一条有效样本就调用一次。调用方可以直接写 JSONL，
-    无需把完整预览留在 Python 或 Swift 内存中。
+    无需把完整预览留在 Python 或 Swift 内存中。``on_progress``
+    在每条输入处理完成后收到 ``(current, total)``，由上层决定上报频率。
     """
     from .templates import INSTRUCTION, QA
 
@@ -198,6 +200,11 @@ def inspect_standard_records(
 
     lengths: list[int] = []
     empty_q = empty_a = truncated = target_lost = 0
+    total_items = len(items)
+
+    def report_progress(current: int) -> None:
+        if on_progress is not None:
+            on_progress(current, total_items)
 
     for index, item in enumerate(items):
         if not isinstance(item, dict):
@@ -213,9 +220,11 @@ def inspect_standard_records(
             a = (a_raw or "").strip()
             if not q:
                 empty_q += 1
+                report_progress(index + 1)
                 continue
             if not a:
                 empty_a += 1
+                report_progress(index + 1)
                 continue
             prefix = tmpl.format_prefix(q=q)
         else:  # instruction
@@ -231,9 +240,11 @@ def inspect_standard_records(
             a = (a_raw or "").strip()
             if not q:
                 empty_q += 1
+                report_progress(index + 1)
                 continue
             if not a:
                 empty_a += 1
+                report_progress(index + 1)
                 continue
             prefix = tmpl.format_prefix(instruction=q, input=inp)
         target = tmpl.format_target(a=a)
@@ -256,6 +267,7 @@ def inspect_standard_records(
                 "response_text": a,
                 "truncated": length > ctx_len,
             })
+        report_progress(index + 1)
 
     if not lengths:
         raise ValueError("没有有效训练样本")

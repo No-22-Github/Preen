@@ -958,13 +958,25 @@ def dataset_preview(
             converted = convert(items, detection, turn_policy=turn_policy)  # type: ignore[arg-type]
             result_payload = converted.to_dict()
             emitter.emit(tool_progress(
-                tool, "inspect", f"检查并渲染 {len(converted.records)} 条样本",
+                tool, "inspect", f"准备检查 {len(converted.records)} 条样本",
             ))
+
+            def report_inspection_progress(current: int, total: int) -> None:
+                if current == total or current % 100 == 0:
+                    emitter.emit(tool_progress(
+                        tool,
+                        "render",
+                        f"正在检查并渲染 {current:,} / {total:,} 条样本",
+                        current=current,
+                        total=total,
+                    ))
+
             if cache_out is not None:
                 with PreviewCacheWriter(cache_out, page_size=page_size) as cache:
                     inspected = inspect_standard_records(
                         converted.records, tokenizer, template=converted.template,
                         ctx_len=ctx_len, path=str(data), on_rendered=cache.append,
+                        on_progress=report_inspection_progress,
                     )
                     meta = cache.commit(template=converted.template, ctx_len=ctx_len)
                     rendered_payload = cache.first_page
@@ -982,6 +994,7 @@ def dataset_preview(
                 inspected = inspect_standard_records(
                     converted.records, tokenizer, template=converted.template,
                     ctx_len=ctx_len, path=str(data), on_rendered=collect_first_page,
+                    on_progress=report_inspection_progress,
                 )
             inspection_payload = inspected.to_dict()
             if converted.dropped_system:
