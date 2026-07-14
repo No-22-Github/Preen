@@ -66,6 +66,7 @@ ENV/
 # 打包 / 构建
 build/
 dist/
+.pip-cache/    # CI 的 pip 平台轮子缓存(build_app.py 走 PIP_CACHE_DIR)
 *.egg-info/
 *.egg
 .eggs/

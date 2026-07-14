@@ -211,9 +211,15 @@ package_root = Path(statetuner.__file__).resolve().parent
 assert (package_root / "assets" / "rwkv7_hf_template.json").is_file()
 assert (package_root / "assets" / "rwkv_world_tokenizer").is_dir()
 
-value = mx.sum(mx.array([1.0, 2.0, 3.0]) ** 2)
-mx.eval(value)
-assert float(value) == 14.0
+# GPU 计算断言。CI 的 macOS runner 是虚拟机,不保证有 Metal,
+# 置 PREEN_SKIP_METAL_SMOKE=1 时跳过这步(import/结构/torch 泄漏检查仍全跑)。
+if os.environ.get("PREEN_SKIP_METAL_SMOKE") == "1":
+    metal_sum = None
+else:
+    value = mx.sum(mx.array([1.0, 2.0, 3.0]) ** 2)
+    mx.eval(value)
+    assert float(value) == 14.0
+    metal_sum = float(value)
 
 print(json.dumps({
     "python": sys.version.split()[0],
@@ -221,14 +227,22 @@ print(json.dumps({
     "mlx_metal": importlib.metadata.version("mlx-metal"),
     "mlx_lm": importlib.metadata.version("mlx-lm"),
     "statetuner_modules": len(modules),
-    "metal_sum": float(value),
+    "metal_sum": metal_sum,
     "prefix": str(expected),
 }, ensure_ascii=False))
 """
 
 
 class AppBuilder:
-    def __init__(self, *, output_dir: Path, build_root: Path, clean: bool) -> None:
+    def __init__(
+        self,
+        *,
+        output_dir: Path,
+        build_root: Path,
+        clean: bool,
+        variants: Sequence[str] = ("macos14", "macos26"),
+    ) -> None:
+        self.variants = tuple(variants)
         self.output_dir = output_dir.resolve()
         self.build_root = build_root.resolve()
         self.cache_dir = self.build_root / "cache"
@@ -274,22 +288,29 @@ class AppBuilder:
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
+        # 变体元数据集中一处:pip 平台标签、部署目标、libmlx 期望 minos。
+        variant_specs = {
+            "macos14": ("macosx_14_0_arm64", os.environ.get("PREEN_MACOS14_TARGET", "14.6"), "14.0"),
+            "macos26": ("macosx_26_0_arm64", os.environ.get("PREEN_MACOS26_TARGET", "26.2"), "26.2"),
+        }
+
         self.prepare_base_python()
         self.prepare_requirements_and_common_wheels()
-        self.download_platform_wheels("macos14", "macosx_14_0_arm64")
-        self.download_platform_wheels("macos26", "macosx_26_0_arm64")
-        self.prepare_runtime("macos14")
-        self.prepare_runtime("macos26")
-        self.build_variant("macos14", os.environ.get("PREEN_MACOS14_TARGET", "14.6"), "14.0")
-        self.build_variant("macos26", os.environ.get("PREEN_MACOS26_TARGET", "26.2"), "26.2")
+        for label in self.variants:
+            pip_platform, _, _ = variant_specs[label]
+            self.download_platform_wheels(label, pip_platform)
+            self.prepare_runtime(label)
+        for label in self.variants:
+            _, deployment_target, mlx_minos = variant_specs[label]
+            self.build_variant(label, deployment_target, mlx_minos)
         self.write_manifest()
 
         if os.environ.get("PREEN_KEEP_BUILD", "0") != "1":
             safe_rmtree(self.work_dir)
 
         log("done")
-        log(f"  {self.output_dir / 'Preen-macos14-arm64.app'}")
-        log(f"  {self.output_dir / 'Preen-macos26-arm64.app'}")
+        for label in self.variants:
+            log(f"  {self.output_dir / f'Preen-{label}-arm64.app'}")
         log(f"  {self.output_dir / 'BUILD-MANIFEST.txt'}")
 
     def prepare_base_python(self) -> None:
@@ -539,35 +560,36 @@ class AppBuilder:
             "PREEN_VERIFY_PREFIX": os.fspath(
                 app / "Contents" / "Resources" / "python"
             ),
+            # 显式透传:隔离环境不继承父进程,CI 上无 Metal 时靠它跳过 GPU 断言。
+            "PREEN_SKIP_METAL_SMOKE": os.environ.get("PREEN_SKIP_METAL_SMOKE", "0"),
         }
         log(f"running isolated Python/Metal smoke test for {label}")
         run([python, "-c", SMOKE_CODE], env=environment)
         run(["codesign", "--verify", "--deep", "--strict", app])
 
     def write_manifest(self) -> None:
-        macos14 = self.output_dir / "Preen-macos14-arm64.app"
-        macos26 = self.output_dir / "Preen-macos26-arm64.app"
         commit = output(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT)
         dirty = bool(output(["git", "status", "--short"], cwd=REPO_ROOT))
+        minimums = {
+            "macos14": os.environ.get("PREEN_MACOS14_TARGET", "14.6"),
+            "macos26": os.environ.get("PREEN_MACOS26_TARGET", "26.2"),
+        }
+        lines = [
+            "Preen self-contained app build",
+            f"git_commit={commit}",
+            f"git_dirty={str(dirty).lower()}",
+            f"variants={','.join(self.variants)}",
+            f"python={PYTHON_VERSION}",
+            f"python_build_standalone_release={PBS_RELEASE}",
+            f"python_build_standalone_sha256={PBS_SHA256}",
+        ]
+        # 只为实际构建的变体写 minimum + 目录摘要,避免对缺失的 app 做 tree_digest。
+        for label in self.variants:
+            app = self.output_dir / f"Preen-{label}-arm64.app"
+            lines.append(f"{label}_minimum={minimums[label]}")
+            lines.append(f"{label}_app_tree_sha256={tree_digest(app)}")
         manifest = self.output_dir / "BUILD-MANIFEST.txt"
-        manifest.write_text(
-            "\n".join(
-                [
-                    "Preen self-contained app build",
-                    f"git_commit={commit}",
-                    f"git_dirty={str(dirty).lower()}",
-                    f"python={PYTHON_VERSION}",
-                    f"python_build_standalone_release={PBS_RELEASE}",
-                    f"python_build_standalone_sha256={PBS_SHA256}",
-                    f"macos14_minimum={os.environ.get('PREEN_MACOS14_TARGET', '14.6')}",
-                    f"macos26_minimum={os.environ.get('PREEN_MACOS26_TARGET', '26.2')}",
-                    f"macos14_app_tree_sha256={tree_digest(macos14)}",
-                    f"macos26_app_tree_sha256={tree_digest(macos26)}",
-                ]
-            )
-            + "\n",
-            encoding="utf-8",
-        )
+        manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def parse_args() -> argparse.Namespace:
@@ -578,6 +600,14 @@ def parse_args() -> argparse.Namespace:
         "--clean",
         action="store_true",
         help="remove cached PBS downloads and rebuild everything",
+    )
+    parser.add_argument(
+        "--variant",
+        dest="variants",
+        action="append",
+        choices=["macos14", "macos26"],
+        help="build only this variant (repeatable). default: both. "
+        "matrix CI: one runner passes --variant macos14, another --variant macos26.",
     )
     parser.add_argument(
         "--output-dir",
@@ -601,6 +631,7 @@ def main() -> int:
             output_dir=args.output_dir,
             build_root=args.build_root,
             clean=args.clean,
+            variants=tuple(args.variants) if args.variants else ("macos14", "macos26"),
         ).build()
     except (BuildError, OSError) as error:
         print(f"[build_app] error: {error}", file=sys.stderr)

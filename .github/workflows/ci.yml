@@ -1,0 +1,57 @@
+name: CI
+
+# 只在推送到 main 时跑。攒多个 commit 一起推 → push 触发器本身只跑最新那个 commit。
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+# 只保留最新一次运行:同一分支上新 push 进来时,取消还在跑的旧运行。
+# 这样连续推两次也不会排队跑两遍,始终只验证最新状态。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python (pytest)
+    # MLX 只能跑在 Apple Silicon,必须用 macOS runner(macos-14+ 为 ARM64)。
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          # uv 缓存按 lock 精确失效:deps 没变则命中,torch/mlx 等大包不重下。
+          cache-dependency-glob: uv.lock
+
+      - name: Install Python + 依赖
+        # requires-python >=3.11,<3.13 → 固定 3.12。--dev 带上 pytest/torch(oracle 门禁)。
+        run: uv sync --dev --python 3.12
+
+      - name: Run tests
+        # 快测(~1min)。模型权重不进库,依赖模型的用例由 conftest 自动 skip。
+        run: uv run pytest -q
+
+  macos:
+    name: macOS (Xcode)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Run Swift tests
+        # CI 无签名环境,关闭代码签名;跑本机 macOS 目标的单元测试。
+        # 不接 xcpretty/xcbeautify:runner 上不保证预装,缺了会让 job 误挂。
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project macos/Preen.xcodeproj \
+            -scheme Preen \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO

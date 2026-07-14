@@ -1,0 +1,80 @@
+name: Build app
+
+# 每次推送到 main 构建两个自包含 .app。攒多个 commit 一起推 → 只构建最新 commit。
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: build-app-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.variant }}
+    # 变体与 runner 配对:macos14 轮子/部署目标在 macos-15 上编;
+    # macos26 变体(macosx_26_0 轮子、部署目标 26.2)必须用 macos-26 runner。
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: macos14
+            runner: macos-15
+          - variant: macos26
+            runner: macos-26
+    runs-on: ${{ matrix.runner }}
+    env:
+      # pip 经 os.environ 透传,认这个变量 → 平台轮子(mlx/mlx-metal 等)缓存到工作区内。
+      PIP_CACHE_DIR: ${{ github.workspace }}/.pip-cache
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # PBS 的 CPython tarball(SHA256 校验,版本锁在脚本里)。改脚本 → key 变 → 重下一次。
+      - name: Cache python-build-standalone
+        uses: actions/cache@v4
+        with:
+          path: build/app/cache/downloads
+          key: pbs-${{ hashFiles('scripts/build_app.py') }}
+
+      # pip 下载的平台轮子。按变体分开(macos14/macos26 平台标签不同),deps 变了才失效。
+      - name: Cache pip wheels
+        uses: actions/cache@v4
+        with:
+          path: .pip-cache
+          key: pip-${{ matrix.variant }}-${{ hashFiles('uv.lock') }}
+          restore-keys: |
+            pip-${{ matrix.variant }}-
+
+      - name: Show toolchain
+        run: |
+          uname -m
+          xcodebuild -version
+
+      - name: Build ${{ matrix.variant }} app
+        # runner 是虚拟机,不保证有 Metal → 跳过 GPU 冒烟断言;
+        # import/结构/minos/torch 泄漏检查仍全部执行。
+        env:
+          PREEN_SKIP_METAL_SMOKE: "1"
+        run: python3 scripts/build_app.py --variant ${{ matrix.variant }}
+
+      - name: Package .app (保留符号链接与可执行位)
+        run: |
+          ditto -c -k --keepParent \
+            "dist/Preen-${{ matrix.variant }}-arm64.app" \
+            "dist/Preen-${{ matrix.variant }}-arm64.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Preen-${{ matrix.variant }}-arm64
+          path: |
+            dist/Preen-${{ matrix.variant }}-arm64.zip
+            dist/BUILD-MANIFEST.txt
+          if-no-files-found: error
+          retention-days: 14
