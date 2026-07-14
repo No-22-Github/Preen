@@ -1,5 +1,6 @@
 """CLI 入口快测：不加载真实模型。"""
 import json
+import re
 
 import numpy as np
 from typer.testing import CliRunner
@@ -8,6 +9,14 @@ from statetuner.cli import app
 
 
 runner = CliRunner()
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def plain(text: str) -> str:
+    """去掉 ANSI 颜色码。CI(FORCE_COLOR/PY_COLORS)下 Rich 会给报错面板上色，
+    颜色码会把 `--state` 这类子串劈开，裸子串断言就误判。断言前先归一化。"""
+    return _ANSI.sub("", text)
 
 
 def test_root_help_lists_product_commands():
@@ -157,7 +166,7 @@ def test_preview_ab_requires_state_before_model_load(tmp_path):
         ["preview", "--model", str(model), "--prompt", "你好", "--ab"],
     )
     assert result.exit_code != 0
-    assert "--state" in result.output
+    assert "--state" in plain(result.output)
 
 
 def test_preview_stream_rejects_json_before_model_load(tmp_path):
