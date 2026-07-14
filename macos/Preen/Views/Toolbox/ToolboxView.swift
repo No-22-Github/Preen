@@ -2,8 +2,12 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ToolboxView: View {
-    private enum Destination: Equatable {
-        case home
+    /// 与首页 820pt grouped Form 的可见 Section 对齐（系统每侧约 58pt inset）。
+    private static let formWidth: CGFloat = 820
+    private static let groupedFormInset: CGFloat = 58
+    private static let contentWidth = formWidth - groupedFormInset * 2
+
+    private enum Destination: Hashable {
         case modelConversion
         case modelQuantization
         case datasetPreview
@@ -11,11 +15,19 @@ struct ToolboxView: View {
 
         var title: String {
             switch self {
-            case .home: return "工具箱"
             case .modelConversion: return "模型转换"
             case .modelQuantization: return "模型量化"
             case .datasetPreview: return "数据集预览"
             case .datasetConversion: return "数据集转换"
+            }
+        }
+
+        var subtitle: String {
+            switch self {
+            case .modelConversion: return "把 BlinkDL 原生 RWKV-7 权重转换为 Preen 可用模型"
+            case .modelQuantization: return "把 BF16 模型量化为 int8，推理更快、内存更省近一半"
+            case .datasetPreview: return "查看真实模板文本、token 长度与截断风险"
+            case .datasetConversion: return "把外部数据集转换为训练可直接读取的标准 JSONL"
             }
         }
     }
@@ -24,18 +36,24 @@ struct ToolboxView: View {
     let modelPath: String
     var onSelectModel: (String) -> Void
 
-    @State private var destination: Destination = .home
+    @State private var path: [Destination] = []
     @State private var showingOverwriteConfirmation = false
     @State private var showingQuantizeOverwriteConfirmation = false
     @State private var advancedModelOptions = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
-            detail
+        NavigationStack(path: $path) {
+            toolboxHome
+                .navigationTitle("工具箱")
+                .navigationSubtitle("选择一个工具开始，不会启动常驻推理进程")
+                .navigationDestination(for: Destination.self) { destination in
+                    detail(for: destination)
+                        .navigationTitle(destination.title)
+                        .navigationSubtitle(destination.subtitle)
+                        .navigationBarBackButtonHidden(store.isRunning)
+                }
         }
-        .onChange(of: destination) { _, _ in
+        .onChange(of: path) { _, _ in
             store.clearPresentationForNavigation()
         }
         .onAppear {
@@ -45,7 +63,7 @@ struct ToolboxView: View {
             store.clearPresentationForNavigation()
         }
         .onChange(of: modelPath) { _, newModelPath in
-            guard destination == .datasetPreview,
+            guard path.last == .datasetPreview,
                   !newModelPath.isEmpty,
                   !store.datasetSourcePath.isEmpty,
                   store.datasetAnalysis == nil,
@@ -88,50 +106,9 @@ struct ToolboxView: View {
         }
     }
 
-    private var header: some View {
-        HStack(spacing: 14) {
-            if destination != .home {
-                Button {
-                    destination = .home
-                } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.title3.weight(.semibold))
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .disabled(store.isRunning)
-                .help(store.isRunning ? "请先等待任务完成或取消" : "返回工具箱")
-            }
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(destination.title)
-                    .font(.title2.bold())
-                Text(headerSubtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-        }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 16)
-    }
-
-    private var headerSubtitle: String {
-        switch destination {
-        case .home: return "选择一个工具开始，不会启动常驻推理进程"
-        case .modelConversion: return "把 BlinkDL 原生 RWKV-7 权重转换为 Preen 可用模型"
-        case .modelQuantization: return "把 BF16 模型量化为 int8，推理更快、内存更省近一半"
-        case .datasetPreview: return "查看真实模板文本、token 长度与截断风险"
-        case .datasetConversion: return "把外部数据集转换为训练可直接读取的标准 JSONL"
-        }
-    }
-
     @ViewBuilder
-    private var detail: some View {
+    private func detail(for destination: Destination) -> some View {
         switch destination {
-        case .home:
-            toolboxHome
         case .modelConversion:
             modelConversionView
         case .modelQuantization:
@@ -151,32 +128,32 @@ struct ToolboxView: View {
                 Form {
                     Section {
                         toolRow(
+                            destination: .modelConversion,
                             title: "模型转换",
                             description: "将原生 RWKV-7 .pth 转为 HF safetensors 模型目录。",
-                            icon: "shippingbox.and.arrow.backward",
-                            tint: .blue
-                        ) { destination = .modelConversion }
+                            icon: "shippingbox.and.arrow.backward"
+                        )
 
                         toolRow(
+                            destination: .modelQuantization,
                             title: "模型量化",
                             description: "把 BF16 模型转为 int8，推理更快、内存更省近一半。",
-                            icon: "speedometer",
-                            tint: .orange
-                        ) { destination = .modelQuantization }
+                            icon: "speedometer"
+                        )
 
                         toolRow(
+                            destination: .datasetPreview,
                             title: "数据集预览",
                             description: "探测格式，查看最终训练文本和 token 截断情况。",
-                            icon: "doc.text.magnifyingglass",
-                            tint: .purple
-                        ) { destination = .datasetPreview }
+                            icon: "doc.text.magnifyingglass"
+                        )
 
                         toolRow(
+                            destination: .datasetConversion,
                             title: "数据集转换",
                             description: "把 Alpaca、ShareGPT、ChatML 或裸 QA 转成标准 JSONL。",
-                            icon: "arrow.triangle.2.circlepath.doc.on.clipboard",
-                            tint: .green
-                        ) { destination = .datasetConversion }
+                            icon: "arrow.triangle.2.circlepath.doc.on.clipboard"
+                        )
                     }
                 }
                 .formStyle(.grouped)
@@ -188,13 +165,12 @@ struct ToolboxView: View {
     }
 
     private func toolRow(
+        destination: Destination,
         title: String,
         description: String,
-        icon: String,
-        tint: Color,
-        action: @escaping () -> Void
+        icon: String
     ) -> some View {
-        Button(action: action) {
+        NavigationLink(value: destination) {
             HStack(spacing: 12) {
                 Image(systemName: icon)
                     .font(.system(size: 15, weight: .medium))
@@ -209,9 +185,6 @@ struct ToolboxView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.tertiary)
             }
             .contentShape(Rectangle())
         }
@@ -221,110 +194,120 @@ struct ToolboxView: View {
     // MARK: - 模型转换
 
     private var modelConversionView: some View {
-        toolScroll {
-            surface {
-                toolPathRow("原生模型", detail: ".pth", path: store.modelSourcePath,
-                            acceptsDrop: true,
-                            onDropPath: { url in
-                        selectModelSource(url)
-                    }) {
-                    if let url = pickFile(allowedContentTypes: [Self.pthContentType]) {
-                        selectModelSource(url)
-                    }
-                }
-
-                Divider()
-
-                toolPathRow("输出目录", detail: nil, path: store.modelOutputPath) {
-                    if let url = pickSave(defaultName: modelDefaultName) {
-                        store.modelOutputPath = url.path
-                    }
-                }
-
-                Divider()
-
-                VStack(alignment: .leading, spacing: 0) {
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            advancedModelOptions.toggle()
+        VStack(spacing: 0) {
+            toolScroll {
+                surface {
+                    toolPathRow("原生模型", detail: ".pth", path: store.modelSourcePath,
+                                acceptsDrop: true,
+                                onDropPath: { url in
+                            selectModelSource(url)
+                        }) {
+                        if let url = pickFile(allowedContentTypes: [Self.pthContentType]) {
+                            selectModelSource(url)
                         }
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "chevron.right")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.tertiary)
-                                .rotationEffect(.degrees(advancedModelOptions ? 90 : 0))
-                            Text("高级选项")
-                            Spacer(minLength: 0)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
 
-                    if advancedModelOptions {
-                        HStack {
-                            Text("权重精度")
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Picker("权重精度", selection: $store.modelPrecision) {
-                                Text("BF16（推荐）").tag("bf16")
-                                Text("FP16").tag("fp16")
-                                Text("FP32").tag("fp32")
+                    Divider()
+
+                    toolPathRow("输出目录", detail: nil, path: store.modelOutputPath) {
+                        if let url = pickSave(defaultName: modelDefaultName) {
+                            store.modelOutputPath = url.path
+                        }
+                    }
+
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: 0) {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                advancedModelOptions.toggle()
                             }
-                            .labelsHidden()
-                            .frame(width: 180)
-                            .disabled(store.isRunning)
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "chevron.right")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.tertiary)
+                                    .rotationEffect(.degrees(advancedModelOptions ? 90 : 0))
+                                Text("高级选项")
+                                Spacer(minLength: 0)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
                         }
-                        .padding(.top, 10)
+                        .buttonStyle(.plain)
 
-                        Text("仅决定转换后模型权重格式。State 训练仍保持 fp32 累加。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
+                        if advancedModelOptions {
+                            HStack {
+                                Text("权重精度")
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Picker("权重精度", selection: $store.modelPrecision) {
+                                    Text("BF16（推荐）").tag("bf16")
+                                    Text("FP16").tag("fp16")
+                                    Text("FP32").tag("fp32")
+                                }
+                                .labelsHidden()
+                                .frame(width: 180)
+                                .disabled(store.isRunning)
+                            }
+                            .padding(.top, 10)
 
-            HStack {
-                if store.isRunning {
-                    Button("取消") { store.cancel() }
-                        .buttonStyle(.bordered)
-                }
-                Spacer()
-                Button {
-                    if store.modelOutputRequiresConfirmation {
-                        showingOverwriteConfirmation = true
-                    } else {
-                        store.convertModel()
-                    }
-                } label: {
-                    Label("开始转换", systemImage: "arrow.right.circle.fill")
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .disabled(!store.canConvertModel)
-            }
-
-            jobStatus(for: "model")
-
-            if let result = store.modelResult {
-                successSurface(title: "转换完成") {
-                    LabeledContent("模型目录", value: result.outputPath)
-                    LabeledContent("权重", value: "\(result.tensorCount) 个张量 · \(result.precision.uppercased())")
-                    if let layers = result.numHiddenLayers {
-                        LabeledContent("结构", value: "\(layers) 层 · hidden \(result.hiddenSize ?? 0)")
-                    }
-                    HStack {
-                        Button("设为当前模型") { onSelectModel(result.outputPath) }
-                            .buttonStyle(.borderedProminent)
-                        Button("在 Finder 中显示") {
-                            reveal(path: result.outputPath)
+                            Text("仅决定转换后模型权重格式。State 训练仍保持 fp32 累加。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                     }
-                    .padding(.top, 4)
+                }
+
+                jobStatus(for: "model")
+
+                if let result = store.modelResult {
+                    successSurface(title: "转换完成") {
+                        LabeledContent("模型目录", value: result.outputPath)
+                        LabeledContent("权重", value: "\(result.tensorCount) 个张量 · \(result.precision.uppercased())")
+                        if let layers = result.numHiddenLayers {
+                            LabeledContent("结构", value: "\(layers) 层 · hidden \(result.hiddenSize ?? 0)")
+                        }
+                        HStack {
+                            Button("设为当前模型") { onSelectModel(result.outputPath) }
+                                .buttonStyle(.borderedProminent)
+                            Button("在 Finder 中显示") {
+                                reveal(path: result.outputPath)
+                            }
+                        }
+                        .padding(.top, 4)
+                    }
                 }
             }
+
+            modelConversionFooter
         }
+    }
+
+    private var modelConversionFooter: some View {
+        HStack {
+            if store.isRunning {
+                Button("取消") { store.cancel() }
+                    .buttonStyle(.bordered)
+            }
+            Spacer()
+            Button {
+                if store.modelOutputRequiresConfirmation {
+                    showingOverwriteConfirmation = true
+                } else {
+                    store.convertModel()
+                }
+            } label: {
+                Label("开始转换", systemImage: "arrow.right.circle.fill")
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(!store.canConvertModel)
+        }
+        .frame(maxWidth: Self.contentWidth)
+        .padding(.horizontal, Self.groupedFormInset)
+        .padding(.bottom, 24)
+        .frame(maxWidth: .infinity)
     }
 
     // MARK: - 模型量化
@@ -491,7 +474,7 @@ struct ToolboxView: View {
         store.datasetOutputPath = PythonResolver.datasetsDirectory
             .appendingPathComponent(url.deletingPathExtension().lastPathComponent + ".standard.jsonl")
             .path
-        if destination == .datasetPreview, !modelPath.isEmpty {
+        if path.last == .datasetPreview, !modelPath.isEmpty {
             store.previewDataset(modelPath: modelPath)
         }
     }
@@ -773,8 +756,10 @@ struct ToolboxView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     content()
                 }
-                .padding(24)
-                .frame(maxWidth: 920, alignment: .leading)
+                .frame(maxWidth: Self.contentWidth, alignment: .leading)
+                .padding(.horizontal, Self.groupedFormInset)
+                .padding(.top, 39)
+                .padding(.bottom, 24)
                 .frame(maxWidth: .infinity, alignment: .top)
             }
             .onChange(of: store.datasetPreviewPage) { _, _ in
