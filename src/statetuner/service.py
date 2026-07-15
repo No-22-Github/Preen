@@ -22,8 +22,6 @@ class TrainingRequest:
     export_pth: bool = False
     pth_out: Optional[Path] = None
     drop_truncated: bool = False  # True = 丢弃截头样本;False(默认)= 截头保尾继续训练
-    fast_wkv: bool = False  # True = WKV7 走 Metal checkpoint kernel(实验性);False = ops 循环(默认)
-    fast_wkv_chunk: int = 32  # checkpoint chunk(32/16/8);越小越精确,反向重构次数越多
 
 
 @dataclass(frozen=True)
@@ -130,17 +128,25 @@ def run_training(
 
     notify = status or (lambda _: None)
     cfg = request.train_config
-    # patch 选择:fast_wkv=True 走 Metal checkpoint kernel(实验),否则走 ops 循环(默认)。
-    # load_model(patch=True) 内部默认调 patch_rwkv7_for_train(ops);fast 模式需在
-    # load 前先 monkeypatch(load_model 的 patch 分支会再次调 ops patch 覆盖,故 fast
-    # 模式直接传 patch=False 跳过 load_model 的默认 patch,改由这里显式调 fast patch)。
-    if request.fast_wkv:
+    # WKV7 kernel 模式选择(见 docs/decision-fast-wkv7.md):
+    #   metal(默认)= Metal checkpoint kernel,6.67× 加速(长序列);梯度经三轮实验验证数值等价 ops。
+    #   ops = Python _wkv7_step_ops 循环,慢但可微基线;排查 Metal 路径问题时用 --no-fast-wkv 回退。
+    # load_model(patch=True) 内部调 patch_rwkv7_for_train(ops);metal 模式需在 load 前
+    # 先 monkeypatch,且传 patch=False 跳过 load_model 的默认 ops patch(否则会覆盖)。
+    use_metal = cfg.wkv_mode == "metal"
+    if use_metal:
         from .core import patch_rwkv7_for_train_fast
-        notify(f"加载模型 {request.model} (patch Metal kernel [实验] chunk={request.fast_wkv_chunk}, template={request.template})")
-        patch_rwkv7_for_train_fast(chunk=request.fast_wkv_chunk)
+        notify(
+            f"加载模型 {request.model} | WKV7: Metal checkpoint kernel "
+            f"(chunk={cfg.wkv_chunk}, template={request.template})"
+        )
+        patch_rwkv7_for_train_fast(chunk=cfg.wkv_chunk)
         model, tokenizer = load_model(str(request.model), patch=False)
     else:
-        notify(f"加载模型 {request.model} (patch ops 路径, template={request.template})")
+        notify(
+            f"加载模型 {request.model} | WKV7: ops 循环 [慢速基线] "
+            f"(template={request.template})"
+        )
         model, tokenizer = load_model(str(request.model), patch=True)
     model.freeze()
 

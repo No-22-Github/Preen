@@ -220,14 +220,15 @@ def train(
         help="MLX buffer cache 上限;auto=物理内存×25%(默认,16G机≈4.3G),或直接给 GB 数。设小降 RSS,必须在模型加载前生效。",
     ),
     fast_wkv: bool = typer.Option(
-        False, "--fast-wkv",
-        help="[实验] WKV7 走 Metal checkpoint kernel(隔离测得 ~13× kernel 提速)。默认 False=ops 循环。"
-             " 端到端提速受 matmul 摊薄,跑完对照 events.jsonl 裁决是否采纳。",
+        True, "--fast-wkv/--no-fast-wkv",
+        help="WKV7 走 Metal checkpoint kernel(默认开,长序列 6.67× 加速,见 "
+             "docs/decision-fast-wkv7.md)。--no-fast-wkv 回退 Python ops 循环(慢但可微基线,"
+             "排查 Metal 路径问题时用)。",
     ),
     fast_wkv_chunk: int = typer.Option(
-        32, "--fast-wkv-chunk",
-        help="[实验] checkpoint 反向 chunk(32/16/8)。越小梯度越精确((1/w)^chunk 放大越小),"
-             "但反向重构次数越多。深层网络建议 16 或 8。",
+        16, "--fast-wkv-chunk",
+        help="Metal checkpoint kernel 的反向 chunk(32/16/8,默认 16)。越小梯度越精确"
+             "((1/w)^chunk 放大越小),但反向重构次数越多。三轮实验验证 16 为最优。",
     ),
 ):
     """训练 state tuning。事件流输出到 stdout(JSON lines)。
@@ -279,6 +280,8 @@ def train(
         early_stop=early_stop, early_stop_patience=patience,
         checkpoint_dir=checkpoint_dir, checkpoint_every=checkpoint_every,
         resume=resume, seed=seed,
+        wkv_mode="metal" if fast_wkv else "ops",
+        wkv_chunk=fast_wkv_chunk,
     )
 
     request = TrainingRequest(
@@ -292,8 +295,6 @@ def train(
         export_pth=export_pth,
         pth_out=pth_out,
         drop_truncated=drop_truncated,
-        fast_wkv=fast_wkv,
-        fast_wkv_chunk=fast_wkv_chunk,
     )
 
     def _status(message: str) -> None:

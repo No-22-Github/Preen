@@ -69,6 +69,12 @@ class TrainConfig:
     # 中断恢复
     resume: Optional[PathLike] = None
 
+    # WKV7 kernel 模式(基础设施配置,影响训练行为 + 排查)
+    #   "metal" = Metal checkpoint kernel(默认,6.67× 加速,见 docs/decision-fast-wkv7.md)
+    #   "ops"   = Python _wkv7_step_ops 循环(可微基线,慢;排查 Metal 路径问题时回退)
+    wkv_mode: str = "metal"
+    wkv_chunk: int = 16  # Metal kernel 的 checkpoint chunk(32/16/8;16 经三轮实验验证)
+
     seed: int = 42
 
     def total_steps(self, n_samples: int) -> int:
