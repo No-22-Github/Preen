@@ -70,19 +70,34 @@ def patch_rwkv7_for_train_fast() -> None:
     state 透传给 kernel 作为 h_in(可训练 S₀ 梯度全通,实验验证)。
 
     何时用:--fast-wkv 开关显式开启。默认仍走 patch_rwkv7_for_train(ops 路径)。
-    约束:T(序列长)必须 %32==0(checkpoint kernel 约束);T 在一次 run 内固定。
-    kernel 按 (H,T) JIT 缓存,首次调用编译一次,后续命中缓存。
+    kernel 约束 T % 32 == 0;逐样本训练管线下样本长度不固定且常非 32 倍数,
+    故闭包内就地 pad 到 32 倍数(末尾补零)、算完 slice 回真实 L。因果递归保证
+    pad 段对真实 token 的 y 零影响(见下)。kernel 按 (H, L_pad) JIT 缓存。
     """
 
     def _wkv7_fast(self, r, w, k, v, a, b, state):
-        B, L, _, _ = r.shape
-        H = self.num_heads
-        D = self.head_dim
+        B, L, H, D = *r.shape[:2], self.num_heads, self.head_dim
         if state is None:
             state = mx.zeros((B, H, D, D), dtype=r.dtype)
-        # 按 (H,L) 查/建 kernel;一次训练 run 内 L 固定,只 JIT 一次。
-        wkv7 = make_wkv7_checkpoint(B, L, H, D)
+
+        # checkpoint kernel 要求 T % 32 == 0;pad 序列末尾到 32 倍数。
+        # pad 段 r/k/v/a/b=0、w=1.0:递归 h = 1.0*h + 0 + 0 = h 不变(state 原样
+        # 穿过 pad 段),因果性保证 pad 段对真实 token 的 y 零影响。返回的 h_out
+        # 含 pad 段递归但训练下游不用(S₀ 每步重新注入),故 w pad 值无副作用。
+        L_pad = ((L + 31) // 32) * 32
+        if L_pad != L:
+            pad = L_pad - L
+            r = mx.pad(r, [(0, 0), (0, pad), (0, 0), (0, 0)])
+            w = mx.pad(w, [(0, 0), (0, pad), (0, 0), (0, 0)], constant_values=1.0)
+            k = mx.pad(k, [(0, 0), (0, pad), (0, 0), (0, 0)])
+            v = mx.pad(v, [(0, 0), (0, pad), (0, 0), (0, 0)])
+            a = mx.pad(a, [(0, 0), (0, pad), (0, 0), (0, 0)])
+            b = mx.pad(b, [(0, 0), (0, pad), (0, 0), (0, 0)])
+
+        wkv7 = make_wkv7_checkpoint(B, L_pad, H, D)
         y, h_out = wkv7(r, w, k, v, a, b, state)
+        # slice 回真实 L(pad 段 y 丢弃)。
+        y = y[:, :L] if L_pad != L else y
         return y.astype(r.dtype), h_out.astype(state.dtype)
 
     Rwkv7TimeMixing._wkv7 = _wkv7_fast
