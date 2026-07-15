@@ -167,6 +167,10 @@ temp/
 experiments/p0_translate/checkpoints_*/
 .zcode/
 
+# ── test/:外部仓库 clone(rwkv-metal/metal-wkv7/rwkv-mlx)+ 一次性 benchmark 脚本
+# 不进版本库;实验分支 exp/wkv7-metal 只承载对 src/ 的改动。
+test/
+
 # ── 精度实验:裁决报告不进 git(内部留档,decision-precision.md 是对外结论)
 experiments/mixed_precision/report_*.md
 
