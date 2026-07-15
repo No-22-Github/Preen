@@ -118,7 +118,7 @@ struct TrainingRunDetailView: View {
         events = await appState.runRepository.loadEvents(id: run.id)
         stderrLog = await appState.runRepository.loadStderr(id: run.id)
         let store = TrainStore()
-        events.forEach { store.consume(event: $0) }
+        store.replay(events: events)
         replayStore = store
     }
 

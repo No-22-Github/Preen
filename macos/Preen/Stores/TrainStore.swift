@@ -217,7 +217,20 @@ final class TrainStore {
 
     // MARK: - 事件消费(穷举,不许 default — design.md §4.2)
 
+    /// 实时训练事件入口。装配数据后执行全部实时副作用(Dock / 通知 / backendStore / 持久化)。
+    /// 历史回放用 `replay(events:)`,只装配数据、不触发任何对外副作用。
     func consume(event: TrainEvent) {
+        applyDataOnly(event)
+        applySideEffects(for: event)
+    }
+
+    /// 仅装配 chart 与状态字段,无任何对外副作用。历史详情回放专用。
+    /// 副作用(Dock/通知/全局 backendStore/持久化)只在实时 `consume` 路径触发,不泄漏到回放。
+    func replay(events: [TrainEvent]) {
+        for event in events { applyDataOnly(event) }
+    }
+
+    private func applyDataOnly(_ event: TrainEvent) {
         switch event {
         case .start(let config, _):
             configSnapshot = config
@@ -236,8 +249,6 @@ final class TrainStore {
                 step: step, loss: loss, learningRate: lr, epoch: currentEpoch, timestamp: timestamp
             ))
             updateEta(step: step, timestamp: timestamp)
-            backendStore.updateTrainingProgress(step: step, secondsPerStep: currentSecondsPerStep)
-            dockProgress.update(progress: progress)
         case .epochEnd(let epoch, let loss, let stateStd, _, let heldOut, let best, _, _):
             currentEpoch = epoch
             let epochEndStep = actualEpochEndStep(epoch: epoch)
@@ -268,12 +279,36 @@ final class TrainStore {
             }
         case .completed(let path, let elapsed, _, _):
             // ✅ 唯一可信完成信号。
-            let shouldNotify = state == .running || state == .finishing
             self.outputPath = path
             self.elapsed = elapsed
             if totalSteps > 0 { currentStep = totalSteps - 1 }
             estimatedRemainingSeconds = 0
             state = .completed
+        case .failed(let message, _, _):
+            self.errorMessage = message
+            state = .failed
+        case .cancelled(let message, _):
+            self.cancelledMessage = message
+            state = .cancelled
+        case .unknown:
+            // 演进兜底:Python 加新事件类型不让旧 app 崩。
+            // 不切状态,只计数(UI 可提示「收到未知事件 N 次,建议升级」)。
+            unknownEventCount += 1
+            #if DEBUG
+            print("[TrainStore] unknown event: \(event)")
+            #endif
+        }
+    }
+
+    /// 实时训练专属副作用。回放(`replay`)不调用。
+    private func applySideEffects(for event: TrainEvent) {
+        switch event {
+        case .step(let step, _, _, _, _, _):
+            backendStore.updateTrainingProgress(step: step, secondsPerStep: currentSecondsPerStep)
+            dockProgress.update(progress: progress)
+        case .completed(let path, _, _, _):
+            // ✅ 唯一可信完成信号。
+            let shouldNotify = state == .running || state == .finishing
             backendStore.updateTraining(phase: .idle, message: "训练已完成")
             if shouldNotify {
                 finishBackgroundFeedback(
@@ -283,23 +318,15 @@ final class TrainStore {
             }
         case .failed(let message, _, _):
             let shouldNotify = state == .running || state == .finishing
-            self.errorMessage = message
-            state = .failed
             backendStore.updateTraining(phase: .failed, message: message)
             if shouldNotify { finishBackgroundFeedback(title: "训练失败", body: message) }
         case .cancelled(let message, _):
             let shouldNotify = state == .running || state == .finishing
-            self.cancelledMessage = message
-            state = .cancelled
             backendStore.updateTraining(phase: .idle, message: "训练已取消")
             if shouldNotify { finishBackgroundFeedback(title: "训练已取消", body: message) }
-        case .unknown:
-            // 演进兜底:Python 加新事件类型不让旧 app 崩。
-            // 不切状态,只计数(UI 可提示「收到未知事件 N 次,建议升级」)。
-            unknownEventCount += 1
-            #if DEBUG
-            print("[TrainStore] unknown event: \(event)")
-            #endif
+        case .start, .resume, .epochStart, .epochEnd, .stdWarning,
+             .checkpoint, .earlyStop, .final, .unknown:
+            break
         }
         updatePersistedRun(with: event)
     }
