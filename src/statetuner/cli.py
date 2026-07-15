@@ -219,6 +219,11 @@ def train(
         "auto", "--cache-limit-gb",
         help="MLX buffer cache 上限;auto=物理内存×25%(默认,16G机≈4.3G),或直接给 GB 数。设小降 RSS,必须在模型加载前生效。",
     ),
+    fast_wkv: bool = typer.Option(
+        False, "--fast-wkv",
+        help="[实验] WKV7 走 Metal checkpoint kernel(隔离测得 ~13× kernel 提速)。默认 False=ops 循环。"
+             " 端到端提速受 matmul 摊薄,跑完对照 events.jsonl 裁决是否采纳。",
+    ),
 ):
     """训练 state tuning。事件流输出到 stdout(JSON lines)。
 
@@ -282,6 +287,7 @@ def train(
         export_pth=export_pth,
         pth_out=pth_out,
         drop_truncated=drop_truncated,
+        fast_wkv=fast_wkv,
     )
 
     def _status(message: str) -> None:

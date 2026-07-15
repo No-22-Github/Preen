@@ -22,6 +22,7 @@ class TrainingRequest:
     export_pth: bool = False
     pth_out: Optional[Path] = None
     drop_truncated: bool = False  # True = 丢弃截头样本;False(默认)= 截头保尾继续训练
+    fast_wkv: bool = False  # True = WKV7 走 Metal checkpoint kernel(实验性);False = ops 循环(默认)
 
 
 @dataclass(frozen=True)
@@ -128,8 +129,18 @@ def run_training(
 
     notify = status or (lambda _: None)
     cfg = request.train_config
-    notify(f"加载模型 {request.model} (patch ops 路径, template={request.template})")
-    model, tokenizer = load_model(str(request.model), patch=True)
+    # patch 选择:fast_wkv=True 走 Metal checkpoint kernel(实验),否则走 ops 循环(默认)。
+    # load_model(patch=True) 内部默认调 patch_rwkv7_for_train(ops);fast 模式需在
+    # load 前先 monkeypatch(load_model 的 patch 分支会再次调 ops patch 覆盖,故 fast
+    # 模式直接传 patch=False 跳过 load_model 的默认 patch,改由这里显式调 fast patch)。
+    if request.fast_wkv:
+        from .core import patch_rwkv7_for_train_fast
+        notify(f"加载模型 {request.model} (patch Metal kernel [实验], template={request.template})")
+        patch_rwkv7_for_train_fast()
+        model, tokenizer = load_model(str(request.model), patch=False)
+    else:
+        notify(f"加载模型 {request.model} (patch ops 路径, template={request.template})")
+        model, tokenizer = load_model(str(request.model), patch=True)
     model.freeze()
 
     # 数据分流(§4.3):importer 产物(带 .import.json sidecar)走标准 loader,

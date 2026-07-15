@@ -29,6 +29,8 @@ import mlx.core as mx
 import mlx.nn as nn
 from mlx_lm.models.rwkv7 import Rwkv7TimeMixing, _wkv7_step_ops
 
+from .fast_wkv7 import make_wkv7_checkpoint
+
 # state 参数类型: {layer_idx: mx.array(H,D,D)} 或路径(npz/pth)或 None(零 state)
 StateInput = Optional[Union[Dict[int, "mx.array"], str, Path]]
 
@@ -58,6 +60,32 @@ def patch_rwkv7_for_train() -> None:
         return y, state
 
     Rwkv7TimeMixing._wkv7 = _wkv7_train
+
+
+def patch_rwkv7_for_train_fast() -> None:
+    """Monkeypatch(fast path):_wkv7 走 Metal checkpoint kernel(实验性)。
+
+    与 patch_rwkv7_for_train 等价替换 _wkv7,但底层走 fast_wkv7 的整段 Metal
+    kernel(forward+backward 各一次 dispatch)而非 Python ops 循环。
+    state 透传给 kernel 作为 h_in(可训练 S₀ 梯度全通,实验验证)。
+
+    何时用:--fast-wkv 开关显式开启。默认仍走 patch_rwkv7_for_train(ops 路径)。
+    约束:T(序列长)必须 %32==0(checkpoint kernel 约束);T 在一次 run 内固定。
+    kernel 按 (H,T) JIT 缓存,首次调用编译一次,后续命中缓存。
+    """
+
+    def _wkv7_fast(self, r, w, k, v, a, b, state):
+        B, L, _, _ = r.shape
+        H = self.num_heads
+        D = self.head_dim
+        if state is None:
+            state = mx.zeros((B, H, D, D), dtype=r.dtype)
+        # 按 (H,L) 查/建 kernel;一次训练 run 内 L 固定,只 JIT 一次。
+        wkv7 = make_wkv7_checkpoint(B, L, H, D)
+        y, h_out = wkv7(r, w, k, v, a, b, state)
+        return y.astype(r.dtype), h_out.astype(state.dtype)
+
+    Rwkv7TimeMixing._wkv7 = _wkv7_fast
 
 
 def make_state_params(model, dtype=mx.float32) -> Dict[int, "mx.array"]:
