@@ -3,10 +3,10 @@
 
 引擎(InferenceEngine.generate)内置了 prefill/decode 分段计时:
   step 0 = 整个 prompt 并行 prefill
-  step>0 = 逐 token 串行 decode
+  step>0 = 首 token 就绪后的连续 decode 墙钟区间，按实际前向次数计数
 所以无需自己插桩,直接读 GenerationResult.prompt_tps / generation_tps。
 
-默认一次跑 3 个 prefill 档位(1024 / 2048 / 4096 token),每档多次取平均,
+默认一次跑 3 个 prefill 档位(1024 / 2048 / 4096 token),每档多次取中位数,
 最后打印一张 3×3 表格:
 
   Prefill tokens │  prefill t/s  │  decode t/s  │  decode ms/token
@@ -14,22 +14,25 @@
 用法(PYTHONPATH=src 是必须的,src layout):
   PYTHONPATH=src .venv/bin/python tools/bench_inference.py
   PYTHONPATH=src .venv/bin/python tools/bench_inference.py --model models/converted/rwkv7-g1d-0.4b
-  PYTHONPATH=src .venv/bin/python tools/bench_inference.py --runs 5 --max-tokens 256
+  PYTHONPATH=src .venv/bin/python tools/bench_inference.py --runs 7 --max-tokens 256
 
 默认配置:
   - 模型 rwkv7-g1h-1.5b(g1h 是 reasoning 模型 → 默认开 reasoning 方言,否则降智)
   - 三档 prefill: 1024 / 2048 / 4096 token(素材库约 1900 token,超出自动重复填充)
   - qa 模板 + reasoning + think fast(对齐官方 enable_thinking=False 渲染)
   - 贪心 temperature=0(可复现),关掉重复惩罚(纯测速度)
-  - 每档首跑作 warmup 丢弃(MLX 首次前向有编译开销)
-  - 每次推理后 mx.clear_cache() 释放 wired memory,避免档间内存累积
+  - 正式测量前先用首档全局 warmup 4 次,排除进程级编译/频率爬升
+  - 每档再跑 1 次 shape/allocator warmup 丢弃
+  - 正式 runs 连续执行,中间不 clear allocator cache,测常驻 serve 的稳态速度
+  - 档位切换时清空空闲 memory cache,随后先 warmup 再计时
 
-慢测模式(--slow):档与档之间冷却 60s(可带数字如 --slow 90),
-让 GPU 散热、内存压力充分释放,测的是"冷机"稳态性能。
+慢测模式(--slow):全局预热后、以及后续档位之间均冷却 60s
+(可带数字如 --slow 90),使每个正式档位都从“已编译、已散热”的状态开始。
 """
 from __future__ import annotations
 
 import argparse
+import json
 import statistics
 import time
 from pathlib import Path
@@ -110,26 +113,84 @@ def run_once(
 ):
     """跑一次生成,返回 GenerationResult。
 
-    生成后立即 mx.clear_cache() 释放 MLX wired memory,避免多次推理的缓存累积
-    抬高内存基线(对 prefill 测量尤其重要,残留 cache 会让后续档位更慢)。
+    这里故意不 clear MLX memory cache：同一档的正式 runs 要测常驻进程
+    的稳态速度，allocator 冷启动已由该档 warmup 排除。
     """
-    import mlx.core as mx
+    return engine.generate(wrapped, state=state, config=cfg)
 
-    r = engine.generate(wrapped, state=state, config=cfg)
-    mx.clear_cache()
-    return r
+
+def detect_precision(model_path: Path, runtime_quantize: str = "none") -> str:
+    """从 config.json 识别实际权重精度,避免量化目录被误标 bf16。"""
+    if runtime_quantize != "none":
+        return f"{runtime_quantize}-runtime"
+    try:
+        config = json.loads((model_path / "config.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return "unknown"
+    quantization = config.get("quantization") or config.get("quantization_config")
+    if isinstance(quantization, dict):
+        bits = quantization.get("bits")
+        return f"int{bits}" if bits is not None else "quantized"
+    dtype = str(config.get("torch_dtype", config.get("dtype", "unknown"))).lower()
+    return {"bfloat16": "bf16", "float16": "fp16", "float32": "fp32"}.get(
+        dtype, dtype
+    )
+
+
+def median_and_range(values: list[float]) -> tuple[float, float, float]:
+    """返回 (p50, min, max)；空列表统一返回 0。"""
+    if not values:
+        return (0.0, 0.0, 0.0)
+    return (statistics.median(values), min(values), max(values))
+
+
+def stability_warnings(
+    rows: list[dict], threshold_pct: float = 3.0
+) -> list[str]:
+    """按预先锁定的 3% 阈值识别启动/降频污染。
+
+    - 单档 prefill/decode 的 (max-min)/p50 超阈值 → 该档不稳定。
+    - 多档 decode p50 跨档差异超阈值 → 全局运行状态不一致。
+    """
+    warnings: list[str] = []
+
+    def span_pct(center: float, bounds: tuple[float, float]) -> float:
+        return (bounds[1] - bounds[0]) / center * 100 if center > 0 else 0.0
+
+    for row in rows:
+        for label, center_key, range_key in (
+            ("prefill", "prefill_tps", "prefill_range"),
+            ("decode", "decode_tps", "decode_range"),
+        ):
+            spread = span_pct(row[center_key], row[range_key])
+            if spread > threshold_pct:
+                warnings.append(
+                    f"{row['prompt_tokens']} tok {label} 波动 {spread:.1f}% "
+                    f"> {threshold_pct:.1f}%,该档不可用于性能裁决"
+                )
+
+    decode_centers = [row["decode_tps"] for row in rows if row["decode_tps"] > 0]
+    if len(decode_centers) > 1:
+        center = statistics.median(decode_centers)
+        spread = (max(decode_centers) - min(decode_centers)) / center * 100
+        if spread > threshold_pct:
+            warnings.append(
+                f"跨档 decode p50 差异 {spread:.1f}% > {threshold_pct:.1f}%,"
+                "可能仍有启动或热降频污染"
+            )
+    return warnings
 
 
 def cooldown(seconds: int) -> None:
-    """档间冷却:等待 N 秒让 GPU 散热、释放内存压力,带倒计时输出。"""
+    """档间冷却:清空空闲 memory cache 并等待 N 秒散热。"""
     import mlx.core as mx
 
     mx.clear_cache()
-    print(f"[cool] 档间冷却 {seconds}s(释放 GPU 热量/内存压力)...", end="", flush=True)
+    print(f"[cool] 档间冷却 {seconds}s(降低热降频干扰)...", end="", flush=True)
     for remaining in range(seconds, 0, -1):
         print(f"\r[cool] 档间冷却:剩余 {remaining:>3d}s ", end="", flush=True)
         time.sleep(1)
-    print("\r[cool] 冷却完成。                ")
+    print("\r[cool] 冷却完成。" + " " * 64)
 
 
 def main() -> None:
@@ -151,8 +212,8 @@ def main() -> None:
     ap.add_argument(
         "--runs",
         type=int,
-        default=3,
-        help="每档正式跑的次数(不含 warmup,默认 3)",
+        default=5,
+        help="每档正式跑的次数(不含 warmup,默认 5)",
     )
     ap.add_argument(
         "--max-tokens", type=int, default=128, help="每次生成的最大 token 数(默认 128)"
@@ -186,7 +247,13 @@ def main() -> None:
     ap.add_argument(
         "--no-warmup",
         action="store_true",
-        help="跳过 warmup(通常不建议,首跑含 MLX 编译开销)",
+        help="跳过全局和分档 warmup(调试用,不可用于性能裁决)",
+    )
+    ap.add_argument(
+        "--warmup-runs",
+        type=int,
+        default=4,
+        help="正式测量前的全局 warmup 次数(用首档,默认 4)",
     )
     ap.add_argument(
         "--slow",
@@ -195,7 +262,7 @@ def main() -> None:
         const=60,
         default=0,
         metavar="SECONDS",
-        help="档与档之间冷却 N 秒释放 GPU 热量/内存压力(不带数字默认 60s)",
+        help="全局预热后与各档之间冷却 N 秒(不带数字默认 60s)",
     )
     ap.add_argument(
         "--quantize",
@@ -204,7 +271,22 @@ def main() -> None:
         help="加载后运行时量化: none=bf16 原样, int8=group_size=64/bits=8"
         "(跳过 LoRA 低秩小层,见 quantize_predicate)",
     )
+    ap.add_argument(
+        "--decode-backend",
+        choices=["eager", "compile", "pipeline"],
+        default="pipeline",
+        help="decode 后端:eager / 同步 mx.compile / mx.compile+async(默认 pipeline)",
+    )
     args = ap.parse_args()
+
+    if args.runs <= 0:
+        ap.error("--runs 必须 > 0")
+    if args.warmup_runs <= 0:
+        ap.error("--warmup-runs 必须 > 0")
+    if args.max_tokens < 2:
+        ap.error("--max-tokens 必须 >= 2，否则没有 step>0 的 decode 可测")
+    if any(level <= 0 for level in args.levels):
+        ap.error("--levels 必须全部 > 0")
 
     model_path = Path(args.model)
     if not model_path.exists():
@@ -218,24 +300,30 @@ def main() -> None:
         print(f"[setup] MLX cache limit = {limit_bytes / 1e9:.2f} GB")
 
     print(f"[setup] 加载模型: {model_path}")
-    t0 = time.time()
+    t0 = time.perf_counter()
     mdl, tok = load_model(model_path, patch=False)
-    print(f"[setup] 模型加载完成({time.time() - t0:.1f}s)")
+    print(f"[setup] 模型加载完成({time.perf_counter() - t0:.1f}s)")
 
     if args.quantize == "int8":
         import mlx.nn as nn
 
         print("[setup] 运行时量化:int8 group_size=64 ...", end="", flush=True)
-        t0 = time.time()
-        nn.quantize(mdl.model, group_size=64, bits=8, class_predicate=quantize_predicate)
+        t0 = time.perf_counter()
+        # 量化整个外层模型,否则会遗漏 decode 每步必跑的 lm_head。
+        nn.quantize(mdl, group_size=64, bits=8, class_predicate=quantize_predicate)
         n_q = sum(
             1
-            for _, mod in mdl.model.named_modules()
+            for _, mod in mdl.named_modules()
             if type(mod).__name__ == "QuantizedLinear"
         )
-        print(f" 完成({time.time() - t0:.1f}s, {n_q} 个 QuantizedLinear)")
+        print(f" 完成({time.perf_counter() - t0:.1f}s, {n_q} 个 QuantizedLinear)")
 
-    engine = InferenceEngine(mdl, tok)
+    engine = InferenceEngine(
+        mdl,
+        tok,
+        compile_decode=args.decode_backend != "eager",
+        async_decode=args.decode_backend == "pipeline",
+    )
 
     cfg = with_template_stops(
         GenerationConfig(
@@ -249,29 +337,59 @@ def main() -> None:
     )
     state_arg = str(args.state) if args.state else None
     question = "请根据以上材料,用三句话总结量子计算的核心原理与主要挑战。"
+    precision = detect_precision(model_path, args.quantize)
 
     print(
-        f"[setup] 模板={args.template} reasoning={args.reasoning} think={think} | "
-        f"runs={args.runs}/档 max_tokens={args.max_tokens}"
+        f"[setup] 精度={precision} 模板={args.template} "
+        f"reasoning={args.reasoning} think={think} | "
+        f"runs={args.runs}/档 max_tokens={args.max_tokens} mode=steady | "
+        f"global_warmup={0 if args.no_warmup else args.warmup_runs} | "
+        f"decode={engine.decode_backend}"
     )
     print()
 
-    # ── 逐档测试 ──
-    # rows[level] = {prompt_tokens, prefill_tps, decode_tps, ms_per_decode_token}
-    rows = []
-    for idx, level in enumerate(args.levels):
-        # 档间冷却(--slow > 0 时,两档之间等 N 秒;最后一档不空等)
-        if args.slow > 0 and idx > 0:
-            cooldown(args.slow)
+    import mlx.core as mx
 
+    # 预先构造各档 prompt：全局 warmup 和正式测量必须用同一份首档输入。
+    prepared_levels = []
+    for level in args.levels:
         raw_prompt = build_prompt_to_tokens(tok, level, question)
         wrapped = render_prompt(
             raw_prompt, args.template, reasoning=args.reasoning, think=think
         )
-        prompt_token_count = len(tok.encode(wrapped))
+        prepared_levels.append((level, wrapped, len(tok.encode(wrapped))))
+
+    # ── 进程级全局 warmup ──
+    # 用首档完整生成多次，让 decode 图/内核缓存/频率爬升全部收敛。
+    if not args.no_warmup:
+        _, warmup_prompt, _ = prepared_levels[0]
+        print(f"[warmup] 全局预热 {args.warmup_runs} 次(全部丢弃)")
+        for i in range(args.warmup_runs):
+            result = run_once(engine, warmup_prompt, cfg, state=state_arg)
+            print(
+                f"  warmup {i + 1}/{args.warmup_runs}: "
+                f"Prompt {result.prompt_tps:.1f} t/s | "
+                f"Decode {result.generation_tps:.1f} t/s"
+            )
+        print()
+        # slow 模式下先预热再冷却，使第一档与后续档一样：
+        # 内核已编译，但测量前有完整的散热窗口。
+        if args.slow > 0:
+            cooldown(args.slow)
+
+    # ── 逐档测试 ──
+    # rows[level] = {prompt_tokens, prefill_tps, decode_tps, ms_per_decode_token}
+    rows = []
+    for idx, (level, wrapped, prompt_token_count) in enumerate(prepared_levels):
+        # 档间冷却(--slow > 0 时,两档之间等 N 秒;最后一档不空等)
+        if args.slow > 0 and idx > 0:
+            cooldown(args.slow)
+
         print(f"[bench] ── prefill {level} token(实际 {prompt_token_count})──")
 
-        # 每档独立 warmup:避免上一档的 cache 残留影响本档 prefill 计时
+        # 档位间可清空空闲 memory cache；随后必须 warmup，且 warmup
+        # 与正式 runs 之间不再 clear，才是常驻 serve 的稳态口径。
+        mx.clear_cache()
         if not args.no_warmup:
             run_once(engine, wrapped, cfg, state=state_arg)
 
@@ -284,38 +402,44 @@ def main() -> None:
             prefill_tps_list.append(r.prompt_tps)
             decode_tps_list.append(r.generation_tps)
             gen_tokens_list.append(r.token_count)
-            if r.token_count > 0:
-                ms_per_token_list.append(r.generation_time * 1000 / r.token_count)
+            if r.decode_steps > 0:
+                ms_per_token_list.append(
+                    r.generation_time * 1000 / r.decode_steps
+                )
             print(
                 f"  run {i + 1}/{args.runs}: {r.summary_line()}  "
-                f"(gen_tokens={r.token_count})"
+                f"(gen_tokens={r.token_count}, decode_steps={r.decode_steps})"
             )
 
+        prefill_p50, prefill_min, prefill_max = median_and_range(prefill_tps_list)
+        decode_p50, decode_min, decode_max = median_and_range(decode_tps_list)
+        ms_p50, ms_min, ms_max = median_and_range(ms_per_token_list)
         rows.append({
             "level": level,
             "prompt_tokens": prompt_token_count,
-            "prefill_tps": statistics.mean(prefill_tps_list) if prefill_tps_list else 0.0,
-            "decode_tps": statistics.mean(decode_tps_list) if decode_tps_list else 0.0,
-            "ms_per_token": (
-                statistics.mean(ms_per_token_list) if ms_per_token_list else 0.0
-            ),
-            "gen_tokens": (
-                statistics.mean(gen_tokens_list) if gen_tokens_list else 0.0
-            ),
+            "prefill_tps": prefill_p50,
+            "prefill_range": (prefill_min, prefill_max),
+            "decode_tps": decode_p50,
+            "decode_range": (decode_min, decode_max),
+            "ms_per_token": ms_p50,
+            "ms_range": (ms_min, ms_max),
+            "gen_tokens": statistics.median(gen_tokens_list) if gen_tokens_list else 0.0,
         })
+        # 该档正式计时已结束，此处再清理不会污染数据。
+        mx.clear_cache()
         print()
 
     # ── 3×3 表格 ──
-    print_table(model_path.name, rows, args.runs, args.quantize)
+    print_table(model_path.name, rows, args.runs, precision)
 
 
-def print_table(model_name: str, rows: list[dict], runs: int, quantize: str) -> None:
-    """打印 3×3 汇总表格:行=档位,列=prefill tps / decode tps / decode ms/token。"""
-    qtag = f" [{quantize}]" if quantize != "none" else " [bf16]"
+def print_table(model_name: str, rows: list[dict], runs: int, precision: str) -> None:
+    """打印 p50 汇总表 + min–max 稳定性范围。"""
+    qtag = f" [{precision}]"
     print("=" * 62)
-    print(f"  {model_name}{qtag}  (runs={runs}/档, 排除 warmup)")
+    print(f"  {model_name}{qtag}  (runs={runs}/档, steady, 排除 warmup)")
     print("=" * 62)
-    header = f"{'Prefill':>10} │ {'prefill t/s':>12} │ {'decode t/s':>11} │ {'ms/token':>9}"
+    header = f"{'Prefill':>10} │ {'prefill p50':>12} │ {'decode p50':>11} │ {'ms/token':>9}"
     print(header)
     print("─" * len(header))
     for r in rows:
@@ -326,9 +450,24 @@ def print_table(model_name: str, rows: list[dict], runs: int, quantize: str) -> 
             f"{r['ms_per_token']:>9.1f}"
         )
     print("=" * 62)
+    print("  波动范围(min–max):")
+    for r in rows:
+        p_lo, p_hi = r["prefill_range"]
+        d_lo, d_hi = r["decode_range"]
+        m_lo, m_hi = r["ms_range"]
+        print(
+            f"  {r['prompt_tokens']:>7} tok │ prefill {p_lo:.1f}–{p_hi:.1f} t/s │ "
+            f"decode {d_lo:.1f}–{d_hi:.1f} t/s │ {m_lo:.1f}–{m_hi:.1f} ms"
+        )
+    warnings = stability_warnings(rows)
+    if warnings:
+        print("  稳定性警告:")
+        for warning in warnings:
+            print(f"  [warn] {warning}")
+    else:
+        print("  稳定性检查:通过(单档波动与跨档 decode 差异均 <= 3%)")
     print(
-        "  注:prefill t/s 越高越好(并行处理 prompt);"
-        "decode t/s 越高越好、ms/token 越低越好(逐 token 生成)。"
+        "  注:汇总值是 p50 中位数;decode 只按 step>0 的实际前向次数计算。"
     )
 
 

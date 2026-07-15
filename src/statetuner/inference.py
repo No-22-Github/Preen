@@ -108,11 +108,14 @@ class GenerationResult:
     config: GenerationConfig
     # 计时分段(对齐 llama.cpp 的 prompt eval / generation eval 口径)：
     #   prompt_time        = 首次前向(整个 prompt 并行 prefill)耗时
-    #   generation_time    = 后续逐 token 串行 decode 耗时(不含 prefill)
+    #   generation_time    = 首 token 就绪到最后一个 decode token 就绪的墙钟时间
+    #                        (不含 prefill；包含 GPU/CPU 流水重叠后的实际间隔)
+    #   decode_steps       = generation_time 实际覆盖的前向次数
     #   elapsed            = 总耗时 ≈ prompt_time + generation_time
     prompt_tokens: int = 0
     prompt_time: float = 0.0
     generation_time: float = 0.0
+    decode_steps: int = 0
     # Phase 3 §2 新增字段(带默认值,旧的无多轮构造点零改动)
     fed_token_ids: list[int] = field(default_factory=list)
     cache: object = None
@@ -129,10 +132,15 @@ class GenerationResult:
 
     @property
     def generation_tps(self) -> float:
-        """Decode 生成速率（t/s）。无生成或未计时时为 0。"""
+        """连续 decode 出字速率（t/s）。无 decode step 或未计时时为 0。
+
+        step 0 同时完成 prompt prefill 和首 token 采样，计入 prompt_time；
+        generation_time 从首 token 就绪开始，只覆盖 step > 0 的 token 间隔，
+        所以分子必须是 decode_steps，不能用包含首 token 的 token_count。
+        """
         return (
-            self.token_count / self.generation_time
-            if self.generation_time > 0
+            self.decode_steps / self.generation_time
+            if self.decode_steps > 0 and self.generation_time > 0
             else 0.0
         )
 
@@ -254,12 +262,147 @@ def with_template_stops(
     raise ValueError(f"不支持的模板: {template!r}")
 
 
+def _last_token_logits(model, input_ids, caches):
+    """RWKV7 只投影最后一个 hidden，避免构造整段词表 logits。
+
+    prefill 的后续生成只使用最后一个位置的 logits。mlx-lm RWKV7
+    默认会先对 [batch, sequence, hidden] 整段做 lm_head，再由调用方取
+    ``[0, -1]``。这里保留完整 RWKV 主体和 cache 更新，只在进词表投影
+    前取 last hidden。未知模型/测试 mock 仍走原始外层前向。
+    """
+    inner = getattr(model, "model", None)
+    args = getattr(model, "args", None)
+    if getattr(model, "model_type", None) != "rwkv7" or inner is None or args is None:
+        return model(input_ids, caches)[0, -1]
+
+    if getattr(args, "tie_word_embeddings", False):
+        embeddings = getattr(inner, "embeddings", None)
+        projection = getattr(embeddings, "as_linear", None)
+    else:
+        projection = getattr(model, "lm_head", None)
+
+    # 所有能力检查必须在 inner 前向前完成；否则 fallback 会让同一段
+    # input 重复写入 RWKV cache。
+    if not callable(projection):
+        return model(input_ids, caches)[0, -1]
+
+    hidden = inner(input_ids, caches)
+    logits = projection(hidden[:, -1:, :])
+    return logits[0, -1]
+
+
+def _has_quantized_modules(model) -> bool:
+    """量化模型暂不启用整步编译。
+
+    1.5B int8 的稳定 A/B 中整步 ``mx.compile`` 没有可复现收益，而 bf16
+    有约 4% decode 提升。按实测边界保留 int8 原路径，避免用复杂度换零收益。
+    """
+    named_modules = getattr(model, "named_modules", None)
+    if not callable(named_modules):
+        return False
+    return any(
+        type(module).__name__.startswith("Quantized")
+        for _, module in named_modules()
+    )
+
+
+def _read_cache_state(caches):
+    """把 ArraysCache / state 注入用普通 list 统一成可编译的 array tree。
+
+    每层做一次浅拷贝，防止首次 tracing 时 holder 的 ``cache[i] = value``
+    改写调用方正在持有的 Python list；array 本身保持零拷贝。
+    """
+    return [
+        list(cache.state) if hasattr(cache, "state") else list(cache)
+        for cache in caches
+    ]
+
+
+def _write_cache_state(caches, state) -> None:
+    """把编译图返回的 state 写回原 cache，并保留外层对象身份。"""
+    for cache, layer_state in zip(caches, state):
+        if hasattr(cache, "state"):
+            cache.state = list(layer_state)
+        else:
+            cache[:] = layer_state
+
+
+class _CompiledRwkv7Decode:
+    """可跨请求复用的纯函数 RWKV7 单 token 前向。
+
+    cache state 是显式输入/输出，不能作为 ``mx.compile(outputs=...)`` 的
+    闭包状态捕获；否则编译图会绑定某一次生成的 cache，无法安全用于多轮或
+    并列请求。重复惩罚、采样和停止判断仍留在 Python 生成循环中。
+    """
+
+    def __init__(self, model):
+        self._model = model
+        self._cache_holders = model.make_cache()
+        if not self._cache_holders or not all(
+            hasattr(cache, "state") for cache in self._cache_holders
+        ):
+            raise TypeError("RWKV7 compiled decode 需要 ArraysCache 风格 holder")
+
+        def decode_step(input_ids, cache_state):
+            for holder, layer_state in zip(self._cache_holders, cache_state):
+                holder.state = layer_state
+            logits = _last_token_logits(
+                self._model, input_ids, self._cache_holders
+            )
+            return logits, [holder.state for holder in self._cache_holders]
+
+        # 权重是捕获输入；cache 是每次调用显式传入/返回的动态状态。
+        self._step = mx.compile(decode_step, inputs=model.state)
+
+    def __call__(self, input_ids, cache_state):
+        return self._step(input_ids, cache_state)
+
+
+def _make_compiled_rwkv7_decode(model):
+    """能力探测式创建 compiled decode；不支持的模型透明回退原路径。"""
+    if getattr(model, "model_type", None) != "rwkv7":
+        return None
+    if not callable(getattr(model, "make_cache", None)):
+        return None
+    if not hasattr(model, "state") or _has_quantized_modules(model):
+        return None
+    try:
+        return _CompiledRwkv7Decode(model)
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
 class InferenceEngine:
     """RWKV state 注入推理。模型只加载一次，可连续 preview/eval。"""
 
-    def __init__(self, model, tokenizer):
+    def __init__(
+        self,
+        model,
+        tokenizer,
+        *,
+        compile_decode: bool = True,
+        async_decode: bool = True,
+    ):
         self.model = model
         self.tokenizer = tokenizer
+        self._compiled_decode = (
+            _make_compiled_rwkv7_decode(model) if compile_decode else None
+        )
+        self._async_decode = async_decode and self._compiled_decode is not None
+
+    @property
+    def compiled_decode_enabled(self) -> bool:
+        """当前模型是否启用了可复用的 RWKV7 单 token 编译图。"""
+        return self._compiled_decode is not None
+
+    @property
+    def decode_backend(self) -> str:
+        """实际 decode 后端名称，供 benchmark 审计运行口径。"""
+        if self._async_decode:
+            return "mx.compile+async"
+        if self._compiled_decode is not None:
+            return "mx.compile"
+        return "eager"
 
     def load_state(self, state: StateInput):
         """把 npz/pth 一次性载入内存，供常驻 chat 动态切换。"""
@@ -318,7 +461,7 @@ class InferenceEngine:
         stop_reason: StopReason = "max_tokens"
         emitted_text = ""
         final_text = ""
-        t0 = time.time()
+        t0 = time.perf_counter()
         # 重复惩罚 occurrence 表(ChatRWKV 官方语义): {token_id: 衰减后计数}
         occurrence: dict[int, float] = {}
 
@@ -357,20 +500,38 @@ class InferenceEngine:
 
         # 计时分段(对齐 llama.cpp)：
         #   step 0  → 首次前向消化整个 prompt(prefill,并行)
-        #   step>0  → 逐 token decode(串行),累加到 t_gen
-        # t_step 窗口覆盖「前向 + 采样得 next_token」,int() 隐式触发 MLX eval,
-        # 保证 GPU 计算完成才停表。
+        #   step>0  → 首 token 之后的连续 decode 墙钟区间
+        # prompt_time 计到首 token 对 CPU 可见；generation_time 从首 token
+        # 就绪计到最后一个 decode token 就绪。后者用墙钟区间而非逐 step
+        # 阻塞时间求和，才能正确计算 async GPU / CPU 流水重叠后的真实出字速度。
         t_prefill = 0.0
         t_gen = 0.0
+        decode_steps = 0
         prompt_token_count = len(prompt_ids)
+        compiled_cache_state = None
+        pipelined_logits = None
+        generation_started_at = None
 
         for step in range(cfg.max_tokens):
             # abort 检查(§3.3):serve 协议中断信号,每步前检查一次。
             # 默认 None 时短路,零开销。延迟到下一 step 边界(MLX 前向 ~50-200ms)。
             if should_abort is not None and should_abort():
                 raise GenerationAborted()
-            t_step_start = time.time()
-            logits = self.model(input_ids, caches)[0, -1]
+            t_step_start = time.perf_counter()
+            if pipelined_logits is not None:
+                # 上一轮已把依赖 next_token 的 compiled graph 提交给 GPU；
+                # CPU 做 tokenizer/stop/stream 时，这一轮前向可并行执行。
+                logits = pipelined_logits
+            elif step > 0 and self._compiled_decode is not None:
+                # benchmark 的同步 compiled 对照路径；产品默认走上面的 async
+                # pipeline。cache 仍是显式输入/输出，语义完全相同。
+                if compiled_cache_state is None:
+                    compiled_cache_state = _read_cache_state(caches)
+                logits, compiled_cache_state = self._compiled_decode(
+                    input_ids, compiled_cache_state
+                )
+            else:
+                logits = _last_token_logits(self.model, input_ids, caches)
             # 重复惩罚(X3 向量化):ChatRWKV 官方语义 logits[tok] -= presence+cnt*freq。
             # 旧实现是 per-token Python 循环,300 token 对话后期每步几百次 dispatch;
             # 改成 scatter(权重)+ 一次相减,避免每步往图里塞 len(occurrence) 个小 op。
@@ -381,16 +542,41 @@ class InferenceEngine:
                 # scatter-add 取负 = 在 tok_ids 位置减去 penalties(原地语义)
                 logits[tok_ids] -= penalties
             if sampler is None:
-                next_token = int(mx.argmax(logits, axis=-1))
+                next_token_array = mx.argmax(logits, axis=-1)
             else:
                 # logsumexp 替 nn.log_softmax(mlx_lm 做法,更轻量:减一次 max)
                 logprobs = logits - mx.logsumexp(logits, keepdims=True)
-                next_token = int(sampler(logprobs))
-            t_step = time.time() - t_step_start
+                next_token_array = sampler(logprobs)
+
+            # BF16 compiled path 做一拍流水：next_token 保持在 GPU 上，先提交
+            # 下一次 RWKV 前向，再让 CPU 同步读取当前 token。最后一个已知
+            # max_tokens step 不预取，避免固定多算一次；EOS/stop 未知，只能
+            # 投机提交，但命中时丢弃 future_state，不污染返回 cache。
+            future_logits = None
+            future_cache_state = None
+            if self._async_decode and step + 1 < cfg.max_tokens:
+                if compiled_cache_state is None:
+                    # step 0 prefill 完成后，将 ArraysCache / State list 提升为
+                    # compiled graph 的显式 array tree。只做浅拷贝，不搬数据。
+                    compiled_cache_state = _read_cache_state(caches)
+                future_logits, future_cache_state = self._compiled_decode(
+                    next_token_array.reshape((1, 1)), compiled_cache_state
+                )
+                mx.async_eval(future_logits)
+
+            # 唯一 CPU 同步点放在下一步图提交之后。GPU 一旦算出 argmax / sample
+            # 就能继续跑 future_logits，不必等待下面的文本和停止条件处理。
+            next_token = int(next_token_array)
+            token_ready_at = time.perf_counter()
+            t_step = token_ready_at - t_step_start
             if step == 0:
                 t_prefill = t_step
+                # Decode 吞吐按“首 token 已交给 CPU → 后续 token 就绪”的
+                # 用户可见区间计时；所有后端统一口径。
+                generation_started_at = token_ready_at
             else:
-                t_gen += t_step
+                decode_steps += 1
+                t_gen = token_ready_at - generation_started_at
             if next_token == cfg.eos_token:
                 stop_reason = "eos"
                 break
@@ -422,6 +608,11 @@ class InferenceEngine:
             safe_text = decoded_text[:-pending] if pending else decoded_text
             emit_safe_text(safe_text)
             input_ids = mx.array([[next_token]])
+            if future_logits is not None:
+                # 只有确认当前 token 非终止后才推进 state；终止路径保留
+                # compiled_cache_state(即喂入当前 token 之前的干净 cache)。
+                pipelined_logits = future_logits
+                compiled_cache_state = future_cache_state
 
         # flush：EOS/max_tokens 或 stop_sequence 前仍可能有尚未确认的安全文本。
         if stop_reason != "stop_sequence":
@@ -431,16 +622,23 @@ class InferenceEngine:
         # cache 洁净性(§2.2):eos/max_tokens 未产生越界 token,干净;stop_sequence 脏。
         cache_clean = stop_reason != "stop_sequence"
 
+        # 编译路径内部以纯函数 state 续传；成功生成后一次性写回调用方原 cache，
+        # 保留 ChatSession 依赖的 cache 对象身份。abort 抛异常时不提交，且
+        # ChatSession 会按既有规则丢弃该 cache、强制下轮重放。
+        if compiled_cache_state is not None:
+            _write_cache_state(caches, compiled_cache_state)
+
         return GenerationResult(
             text=final_text,
             display_token_ids=generated,
             stop_reason=stop_reason,
-            elapsed=time.time() - t0,
+            elapsed=time.perf_counter() - t0,
             used_state=state is not None,
             config=cfg,
             prompt_tokens=prompt_token_count,
             prompt_time=t_prefill,
             generation_time=t_gen,
+            decode_steps=decode_steps,
             fed_token_ids=fed_token_ids,
             cache=caches,
             cache_clean=cache_clean,

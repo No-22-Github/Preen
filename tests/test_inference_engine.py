@@ -1,8 +1,11 @@
 """P2 独立推理引擎快测（mock 模型，不加载权重）。"""
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
 import mlx.core as mx
+import mlx.nn as nn
 
 from statetuner.inference import (
     GenerationConfig,
@@ -50,6 +53,252 @@ class SequenceModel:
         return mx.array(logits)
 
 
+class LastHiddenInner:
+    """RWKV7 内层 mock：记录主体吃到的序列长度。"""
+
+    def __init__(self):
+        self.input_lengths = []
+
+    def __call__(self, input_ids, caches):
+        self.input_lengths.append(input_ids.shape[1])
+        return mx.zeros((1, input_ids.shape[1], 4))
+
+
+class RecordingProjection:
+    """词表投影 mock：只接受 last hidden，每次生成 A。"""
+
+    def __init__(self):
+        self.input_shapes = []
+
+    def __call__(self, hidden):
+        self.input_shapes.append(hidden.shape)
+        logits = np.zeros((1, hidden.shape[1], 128), dtype=np.float32)
+        logits[0, -1, 65] = 10
+        return mx.array(logits)
+
+
+class FastPathRwkv7Model:
+    model_type = "rwkv7"
+
+    def __init__(self):
+        self.args = SimpleNamespace(tie_word_embeddings=False)
+        self.model = LastHiddenInner()
+        self.lm_head = RecordingProjection()
+
+    def make_cache(self):
+        return []
+
+    def __call__(self, input_ids, caches):
+        raise AssertionError("RWKV7 快路径不应构造整段 logits")
+
+
+class TinyArraysCache:
+    """compiled decode 测试用的最小 ArraysCache 等价物。"""
+
+    def __init__(self):
+        self.cache = [mx.zeros((1, 1, 1)) for _ in range(3)]
+
+    @property
+    def state(self):
+        return self.cache
+
+    @state.setter
+    def state(self, value):
+        self.cache = value
+
+    def __getitem__(self, index):
+        return self.cache[index]
+
+    def __setitem__(self, index, value):
+        self.cache[index] = value
+
+
+class TinyRwkv7Inner(nn.Module):
+    def __call__(self, input_ids, caches):
+        # hidden 固定，让 lm_head 决定 A/B 排名；cache 则记录最后一个输入，
+        # 用于验证 compiled state 最终确实写回调用方对象。
+        hidden = mx.ones((*input_ids.shape, 1))
+        last = input_ids[:, -1:].astype(mx.float32)[..., None]
+        caches[0][0] = last
+        caches[0][1] = last + 1
+        caches[0][2] = last + 2
+        return hidden
+
+
+class TinyCompiledRwkv7Model(nn.Module):
+    model_type = "rwkv7"
+
+    def __init__(self):
+        super().__init__()
+        self.args = SimpleNamespace(tie_word_embeddings=False)
+        self.model = TinyRwkv7Inner()
+        self.lm_head = nn.Linear(1, 128, bias=False)
+        weight = mx.zeros((128, 1))
+        weight[65, 0] = 10.0
+        weight[66, 0] = 9.5
+        self.lm_head.weight = weight
+
+    def make_cache(self):
+        return [TinyArraysCache()]
+
+
+class QuantizedMarker(nn.Module):
+    pass
+
+
+def test_rwkv7_projects_only_last_hidden_during_prefill():
+    model = FastPathRwkv7Model()
+    result = InferenceEngine(model, DummyTokenizer()).generate(
+        "long",
+        config=GenerationConfig(
+            max_tokens=3,
+            presence_penalty=0,
+            frequency_penalty=0,
+        ),
+    )
+
+    assert result.text == "AAA"
+    assert model.model.input_lengths == [4, 1, 1]
+    assert model.lm_head.input_shapes == [(1, 1, 4)] * 3
+
+
+def test_rwkv7_tied_embeddings_project_only_last_hidden():
+    model = FastPathRwkv7Model()
+    projection = RecordingProjection()
+    model.args.tie_word_embeddings = True
+    model.model.embeddings = SimpleNamespace(as_linear=projection)
+    del model.lm_head
+
+    result = InferenceEngine(model, DummyTokenizer()).generate(
+        "long",
+        config=GenerationConfig(
+            max_tokens=2,
+            presence_penalty=0,
+            frequency_penalty=0,
+        ),
+    )
+
+    assert result.text == "AA"
+    assert projection.input_shapes == [(1, 1, 4)] * 2
+
+
+def test_rwkv7_compiled_decode_matches_eager_and_writes_back_cache():
+    cfg = GenerationConfig(max_tokens=3)
+    compiled_engine = InferenceEngine(TinyCompiledRwkv7Model(), DummyTokenizer())
+    eager_engine = InferenceEngine(
+        TinyCompiledRwkv7Model(), DummyTokenizer(), compile_decode=False
+    )
+
+    assert compiled_engine.compiled_decode_enabled is True
+    assert compiled_engine.decode_backend == "mx.compile+async"
+    assert eager_engine.decode_backend == "eager"
+    compiled = compiled_engine.generate("x", config=cfg)
+    eager = eager_engine.generate("x", config=cfg)
+
+    # penalty 保持在图外后，A(首选)→B(A 被罚)→A 的语义与 eager 完全一致。
+    assert compiled.display_token_ids == eager.display_token_ids == [65, 66, 65]
+    for actual, expected in zip(compiled.cache[0].state, eager.cache[0].state):
+        assert mx.array_equal(actual, expected).item()
+    assert compiled.cache[0].state[0].item() == 66
+
+
+def test_rwkv7_compiled_decode_supports_plain_list_state_cache():
+    engine = InferenceEngine(TinyCompiledRwkv7Model(), DummyTokenizer())
+    result = engine.generate(
+        "x",
+        state={0: mx.zeros((1, 1, 1))},
+        config=GenerationConfig(
+            max_tokens=3,
+            presence_penalty=0,
+            frequency_penalty=0,
+        ),
+    )
+
+    assert result.text == "AAA"
+    assert isinstance(result.cache[0], list)
+    assert result.cache[0][0].item() == 65
+
+
+def test_rwkv7_pipeline_discards_prefetch_on_eos():
+    model = TinyCompiledRwkv7Model()
+    weight = mx.zeros((128, 1))
+    weight[0, 0] = 10.0
+    model.lm_head.weight = weight
+    result = InferenceEngine(model, DummyTokenizer()).generate(
+        "x",
+        config=GenerationConfig(
+            max_tokens=3,
+            presence_penalty=0,
+            frequency_penalty=0,
+        ),
+    )
+
+    assert result.stop_reason == "eos"
+    assert result.decode_steps == 0
+    # 流水线已投机提交 token 0 的下一步，但返回 cache 只能包含 prompt x。
+    assert result.cache[0].state[0].item() == ord("x")
+
+
+def test_rwkv7_pipeline_discards_prefetch_on_stop_sequence():
+    result = InferenceEngine(
+        TinyCompiledRwkv7Model(), DummyTokenizer()
+    ).generate(
+        "x",
+        config=GenerationConfig(
+            max_tokens=3,
+            stop_sequences=("A",),
+            presence_penalty=0,
+            frequency_penalty=0,
+        ),
+    )
+
+    assert result.stop_reason == "stop_sequence"
+    assert result.text == ""
+    # 预测出的 A 没有进入 eager 旧语义的 cache；future_state 必须被丢弃。
+    assert result.cache[0].state[0].item() == ord("x")
+
+
+def test_rwkv7_pipeline_sampling_matches_eager_with_same_seed():
+    cfg = GenerationConfig(
+        max_tokens=5,
+        temperature=0.8,
+        top_p=0.9,
+        seed=7,
+        presence_penalty=0,
+        frequency_penalty=0,
+    )
+    compiled_engine = InferenceEngine(TinyCompiledRwkv7Model(), DummyTokenizer())
+    eager_engine = InferenceEngine(
+        TinyCompiledRwkv7Model(), DummyTokenizer(), compile_decode=False
+    )
+
+    compiled = compiled_engine.generate("x", config=cfg)
+    eager = eager_engine.generate("x", config=cfg)
+    assert compiled.display_token_ids == eager.display_token_ids
+
+
+def test_rwkv7_quantized_model_keeps_eager_decode_path():
+    model = TinyCompiledRwkv7Model()
+    model.quantized_marker = QuantizedMarker()
+    assert InferenceEngine(model, DummyTokenizer()).compiled_decode_enabled is False
+
+
+def test_rwkv7_sync_compiled_backend_is_selectable_for_benchmark():
+    engine = InferenceEngine(
+        TinyCompiledRwkv7Model(), DummyTokenizer(), async_decode=False
+    )
+    result = engine.generate(
+        "x",
+        config=GenerationConfig(
+            max_tokens=3,
+            presence_penalty=0,
+            frequency_penalty=0,
+        ),
+    )
+    assert engine.decode_backend == "mx.compile"
+    assert result.text == "AAA"
+
+
 def test_greedy_result_has_stop_reason_and_tokens():
     engine = InferenceEngine(SequenceModel([72, 73, 0]), DummyTokenizer())
     result = engine.generate("x", config=GenerationConfig(max_tokens=10))
@@ -57,6 +306,7 @@ def test_greedy_result_has_stop_reason_and_tokens():
     assert result.display_token_ids == [72, 73]
     assert result.stop_reason == "eos"
     assert result.token_count == 2
+    assert result.decode_steps == 2  # step 1 生成 I，step 2 生成 eos
     assert result.used_state is False
 
 
@@ -65,6 +315,7 @@ def test_max_tokens_stop_reason():
     result = engine.generate("x", config=GenerationConfig(max_tokens=3))
     assert result.text == "AAA"
     assert result.stop_reason == "max_tokens"
+    assert result.decode_steps == 2  # 3 个前向中 step 0 归 prefill
 
 
 def test_sampling_path_is_seeded_and_callable():
@@ -234,11 +485,30 @@ def test_summary_line_format_is_stable():
         prompt_tokens=10,
         prompt_time=0.5,
         generation_time=0.75,
+        decode_steps=2,
     )
     assert result.summary_line() == (
         "[stop=eos, tokens=2, 1.25s | "
         "Prompt: 20.0 t/s | Generation: 2.7 t/s]"
     )
+
+
+def test_generation_tps_uses_timed_decode_steps_not_all_generated_tokens():
+    """首 token 在 prefill step 里产生，不能计入 generation_time 的分子。"""
+    result = GenerationResult(
+        text="x" * 128,
+        display_token_ids=list(range(128)),
+        stop_reason="max_tokens",
+        elapsed=4.0,
+        used_state=False,
+        config=GenerationConfig(max_tokens=128),
+        prompt_tokens=1024,
+        prompt_time=0.5,
+        generation_time=3.175,
+        decode_steps=127,
+    )
+    assert result.generation_tps == pytest.approx(40.0)
+    assert result.to_dict()["decode_steps"] == 127
 
 
 # ────────────────────────────────────────────────────────────────
