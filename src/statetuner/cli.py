@@ -224,6 +224,11 @@ def train(
         help="[实验] WKV7 走 Metal checkpoint kernel(隔离测得 ~13× kernel 提速)。默认 False=ops 循环。"
              " 端到端提速受 matmul 摊薄,跑完对照 events.jsonl 裁决是否采纳。",
     ),
+    fast_wkv_chunk: int = typer.Option(
+        32, "--fast-wkv-chunk",
+        help="[实验] checkpoint 反向 chunk(32/16/8)。越小梯度越精确((1/w)^chunk 放大越小),"
+             "但反向重构次数越多。深层网络建议 16 或 8。",
+    ),
 ):
     """训练 state tuning。事件流输出到 stdout(JSON lines)。
 
@@ -288,6 +293,7 @@ def train(
         pth_out=pth_out,
         drop_truncated=drop_truncated,
         fast_wkv=fast_wkv,
+        fast_wkv_chunk=fast_wkv_chunk,
     )
 
     def _status(message: str) -> None:

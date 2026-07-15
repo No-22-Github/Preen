@@ -30,21 +30,21 @@ from __future__ import annotations
 import mlx.core as mx
 
 HEAD_SIZE = 64
-CHUNK = 32
+CHUNK = 32  # 默认 chunk;checkpoint 反向误差放大 ~(1/w)^CHUNK,小 CHUNK 更精确
 
 _fwd_cache: dict = {}
 _bwd_cache: dict = {}
 
 
-def _get_ckpt_fwd(H: int, T: int):
-    key = (H, T)
+def _get_ckpt_fwd(H: int, T: int, chunk: int):
+    key = (H, T, chunk)
     if key in _fwd_cache:
         return _fwd_cache[key]
-    N = T // CHUNK
+    N = T // chunk
     hdr = f"""
     constant uint HEAD_SIZE_C = {HEAD_SIZE};
     constant uint T_C         = {T};
-    constant uint CHUNK_C     = {CHUNK};
+    constant uint CHUNK_C     = {chunk};
     constant uint N_CHUNKS_C  = {N};
     constant uint H_C         = {H};
     """
@@ -75,7 +75,7 @@ def _get_ckpt_fwd(H: int, T: int):
     for (uint dk=0; dk<HEAD_SIZE_C; dk++) h_out[hb+dk] = h_row[dk];
     """
     kern = mx.fast.metal_kernel(
-        name=f"wkv7_ckpt_fwd_H{H}_T{T}",
+        name=f"wkv7_ckpt_fwd_H{H}_T{T}_C{chunk}",
         input_names=["r", "w", "k", "v", "a", "b", "h_in"],
         output_names=["out", "h_out", "sa_out", "h_checkpoints"],
         header=hdr, source=src,
@@ -84,15 +84,15 @@ def _get_ckpt_fwd(H: int, T: int):
     return kern
 
 
-def _get_ckpt_bwd(H: int, T: int):
-    key = (H, T)
+def _get_ckpt_bwd(H: int, T: int, chunk: int):
+    key = (H, T, chunk)
     if key in _bwd_cache:
         return _bwd_cache[key]
-    N = T // CHUNK
+    N = T // chunk
     hdr = f"""
     constant uint HEAD_SIZE_C = {HEAD_SIZE};
     constant uint T_C         = {T};
-    constant uint CHUNK_C     = {CHUNK};
+    constant uint CHUNK_C     = {chunk};
     constant uint N_CHUNKS_C  = {N};
     constant uint H_C         = {H};
     """
@@ -175,7 +175,7 @@ def _get_ckpt_bwd(H: int, T: int):
     for (uint dk=0; dk<HEAD_SIZE_C; dk++) dh_in_out[hb+dk] = C_row[dk];
     """
     kern = mx.fast.metal_kernel(
-        name=f"wkv7_ckpt_bwd_H{H}_T{T}",
+        name=f"wkv7_ckpt_bwd_H{H}_T{T}_C{chunk}",
         input_names=["r", "w", "k", "v", "a", "b", "h_ckpts", "sa_fwd", "d_out", "d_h_out"],
         output_names=["dr_out", "dw_out", "dk_out", "dv_out", "da_out", "db_out", "dh_in_out"],
         header=hdr, source=src, atomic_outputs=False,
@@ -184,21 +184,25 @@ def _get_ckpt_bwd(H: int, T: int):
     return kern
 
 
-def make_wkv7_checkpoint(B: int, T: int, H: int, D: int = HEAD_SIZE):
+def make_wkv7_checkpoint(B: int, T: int, H: int, D: int = HEAD_SIZE, chunk: int = CHUNK):
     """创建 wkv7_train 函数,使用 checkpoint Metal kernel。
 
-    B/T/H/D 在此固定 → kernel 按 (H,T) JIT 缓存,只编译一次。
+    B/T/H/D/chunk 在此固定 → kernel 按 (H,T,chunk) JIT 缓存,只编译一次。
     返回的 wkv7_train 接收外部 h_in(可训练 S₀),梯度对 h_in 全通。
 
+    chunk: checkpoint 反向的 chunk 大小。误差放大 ~(1/w)^chunk:
+      chunk=32 → ~(1/0.9)^32 ≈ 30×(默认,快但深层网络梯度误差大)
+      chunk=16 → ~(1/0.9)^16 ≈ 5.3×(更精确,反向重构次数翻倍)
+      chunk=8  → ~(1/0.9)^8 ≈ 2.3×(最精确,反向重构次数 4×)
     与 core._wkv7_train 闭包约定一致:h_in 即 (B,H,D,D) 广播后的可训练 state。
     """
-    assert T % CHUNK == 0, f"T={T} 必须整除 CHUNK={CHUNK}(checkpoint kernel 约束)"
+    assert T % chunk == 0, f"T={T} 必须整除 chunk={chunk}(checkpoint kernel 约束)"
     assert D == HEAD_SIZE, f"D={D} != HEAD_SIZE={HEAD_SIZE}(kernel 硬编码)"
-    N = T // CHUNK
+    N = T // chunk
 
     @mx.custom_function
     def _fwd(r, w, k, v, a, b, h_in):
-        res = _get_ckpt_fwd(H, T)(
+        res = _get_ckpt_fwd(H, T, chunk)(
             inputs=[x.astype(mx.float32) for x in [r, w, k, v, a, b, h_in]],
             grid=(B * H, D, 1), threadgroup=(1, 1, 1),
             output_shapes=[(B, T, H, D), (B, H, D, D), (B, T, H, D), (B, H, N, D, D)],
@@ -211,7 +215,7 @@ def make_wkv7_checkpoint(B: int, T: int, H: int, D: int = HEAD_SIZE):
         r, w, k, v, a, b, h_in = primals
         d_out, d_h_out, _, _ = cotangents
         _, _, sa_fwd, h_ckpts = outputs
-        res = _get_ckpt_bwd(H, T)(
+        res = _get_ckpt_bwd(H, T, chunk)(
             inputs=[x.astype(mx.float32) for x in [r, w, k, v, a, b, h_ckpts, sa_fwd, d_out, d_h_out]],
             grid=(B * H * D, 1, 1), threadgroup=(D, 1, 1),
             output_shapes=[(B, T, H, D)] * 6 + [(B, H, D, D)],

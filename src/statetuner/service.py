@@ -23,6 +23,7 @@ class TrainingRequest:
     pth_out: Optional[Path] = None
     drop_truncated: bool = False  # True = 丢弃截头样本;False(默认)= 截头保尾继续训练
     fast_wkv: bool = False  # True = WKV7 走 Metal checkpoint kernel(实验性);False = ops 循环(默认)
+    fast_wkv_chunk: int = 32  # checkpoint chunk(32/16/8);越小越精确,反向重构次数越多
 
 
 @dataclass(frozen=True)
@@ -135,8 +136,8 @@ def run_training(
     # 模式直接传 patch=False 跳过 load_model 的默认 patch,改由这里显式调 fast patch)。
     if request.fast_wkv:
         from .core import patch_rwkv7_for_train_fast
-        notify(f"加载模型 {request.model} (patch Metal kernel [实验], template={request.template})")
-        patch_rwkv7_for_train_fast()
+        notify(f"加载模型 {request.model} (patch Metal kernel [实验] chunk={request.fast_wkv_chunk}, template={request.template})")
+        patch_rwkv7_for_train_fast(chunk=request.fast_wkv_chunk)
         model, tokenizer = load_model(str(request.model), patch=False)
     else:
         notify(f"加载模型 {request.model} (patch ops 路径, template={request.template})")
