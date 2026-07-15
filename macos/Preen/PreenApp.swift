@@ -27,7 +27,7 @@ struct PreenApp: App {
                 .task {
                     // 首启(或用户保留「启动时显示」)自动弹欢迎窗口作为落脚点。
                     if welcomeShowsAtLaunch {
-                        openWindow(id: "welcome")
+                        appState.isWelcomePresented = true
                     }
                 }
         }
@@ -36,12 +36,6 @@ struct PreenApp: App {
         // 关于 Preen 独立窗口(由状态底栏 info 图标 / app 菜单触发)。
         WindowGroup("关于 Preen", id: "about") {
             AboutView()
-        }
-        .windowResizability(.contentSize)
-
-        // 欢迎使用 Preen 启动器窗口(首启自动弹 / 窗口菜单可再开)。
-        WindowGroup("欢迎使用 Preen", id: "welcome") {
-            WelcomeView(appState: appState)
         }
         .windowResizability(.contentSize)
 
@@ -55,7 +49,7 @@ struct PreenApp: App {
             // 「窗口」菜单增加重新打开欢迎窗口的入口(对齐 Xcode 的 Welcome to Xcode)。
             CommandGroup(after: .windowList) {
                 Button("欢迎使用 Preen") {
-                    openWindow(id: "welcome")
+                    appState.isWelcomePresented = true
                 }
             }
             InspectorCommands()

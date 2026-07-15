@@ -32,9 +32,6 @@ struct WelcomeView: View {
             footer
         }
         .frame(width: 720, height: 460)
-        // 告知主窗口收起侧栏(背景呈空状态);窗口关闭时恢复。
-        .onAppear { appState.isWelcomePresented = true }
-        .onDisappear { appState.isWelcomePresented = false }
     }
 
     // MARK: - 头部:用途一句话

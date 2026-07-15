@@ -121,6 +121,11 @@ struct ContentView: View {
         } message: {
             Text("加载或卸下 State 都会重置会话历史，此操作无法撤销。")
         }
+        // 欢迎窗口:作为主窗口的模态 sheet,从顶部滑出、盖在主窗口上方、锁定(点背景不响应)。
+        // 首启 / 「窗口 → 欢迎使用 Preen」翻 isWelcomePresented=true 弹出;同一标志也驱动侧栏收起。
+        .sheet(isPresented: $appState.isWelcomePresented) {
+            WelcomeView(appState: appState)
+        }
     }
 
     /// 模型选择器(toolbar 下拉菜单 + 精度胶囊,位于窗口中央)。

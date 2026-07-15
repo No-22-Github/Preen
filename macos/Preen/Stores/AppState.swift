@@ -41,8 +41,8 @@ final class AppState {
     var selection: SidebarItem = .training
     var selectedRunID: UUID?
 
-    /// 欢迎窗口是否在前台。为 true 时主窗口收起侧栏,让背景呈空状态(不显杂乱)。
-    /// WelcomeView 出现/消失时翻转,ContentView 据此调 NavigationSplitView 的 columnVisibility。
+    /// 是否显示欢迎窗口(主窗口的模态 sheet)。为 true 时侧栏也会收起,让背景呈空状态。
+    /// 首启 / 「窗口 → 欢迎使用 Preen」菜单翻为 true;sheet 关闭(WelcomeView dismiss / 点背景)翻回 false。
     var isWelcomePresented = false
 
     // === 模型(顶部中央 toolbar 选,全 app 共享)===
