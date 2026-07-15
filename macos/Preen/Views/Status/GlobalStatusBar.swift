@@ -18,11 +18,12 @@ struct GlobalStatusBar: View {
                 Divider().frame(height: 14)
                 Label("\(Int(train.progress * 100))%", systemImage: "chart.line.uptrend.xyaxis")
                 Text("loss \(train.lossDisplay)")
-                if let metric = backend.processMetrics.last {
+                if let metric = backend.latestProcessMetric {
+                    let pressure = train.memoryPressure(for: metric)
                     Text(String(format: "RSS %.2f G", metric.physicalFootprintGB))
                     Text(String(format: "swap %.2f G", metric.swapUsedGB))
-                    Text(pressureLabel(metric.pressure))
-                        .foregroundStyle(pressureColor(metric.pressure))
+                    Text(pressure.displayLabel)
+                        .foregroundStyle(pressure.chartColor)
                     if let seconds = metric.secondsPerStep {
                         Text(String(format: "%.2f s/步", seconds))
                     }
@@ -112,19 +113,4 @@ struct GlobalStatusBar: View {
         }
     }
 
-    private func pressureLabel(_ pressure: MemoryPressureLevel) -> String {
-        switch pressure {
-        case .normal: return "压力正常"
-        case .warning: return "压力警告"
-        case .critical: return "压力严重"
-        }
-    }
-
-    private func pressureColor(_ pressure: MemoryPressureLevel) -> Color {
-        switch pressure {
-        case .normal: return .secondary
-        case .warning: return .orange
-        case .critical: return .red
-        }
-    }
 }

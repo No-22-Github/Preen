@@ -11,6 +11,7 @@ final class BackendStore {
     private(set) var inferenceLog = ""
     private(set) var trainingLog = ""
     private(set) var processMetrics: [ProcessMetric] = []
+    private(set) var latestProcessMetric: ProcessMetric?
     private(set) var currentTrainingStep = 0
     private(set) var currentSecondsPerStep: Double?
 
@@ -63,6 +64,7 @@ final class BackendStore {
 
     func resetTrainingMetrics() {
         processMetrics.removeAll()
+        latestProcessMetric = nil
         currentTrainingStep = 0
         currentSecondsPerStep = nil
     }
@@ -96,8 +98,12 @@ final class BackendStore {
                 if let metric = await Task.detached(priority: .utility, operation: {
                     sampler.sample(pid: pid, step: step, secondsPerStep: seconds)
                 }).value {
-                    processMetrics.append(metric)
-                    if processMetrics.count > 3_600 { processMetrics.removeFirst(processMetrics.count - 3_600) }
+                    latestProcessMetric = metric
+                    if let last = processMetrics.last, last.step == metric.step {
+                        processMetrics[processMetrics.count - 1] = last.mergingPeak(with: metric)
+                    } else {
+                        processMetrics.append(metric)
+                    }
                 }
                 try? await Task.sleep(for: .seconds(1))
             }

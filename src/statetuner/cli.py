@@ -66,6 +66,11 @@ def doctor(
         return
     typer.echo(f"Python: {report['python']}")
     typer.echo(f"平台: {report['platform']} ({report['machine']})")
+    if report.get("chip_name"):
+        typer.echo(
+            f"芯片: {report['chip_name']}"
+            + (f" ({report['hardware_model']})" if report.get("hardware_model") else "")
+        )
     typer.echo(f"Apple Silicon: {'✓' if report['apple_silicon'] else '✗'}")
     for name in ("mlx", "mlx_lm", "ml_dtypes", "numpy"):
         info = report[name]
@@ -73,8 +78,8 @@ def doctor(
     typer.echo(f"Metal: {'✓' if report.get('metal_available') else '✗'}")
     if report.get("metal_available"):
         typer.echo(
-            f"内存: physical={report.get('memory_size_gb', 0):.2f}G "
-            f"working_set={report.get('working_set_gb', 0):.2f}G"
+            f"内存: physical={report.get('memory_size_gib', 0):g}GiB "
+            f"working_set={report.get('working_set_gib', 0):.2f}GiB"
         )
 
 
@@ -180,8 +185,8 @@ def train(
     out: Path = typer.Option(
         Path("state.npz"), "--out", "-o", help="输出训练 state(.npz)"
     ),
-    lr: float = typer.Option(0.01, "--lr", help="学习率(默认 0.01,P0 实测;1.0 会爆炸)"),
-    lr_floor: float = typer.Option(1e-4, "--lr-floor", help="cosine 衰减终点"),
+    lr: float = typer.Option(1e-4, "--lr", help="学习率(默认 0.0001;1.0 会爆炸)"),
+    lr_floor: float = typer.Option(1e-5, "--lr-floor", help="cosine 衰减终点(默认 0.00001)"),
     warmup: int = typer.Option(10, "--warmup", help="warmup 步数"),
     ctx_len: int = typer.Option(512, "--ctx-len", help="上下文长度"),
     epochs: int = typer.Option(20, "--epochs", help="epoch 数(配早停后是上限)"),

@@ -39,8 +39,8 @@ struct TrainingConfig: Equatable {
     var eventsFilePath: String = ""  // 可选,诊断用
 
     // === 超参(默认值与 cli.py 一致)===
-    var lr: Double = 0.01
-    var lrFloor: Double = 1e-4
+    var lr: Double = 1e-4
+    var lrFloor: Double = 1e-5
     var warmup: Int = 10
     var ctxLen: Int = 512
     var epochs: Int = 20
@@ -119,7 +119,7 @@ struct TrainingConfig: Equatable {
     }
 
     /// 折叠摘要的一行(design.md §4 措辞):
-    /// `lr 0.01 · ctx_len 512 · 3 轮 · 早停 patience 3 · seed 42`
+    /// `lr 0.0001 · ctx_len 512 · 3 轮 · 早停 patience 3 · seed 42`
     var summaryLine: String {
         var parts: [String] = [
             "lr \(lr)",

@@ -89,15 +89,20 @@ final class TrainStore {
     private var runner: TrainJobRunner?
     private let repository: RunRepository
     private let backendStore: BackendStore
-    private let dockProgress = DockProgressController()
+    private let dockProgress: any DockProgressControlling
     private let notifications = TrainingNotificationController()
     private var preparationTask: Task<Void, Never>?
     private(set) var currentRun: TrainingRun?
     private(set) var currentRunDirectory: URL?
 
-    init(repository: RunRepository, backendStore: BackendStore) {
+    init(
+        repository: RunRepository,
+        backendStore: BackendStore,
+        dockProgress: (any DockProgressControlling)? = nil
+    ) {
         self.repository = repository
         self.backendStore = backendStore
+        self.dockProgress = dockProgress ?? DockProgressController()
     }
 
     convenience init() {
@@ -110,6 +115,7 @@ final class TrainStore {
     func start(config: TrainingConfig) {
         reset()
         backendStore.resetTrainingMetrics()
+        notifications.prepare()
         dockProgress.update(progress: 0)
         state = .preparing
         let run = TrainingRun(config: config.persisted)
@@ -493,7 +499,23 @@ final class TrainStore {
 
     var processMetrics: [ProcessMetric] { backendStore.processMetrics }
 
-    var latestProcessMetric: ProcessMetric? { backendStore.processMetrics.last }
+    var latestProcessMetric: ProcessMetric? { backendStore.latestProcessMetric }
+
+    /// 训练运行时图表统一使用十进制 GB；doctor 尚未完成时直接读取本机物理内存兜底。
+    var memoryCapacityGB: Double {
+        if let reported = backendStore.runtime.report?.memorySizeGB, reported > 0 {
+            return reported
+        }
+        return Double(ProcessInfo.processInfo.physicalMemory) / 1e9
+    }
+
+    func memoryPressure(for metric: ProcessMetric) -> MemoryPressureLevel {
+        MemoryMetricMath.pressureLevel(
+            footprintGB: metric.physicalFootprintGB,
+            physicalMemoryGB: memoryCapacityGB,
+            systemPressure: metric.pressure
+        )
+    }
 
     /// 把秒数格式化成 `Mm Ss` / `Hh Mm`。
     nonisolated static func formatDuration(_ seconds: Double) -> String {

@@ -1,7 +1,7 @@
 """训练循环产品化。
 
 P0 实验报告 §三/§七 的修正建议落地于此:
-  - 默认 lr 0.01(非 RWKV-PEFT 的 1.0;实测 1.0 导致 state 爆炸 std 7~13)
+  - 默认 lr 0.0001(非 RWKV-PEFT 的 1.0;实测 1.0 导致 state 爆炸 std 7~13)
   - state std 监控:每 epoch 记录；健康区间未标定，不设产品告警阈值
   - held-out 早停:每 epoch 在 held-out 上算 loss,连续 N 次不改善则停(废除固定 epoch)
   - checkpoint/中断恢复:存 state + optimizer 状态 + 进度,可断点续训
@@ -44,8 +44,8 @@ PathLike = Union[str, Path]
 class TrainConfig:
     """训练超参。字段名与 CLI 参数一一对应(typer 直接用)。"""
 
-    lr: float = 0.01  # 默认 0.01(尊重 P0 实测;1.0 会爆炸)
-    lr_floor: float = 1e-4  # cosine 衰减终点
+    lr: float = 1e-4  # 产品默认峰值;1.0 会爆炸
+    lr_floor: float = 1e-5  # cosine 衰减终点
     warmup: int = 10  # warmup 步数
     ctx_len: int = 512
     epochs: int = 20  # 配 early_stop 后是上限
@@ -145,7 +145,7 @@ class Trainer:
 
     用法:
         model, tok = load_model(model_path, patch=True); model.freeze()
-        cfg = TrainConfig(lr=0.01, ...)
+        cfg = TrainConfig(...)
         with EventEmitter(file="train.jsonl") as em:
             trainer = Trainer(model, cfg, em)
             result = trainer.train(samples, held_out)

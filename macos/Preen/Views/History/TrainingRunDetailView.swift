@@ -18,7 +18,7 @@ struct TrainingRunDetailView: View {
                 Divider()
                 if let replayStore, !replayStore.lossPoints.isEmpty {
                     TrainingChartView(store: replayStore)
-                        .frame(height: 340)
+                        .frame(minHeight: 460)
                 }
                 artifacts
                 if !stderrLog.isEmpty { logSection }

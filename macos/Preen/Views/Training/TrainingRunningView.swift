@@ -25,11 +25,19 @@ struct TrainingRunningView: View {
                 .padding(.vertical, 12)
             Divider()
 
-            // loss 折线。
-            TrainingChartView(store: store)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // 三张图随窗口增高；矮窗口只滚动图表区，摘要和取消操作保持可见。
+            GeometryReader { geometry in
+                ScrollView {
+                    TrainingChartView(store: store)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: max(geometry.size.height, TrainingChartView.minimumHeight))
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .layoutPriority(1)
 
             // 底部取消。
+            Divider()
             HStack {
                 Spacer()
                 Button(role: .destructive) {
@@ -88,7 +96,7 @@ struct TrainingRunningView: View {
 
             // 第二行:loss / lr / 预计剩余。
             HStack(spacing: 16) {
-                Label("loss \(store.lossDisplay)", systemImage: "chart.line.downtrend")
+                Label("loss \(store.lossDisplay)", systemImage: "chart.line.downtrend.xyaxis")
                     .foregroundStyle(.primary)
                 Label("lr \(store.lrDisplay)", systemImage: "speedometer")
                     .foregroundStyle(.secondary)
@@ -98,11 +106,12 @@ struct TrainingRunningView: View {
                         .foregroundStyle(.secondary)
                 }
                 if let metric = store.latestProcessMetric {
+                    let pressure = store.memoryPressure(for: metric)
                     Label(String(format: "RSS %.2f G", metric.physicalFootprintGB),
                           systemImage: "memorychip")
                         .foregroundStyle(.secondary)
-                    Text(pressureLabel(metric.pressure))
-                        .foregroundStyle(metric.pressure == .normal ? Color.secondary : Color.orange)
+                    Text(pressure.displayLabel)
+                        .foregroundStyle(pressure.chartColor)
                 }
             }
             .font(.subheadline)
@@ -123,14 +132,6 @@ struct TrainingRunningView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func pressureLabel(_ pressure: MemoryPressureLevel) -> String {
-        switch pressure {
-        case .normal: return "压力正常"
-        case .warning: return "压力警告"
-        case .critical: return "压力严重"
-        }
     }
 
 }

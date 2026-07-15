@@ -11,10 +11,16 @@
 
 ### 新增
 
+- 训练统计图新增实时 Learning Rate 曲线与 warmup 完成标记,复用逐步训练事件中的实际 LR;实时训练时 LR 与进程内存并排展示,三张图随窗口高度自适应且 Loss 获得更大的展示区域,Loss 纵轴按 Raw、EMA 与 Held-out 的实时范围自动缩放并保留上下留白,矮窗口下图表可滚动且取消训练底栏保持可见;步数轴采用一基整齐刻度并强制显示任务总步数,三张图的鼠标悬停互不联动,仿 macOS“股市”以竖线和沿 EMA 主线移动的圆点呈现选中状态,顶部按 Raw、EMA 顺序同时显示读数,不再显示悬停横线;内存图移除压力区间图例和黄色阈值线,仅保留红色严重阈值虚线;训练记录详情可重放旧任务的历史 LR 曲线。
+- **后端环境诊断与 Issue 信息复制**:环境窗口采用 macOS 原生 Form、Section 与 LabeledContent 呈现整体健康状态、芯片与系统版本、设备内存和 MLX 工作集上限,检查时间以自动更新的相对时间显示,说明文字按系统设置习惯置于左侧标签下方,组件版本标题整行均可点击展开且正常组件不重复显示状态图标,底部操作采用克制的纯文字按钮;诊断日志按来源提供居中的原生空状态与对应说明,有日志时支持等宽显示和文本选择;新增一键复制脱敏 Markdown 诊断摘要,包含 Preen/macOS/Python/MLX 环境及硬件标识与安全状态枚举,不自动包含序列号、硬件 UUID、日志、PID 或本地路径。
 - 新增 `tools/bench_bandwidth.py` MLX decode roofline 探针，以约 2.1GB 随机 bf16 权重分别测量大 GEMV 实效带宽与 sum reduction 上限，并据此估算 1.5B bf16 的理论 ms/token 地板。
 
 ### 变更
 
+- **训练后台反馈**:训练期间 Dock 改用 macOS 原生红色百分比角标,并在训练开始时注册系统通知的“标记”能力,确保该开关和百分比角标可用;收到 State 已落盘的 `completed` 事件后清除角标并发送系统通知,App 位于前台时也会显示通知横幅。失败或取消仍会清除角标并发送对应通知。
+- **训练默认学习率调整**:Swift 配置与 Python CLI/`TrainConfig` 的峰值学习率从 `0.01` 调整为 `0.0001`,最低学习率从 `0.0001` 调整为 `0.00001`,并同步参数重置按钮、CLI 帮助和 smoke 脚本。仅影响新建任务及恢复默认值;显式传参、已有训练记录和产物元数据保持原值。
+- **训练进程内存压力图**:进程内存改为按训练步展示的 EMA 0.90 面积图,纵轴固定为本机物理内存容量,并以 70%/85% 容量阈值结合 macOS 内存压力信号显示绿、黄、红状态;采样从“最近 3,600 个秒级点”改为“全程每步峰值”,长训练不再丢失前段视图且不会按秒无限累积。
+- **`doctor` 设备报告与内存展示口径**:`doctor_report()` 新增 `chip_name`、`hardware_model`、`os_version`、`os_build`、`memory_size_gib` 和 `working_set_gib`,仅从安全的 `sysctl` 白名单读取设备信息,不接触序列号或硬件 UUID。环境窗口、命令行摘要与 Issue 诊断中的设备总内存和 MLX 建议工作集统一以 GiB 展示(16G 机器分别显示 `16 GiB`、`11.84 GiB`);原 `memory_size_gb`、`working_set_gb` 继续保留以兼容既有调用方,所有训练、缓存和削顶判据仍使用十进制 GB。
 - **RWKV7 推理 prefill 词表投影优化**:保留完整 bf16 RWKV 主体、state/cache 更新与采样逻辑，但只对 prompt 最后一个 hidden 做 `lm_head`，不再构造 `[prompt_len, vocab_size]` 整段 logits，以降低长 prompt 的临时内存并提高 prefill 速度；未知模型保留原前向兼容路径。
 - **RWKV7 bf16 decode 整步编译与异步流水优化**:将单 token RWKV 前向建模为 `(input_token, cache_state) -> (logits, next_cache_state)` 纯函数并通过 `mx.compile` 跨请求复用；采样 token 保持在 GPU 上，先用 `mx.async_eval` 提交下一步前向，再由 CPU 读取当前 token 并处理文本/停止条件。cache 不绑定具体会话，EOS/stop 时丢弃投机 state，生成结束后写回原对象，多轮续传、State 注入、重复惩罚及采样语义不变。int8 实测无稳定编译收益，量化模型继续走 eager 路径。
   - `bench_inference.py` 新增 `--decode-backend eager|compile|pipeline`，可在完全相同的 token 间隔计时口径下分别测原始 eager、同步整步编译和异步流水，默认 `pipeline`；量化模型即使请求编译也会报告实际回退的 `eager`。
@@ -24,7 +30,6 @@
   - 同一标志仍驱动侧栏收起(背景呈空状态),语义不变。点入口项 / 「开始使用」/ 点背景遮罩均可关闭。
 
 ### 修复
-
 - **推理速度 benchmark 口径失真**:
   - `GenerationResult` 新增 `decode_steps`, `generation_tps` 改按 `generation_time` 实际覆盖的 `step>0` 前向次数计算,不再把归入 prefill 的首 token 重复计入 decode 分子; 分段计时改用单调高精度时钟。
   - 异步流水启用后，`generation_time` 统一按“首 token 就绪到最后一个 decode token 就绪”的墙钟区间统计，使 BF16 流水线与 int8 eager 都反映 GPU/CPU 重叠后的实际连续出字速度，避免累加局部阻塞时间造成虚高。

@@ -6,7 +6,7 @@
 #
 # 做四件事:
 #   1. 准备 smoke 数据子集(默认 200 条,可改 SAMPLES)
-#   2. 训练 state(lr=0.01, 2 epoch, ~10 分钟)
+#   2. 训练 state(lr=0.0001, 2 epoch, ~10 分钟)
 #   3. 用训好的 state 跑 5 条 held-out 生成(看风格是否注入)
 #   4. A/B 对比:同一问题,无 state(基线) vs 有 state(猫娘)
 #
@@ -33,7 +33,7 @@ FULL_DATA="train_data/NekoQA_10k/NekoQA-10K.json"  # 完整数据集
 DATA_DIR="train_data/NekoQA_10k"
 SAMPLES="${SAMPLES:-200}"                       # smoke 样本数
 EPOCHS="${EPOCHS:-2}"                           # epoch 数
-LR="${LR:-0.01}"
+LR="${LR:-0.0001}"
 CTX_LEN="${CTX_LEN:-512}"
 STATE_OUT="$DATA_DIR/nekoqa_smoke_state.npz"
 EVENTS_OUT="$DATA_DIR/nekoqa_smoke_events.jsonl"

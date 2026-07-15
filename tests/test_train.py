@@ -40,6 +40,14 @@ class _DummyTokenizer:
         return "".join(chr(i) for i in ids)
 
 
+def test_train_config_learning_rate_defaults():
+    from statetuner.train import TrainConfig
+
+    cfg = TrainConfig()
+    assert cfg.lr == pytest.approx(0.0001)
+    assert cfg.lr_floor == pytest.approx(0.00001)
+
+
 def test_encode_template_stop_and_mask():
     """验收 b:任一样本 full_ids[-1]==stop_token 且对应 mask==1。
 

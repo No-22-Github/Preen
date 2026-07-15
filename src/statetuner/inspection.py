@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import platform
+import subprocess
 import sys
 from dataclasses import asdict, dataclass
 from importlib import metadata
@@ -375,6 +376,52 @@ def _module_version(module_name: str, module: Any) -> str:
         return "unknown"
 
 
+def _sysctl_text(name: str) -> Optional[str]:
+    """读取不含隐私的 macOS sysctl 文本字段；失败时静默降级。"""
+    if sys.platform != "darwin":
+        return None
+    try:
+        completed = subprocess.run(
+            ["/usr/sbin/sysctl", "-n", name],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    value = completed.stdout.strip()
+    return value or None
+
+
+def _hardware_report() -> dict[str, str]:
+    """返回可安全展示/复制的设备字段，不读取序列号或硬件 UUID。"""
+    fields = {
+        "chip_name": _sysctl_text("machdep.cpu.brand_string"),
+        "hardware_model": _sysctl_text("hw.model"),
+        "os_build": _sysctl_text("kern.osversion"),
+    }
+    return {key: value for key, value in fields.items() if value}
+
+
+def _metal_memory_report(info: dict[str, Any]) -> dict[str, float]:
+    """将 MLX device_info 的字节数转换成明确标注单位的报告字段。
+
+    设备总内存与 MLX 建议工作集额外提供 GiB，供 macOS 环境信息 UI 展示；
+    十进制 GB 字段继续保留，训练、缓存和削顶判据仍统一使用 GB。
+    """
+    result: dict[str, float] = {}
+    memory_size = info.get("memory_size", 0)
+    if isinstance(memory_size, (int, float)) and memory_size > 0:
+        result["memory_size_gb"] = round(memory_size / 1e9, 2)
+        result["memory_size_gib"] = round(memory_size / (1024**3), 2)
+    working_set = info.get("max_recommended_working_set_size", 0)
+    if isinstance(working_set, (int, float)) and working_set > 0:
+        result["working_set_gb"] = round(working_set / 1e9, 2)
+        result["working_set_gib"] = round(working_set / (1024**3), 2)
+    return result
+
+
 def doctor_report() -> dict:
     """返回轻量环境报告；单个可选组件失败不会让整个 doctor 崩溃。"""
     report: dict[str, Any] = {
@@ -383,6 +430,10 @@ def doctor_report() -> dict:
         "machine": platform.machine(),
         "apple_silicon": sys.platform == "darwin" and platform.machine() == "arm64",
     }
+    os_version = platform.mac_ver()[0] if sys.platform == "darwin" else platform.release()
+    if os_version:
+        report["os_version"] = os_version
+    report.update(_hardware_report())
     for module_name in ("numpy", "ml_dtypes", "mlx", "mlx_lm"):
         try:
             module = __import__(module_name)
@@ -398,10 +449,7 @@ def doctor_report() -> dict:
         report["metal_available"] = bool(mx.metal.is_available())
         if report["metal_available"]:
             info = mx.device_info()
-            report["memory_size_gb"] = round(info.get("memory_size", 0) / 1e9, 2)
-            report["working_set_gb"] = round(
-                info.get("max_recommended_working_set_size", 0) / 1e9, 2
-            )
+            report.update(_metal_memory_report(info))
     except BaseException as exc:
         report["metal_available"] = False
         report["metal_error"] = str(exc)

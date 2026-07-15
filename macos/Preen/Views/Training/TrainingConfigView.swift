@@ -3,7 +3,7 @@
 //  Preen
 //
 //  训练配置表单。design.md §4:
-//   - 折叠成一行摘要(lr 0.01 · ctx_len 512 · 3 轮 · 早停 patience 3 · seed 42)。
+//   - 折叠成一行摘要(lr 0.0001 · ctx_len 512 · 3 轮 · 早停 patience 3 · seed 42)。
 //   - 展开完整 Form,**必须包含 CLI 全部参数**。
 //   - 偏离默认值时显示「恢复默认」。
 //   - lr > 0.1 给 inline warning(实测 lr=1.0 会爆炸)。
@@ -81,7 +81,7 @@ struct TrainingConfigView: View {
 
                     // lr 警告。
                     if config.lrWarnsExplosion {
-                        Label("lr > 0.1 可能导致 state 爆炸（实测 lr=1.0 会发散），建议 lr=0.01",
+                        Label("lr > 0.1 可能导致 state 爆炸（实测 lr=1.0 会发散），建议从默认 0.0001 起步",
                               systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
                             .font(.caption)
@@ -418,11 +418,11 @@ struct TrainingConfigView: View {
                 schedulerRow
                 TrainingDoubleParameterRow(
                     title: "学习率", key: "lr", detail: "调度峰值(warmup 升到此)",
-                    value: $config.lr, default: 0.01
+                    value: $config.lr, default: 1e-4
                 )
                 TrainingDoubleParameterRow(
                     title: "最低学习率", key: "lr_floor", detail: "cosine 衰减终点(下限)",
-                    value: $config.lrFloor, default: 1e-4
+                    value: $config.lrFloor, default: 1e-5
                 )
                 TrainingIntParameterRow(
                     title: "预热步数", key: "warmup", detail: "前 N 步从 0 线性升到峰值",

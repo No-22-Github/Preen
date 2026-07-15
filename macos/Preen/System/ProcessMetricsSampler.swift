@@ -15,6 +15,97 @@ struct ProcessMetric: Identifiable, Equatable {
     let swapUsedGB: Double
     let pressure: MemoryPressureLevel
     let secondsPerStep: Double?
+
+    /// 同一步可能采样多次；全程图只保留该步的最高压力，避免按秒无限累积。
+    func mergingPeak(with newer: ProcessMetric) -> ProcessMetric {
+        ProcessMetric(
+            timestamp: max(timestamp, newer.timestamp),
+            step: step,
+            physicalFootprintGB: max(physicalFootprintGB, newer.physicalFootprintGB),
+            swapUsedGB: max(swapUsedGB, newer.swapUsedGB),
+            pressure: MemoryMetricMath.moreSevere(pressure, newer.pressure),
+            secondsPerStep: newer.secondsPerStep ?? secondsPerStep
+        )
+    }
+}
+
+struct SmoothedMemoryPoint: Identifiable, Equatable {
+    var id: Int { step }
+    let step: Int
+    let physicalFootprintGB: Double
+    let pressure: MemoryPressureLevel
+}
+
+enum MemoryMetricMath {
+    static let emaSmoothing = 0.90
+    static let warningRatio = 0.70
+    static let criticalRatio = 0.85
+
+    static func ema(
+        _ metrics: [ProcessMetric],
+        physicalMemoryGB: Double,
+        smoothing: Double = emaSmoothing
+    ) -> [SmoothedMemoryPoint] {
+        let grouped = Dictionary(grouping: metrics, by: \.step)
+        let perStep = grouped.keys
+            .sorted()
+            .compactMap { step -> ProcessMetric? in
+                guard let samples = grouped[step],
+                      let first = samples.first else { return nil }
+                return samples.dropFirst().reduce(first) { $0.mergingPeak(with: $1) }
+            }
+
+        let amount = min(max(smoothing, 0), 0.99)
+        var previous: Double?
+        return perStep.map { metric in
+            let value = previous.map {
+                amount * $0 + (1 - amount) * metric.physicalFootprintGB
+            } ?? metric.physicalFootprintGB
+            previous = value
+            return SmoothedMemoryPoint(
+                step: metric.step,
+                physicalFootprintGB: value,
+                pressure: pressureLevel(
+                    footprintGB: value,
+                    physicalMemoryGB: physicalMemoryGB,
+                    systemPressure: metric.pressure
+                )
+            )
+        }
+    }
+
+    static func pressureLevel(
+        footprintGB: Double,
+        physicalMemoryGB: Double,
+        systemPressure: MemoryPressureLevel
+    ) -> MemoryPressureLevel {
+        guard physicalMemoryGB > 0 else { return systemPressure }
+        let ratio = max(0, footprintGB) / physicalMemoryGB
+        let estimated: MemoryPressureLevel
+        if ratio >= criticalRatio {
+            estimated = .critical
+        } else if ratio >= warningRatio {
+            estimated = .warning
+        } else {
+            estimated = .normal
+        }
+        return moreSevere(estimated, systemPressure)
+    }
+
+    static func moreSevere(
+        _ lhs: MemoryPressureLevel,
+        _ rhs: MemoryPressureLevel
+    ) -> MemoryPressureLevel {
+        severity(lhs) >= severity(rhs) ? lhs : rhs
+    }
+
+    private static func severity(_ level: MemoryPressureLevel) -> Int {
+        switch level {
+        case .normal: return 0
+        case .warning: return 1
+        case .critical: return 2
+        }
+    }
 }
 
 final class MemoryPressureMonitor: @unchecked Sendable {

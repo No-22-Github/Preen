@@ -39,6 +39,35 @@ def test_module_version_prefers_module_attribute(monkeypatch):
     assert inspection._module_version("numpy", VersionedPackage()) == "1.2.3"
 
 
+def test_hardware_report_uses_only_safe_sysctl_fields(monkeypatch):
+    values = {
+        "machdep.cpu.brand_string": "Apple M5 Pro",
+        "hw.model": "Mac17,1",
+        "kern.osversion": "25F90",
+    }
+    monkeypatch.setattr(inspection, "_sysctl_text", values.get)
+
+    assert inspection._hardware_report() == {
+        "chip_name": "Apple M5 Pro",
+        "hardware_model": "Mac17,1",
+        "os_build": "25F90",
+    }
+
+
+def test_metal_memory_report_keeps_gib_and_gb_units_distinct():
+    report = inspection._metal_memory_report(
+        {
+            "memory_size": 17_179_869_184,
+            "max_recommended_working_set_size": 12_713_115_648,
+        }
+    )
+
+    assert report["memory_size_gib"] == 16.0
+    assert report["memory_size_gb"] == 17.18
+    assert report["working_set_gb"] == 12.71
+    assert report["working_set_gib"] == 11.84
+
+
 def test_inspect_data_counts_invalid_and_truncated(tmp_path):
     path = tmp_path / "data.json"
     path.write_text(
