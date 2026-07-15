@@ -128,8 +128,26 @@ def run_training(
 
     notify = status or (lambda _: None)
     cfg = request.train_config
-    notify(f"加载模型 {request.model} (patch ops 路径, template={request.template})")
-    model, tokenizer = load_model(str(request.model), patch=True)
+    # WKV7 kernel 模式选择(见 docs/decision-fast-wkv7.md):
+    #   metal(默认)= Metal checkpoint kernel,6.67× 加速(长序列);梯度经三轮实验验证数值等价 ops。
+    #   ops = Python _wkv7_step_ops 循环,慢但可微基线;排查 Metal 路径问题时用 --no-fast-wkv 回退。
+    # load_model(patch=True) 内部调 patch_rwkv7_for_train(ops);metal 模式需在 load 前
+    # 先 monkeypatch,且传 patch=False 跳过 load_model 的默认 ops patch(否则会覆盖)。
+    use_metal = cfg.wkv_mode == "metal"
+    if use_metal:
+        from .core import patch_rwkv7_for_train_fast
+        notify(
+            f"加载模型 {request.model} | WKV7: Metal checkpoint kernel "
+            f"(chunk={cfg.wkv_chunk}, template={request.template})"
+        )
+        patch_rwkv7_for_train_fast(chunk=cfg.wkv_chunk)
+        model, tokenizer = load_model(str(request.model), patch=False)
+    else:
+        notify(
+            f"加载模型 {request.model} | WKV7: ops 循环 [慢速基线] "
+            f"(template={request.template})"
+        )
+        model, tokenizer = load_model(str(request.model), patch=True)
     model.freeze()
 
     # 数据分流(§4.3):importer 产物(带 .import.json sidecar)走标准 loader,

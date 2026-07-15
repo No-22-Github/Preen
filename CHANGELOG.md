@@ -28,6 +28,11 @@
   现改为挂在主窗口上的模态 sheet:从主窗口顶部滑出、盖在主窗口上方居中、带背景遮罩,点击主窗口区域不响应(真正的模态锁定)。
   - 去掉了独立的 welcome `WindowGroup` scene;首启与「窗口 → 欢迎使用 Preen」菜单改为翻转 `appState.isWelcomePresented` 标志,由 `ContentView` 的 `.sheet(isPresented:)` 驱动。
   - 同一标志仍驱动侧栏收起(背景呈空状态),语义不变。点入口项 / 「开始使用」/ 点背景遮罩均可关闭。
+- **WKV7 训练路径改用 Metal checkpoint kernel(默认开启)**:训练中 RWKV-7 的 WKV 递归从 Python `_wkv7_step_ops` 循环(每 token 一次 GPU dispatch)换为整段 Metal kernel(forward + backward 各一次 dispatch),通过 `mx.custom_function` 注册 VJP,可训练 S₀ 的梯度仍能穿透整段递归。1.5B 模型实测长序列(320 token)6.67× 加速(28 分钟 → 4 分钟),内存反降约 3GB,loss 末态与 ops 基线差 0.19%(数值等价)。完整实验记录见 `docs/decision-fast-wkv7.md`。
+  - kernel 移植自 [rwkv-metal](https://github.com/RafaelUI/rwkv-metal)(Apache-2.0),核心改动是让 `make_wkv7_checkpoint` 工厂暴露 `h_in` 参数以透传可训练 S₀。
+  - 训练样本长度不整除 chunk(16)时,闭包内就地 pad 序列末尾(算完 slice 回真实长度),因果递归保证 pad 段对结果零影响,不改动数据管线。
+  - `TrainConfig` 新增 `wkv_mode`(`"metal"` 默认 / `"ops"`)和 `wkv_chunk`(默认 16)字段;CLI 新增 `--fast-wkv/--no-fast-wkv` 与 `--fast-wkv-chunk`,启动日志与 `events.start` 事件均记录当前 kernel 模式与 chunk,便于排查训练异常是否源于加速路径。`--no-fast-wkv` 回退旧的 Python ops 循环。
+  - 推理路径不受影响(`load_model(patch=False)` 仍走 mlx-lm 自带 kernel,实测比上游推理 kernel 快 10%)。
 
 ### 修复
 - **推理速度 benchmark 口径失真**:

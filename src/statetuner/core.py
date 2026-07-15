@@ -29,6 +29,8 @@ import mlx.core as mx
 import mlx.nn as nn
 from mlx_lm.models.rwkv7 import Rwkv7TimeMixing, _wkv7_step_ops
 
+from .fast_wkv7 import make_wkv7_checkpoint
+
 # state 参数类型: {layer_idx: mx.array(H,D,D)} 或路径(npz/pth)或 None(零 state)
 StateInput = Optional[Union[Dict[int, "mx.array"], str, Path]]
 
@@ -58,6 +60,50 @@ def patch_rwkv7_for_train() -> None:
         return y, state
 
     Rwkv7TimeMixing._wkv7 = _wkv7_train
+
+
+def patch_rwkv7_for_train_fast(chunk: int = 32) -> None:
+    """Monkeypatch(fast path):_wkv7 走 Metal checkpoint kernel(实验性)。
+
+    与 patch_rwkv7_for_train 等价替换 _wkv7,但底层走 fast_wkv7 的整段 Metal
+    kernel(forward+backward 各一次 dispatch)而非 Python ops 循环。
+    state 透传给 kernel 作为 h_in(可训练 S₀ 梯度全通,实验验证)。
+
+    何时用:--fast-wkv 开关显式开启。默认仍走 patch_rwkv7_for_train(ops 路径)。
+    kernel 约束 T % chunk == 0;逐样本训练管线下样本长度不固定且常非 chunk 倍数,
+    故闭包内就地 pad 到 chunk 倍数(末尾补零)、算完 slice 回真实 L。因果递归保证
+    pad 段对真实 token 的 y 零影响。kernel 按 (H, L_pad, chunk) JIT 缓存。
+
+    chunk: checkpoint 反向 chunk 大小。误差放大 ~(1/w)^chunk:
+      32(默认,快)、16(更精确)、8(最精确,反向重构次数 4×)。
+    """
+
+    def _wkv7_fast(self, r, w, k, v, a, b, state):
+        B, L, H, D = *r.shape[:2], self.num_heads, self.head_dim
+        if state is None:
+            state = mx.zeros((B, H, D, D), dtype=r.dtype)
+
+        # checkpoint kernel 要求 T % chunk == 0;pad 序列末尾到 chunk 倍数。
+        # pad 段 r/k/v/a/b=0、w=1.0:递归 h = 1.0*h + 0 + 0 = h 不变(state 原样
+        # 穿过 pad 段),因果性保证 pad 段对真实 token 的 y 零影响。返回的 h_out
+        # 含 pad 段递归但训练下游不用(S₀ 每步重新注入),故 w pad 值无副作用。
+        L_pad = ((L + chunk - 1) // chunk) * chunk
+        if L_pad != L:
+            pad = L_pad - L
+            r = mx.pad(r, [(0, 0), (0, pad), (0, 0), (0, 0)])
+            w = mx.pad(w, [(0, 0), (0, pad), (0, 0), (0, 0)], constant_values=1.0)
+            k = mx.pad(k, [(0, 0), (0, pad), (0, 0), (0, 0)])
+            v = mx.pad(v, [(0, 0), (0, pad), (0, 0), (0, 0)])
+            a = mx.pad(a, [(0, 0), (0, pad), (0, 0), (0, 0)])
+            b = mx.pad(b, [(0, 0), (0, pad), (0, 0), (0, 0)])
+
+        wkv7 = make_wkv7_checkpoint(B, L_pad, H, D, chunk=chunk)
+        y, h_out = wkv7(r, w, k, v, a, b, state)
+        # slice 回真实 L(pad 段 y 丢弃)。
+        y = y[:, :L] if L_pad != L else y
+        return y.astype(r.dtype), h_out.astype(state.dtype)
+
+    Rwkv7TimeMixing._wkv7 = _wkv7_fast
 
 
 def make_state_params(model, dtype=mx.float32) -> Dict[int, "mx.array"]:
