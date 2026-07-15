@@ -81,11 +81,13 @@ Python 引擎   (mlx-lm 训练/推理 · 本仓库)
 训练、推理、导出都在 Python 引擎里,App 通过 IPC 调它,`statetuner` CLI 直接驱动它。
 
 **核心引擎**是 [ml-explore/mlx-lm](https://github.com/ml-explore/mlx-lm) 里的 `rwkv7.py`(Apple 维护)。
-wkv7 前向有两条等价路径:Metal kernel 快,推理用;纯 ops 循环可微,训练用。
-这个仓库做的是在其上的训练改造,细节见 [docs](docs/)。
+wkv7 前向有两条等价路径:原生 Metal kernel 快(推理用);Python ops 循环可微(可作训练回退)。
+训练默认走移植自 [rwkv-metal](https://github.com/RafaelUI/rwkv-metal) 的 Metal checkpoint kernel——
+同样可微且更快,1.5B 实测 6.67× 加速。这个仓库做的是在其上的训练改造,细节见 [docs](docs/)。
 
 **反向传播**全部交给 MLX 自动微分(`mx.value_and_grad`),没有手写任何反向代码。
-梯度能不能穿透,取决于前向是否走可微的 ops 路径,见[P0 理论指南 §二](docs/P0-理论指南.md)。
+梯度能不能穿透,取决于前向是否可微(checkpoint kernel 经 `mx.custom_function` 注册 VJP,
+ops 循环每步自带 VJP),见[P0 理论指南 §二](docs/P0-理论指南.md)。
 
 ### 构建自包含 macOS App
 
@@ -190,7 +192,7 @@ uv run statetuner train \
     --model models/converted/rwkv7-g1d-0.4b \
     --data train_data/NekoQA_10k/nekoqa_smoke_200.json --template qa \
     --out state.npz \
-    --lr 0.01 --epochs 3 --ctx-len 512 --no-early-stop --seed 42 \
+    --lr 0.0001 --epochs 3 --ctx-len 512 --no-early-stop --seed 42 \
     --export-pth --pth-out state.pth
 
 # 3. A/B 预览: 有 state vs 无 state, 直观看风格注入效果
@@ -240,7 +242,7 @@ uv run pytest --slow -q
 
 ## 一些取舍
 
-几个可能反直觉的地方:脱离 fla 自写转换器、lr 用 0.01、训练走 ops 推理走 kernel、不依赖 torch。
+几个可能反直觉的地方:脱离 fla 自写转换器、lr 从 1e-4 起步、训练和推理都走 Metal kernel、不依赖 torch。
 
 <details>
 <summary>展开</summary>
@@ -250,16 +252,24 @@ uv run pytest --slow -q
 所以自己实现了键名映射,把 0.1B safetensors 生成的校验 fixture 和 vendor 的 World tokenizer
 内置进仓库,整个转换过程零外部下载。详见[转换器零依赖化报告](docs/转换器零依赖化报告.md)。
 
-**学习率为什么是 0.01,而不是 RWKV-PEFT 用的 1.0。** 实测 lr=1.0 会让 state 数值爆炸,
-std 冲到正常值的 50~100 倍,state 退化成一个无条件偏置。lr=0.01 让 state 温和生长,
-保留对输入的条件响应。详见[实验报告 §三](experiments/p0_translate/实验报告.md)。
+**学习率为什么从 1e-4 起步,而不是 RWKV-PEFT 用的 1.0。** 实测 lr=1.0 会让 state 数值爆炸,
+std 冲到正常值的 50~100 倍,state 退化成一个无条件偏置。产品默认峰值 lr=0.0001,
+cosine 衰减到 0.00001(lr_floor),让 state 温和生长,保留对输入的条件响应。
+历史实验若显式传入更大的 lr(如早期实验用过的 0.01),仍按各自配方解读;
+判定标准与边界见[工程实测数据](docs/工程实测数据.md)。
 
-**训练为什么用 ops、推理为什么用 kernel。** ops 路径可微,每一步都有 VJP,训练需要它;
-kernel 路径快但没有 VJP。两条路径已验证在容差内等价,见
-[P0 理论指南 §二/§五](docs/P0-理论指南.md)。
+**训练路径为什么要换成 Metal checkpoint kernel。** RWKV-7 的 WKV 递归在 MLX 上有两条等价路径:
+原生 `mlx-lm` 自带的是不可微 Metal kernel(快,但梯度静默断裂);早期本项目训练只能走
+Python `_wkv7_step_ops` 循环——每个 token 一次 GPU dispatch,ctx=512 就是 512 次,慢到长序列
+不可行(1.5B × 320 token 单 epoch 约 28 分钟)。现在训练默认改用移植自
+[rwkv-metal](https://github.com/RafaelUI/rwkv-metal) 的 Metal checkpoint kernel:
+整段递归 forward/backward 各一次 dispatch,并经 `mx.custom_function` 注册 VJP,
+S₀ 的梯度仍能穿透整段递归。1.5B 实测 6.67× 加速、内存反降约 3GB,loss 末态与 ops 基线差 0.19%(数值等价)。
+推理路径不变(走 `mlx-lm` 自带 kernel),`--no-fast-wkv` 可回退旧的 ops 循环用于复现。
+完整三轮实验见 [`docs/decision-fast-wkv7.md`](docs/decision-fast-wkv7.md)。
 
 **为什么不依赖 torch。** RWKV 的 `.pth` 是 torch 用 zip+pickle 存的,整个项目唯一需要 torch 的地方
-就是读原始权重、写导出的 state。为两个 I/O 点扛 480MB 的 torch 不划算,也和 MLX 原生的定位别扭。
+就是读原始权重、写导出的 state。为这两个 I/O 点扛 480MB 的 torch 不划算,也和 MLX 原生的定位别扭。
 所以 `pth_io.py` 用纯 Python 复刻了这套格式:读端与 `torch.load` 逐字节等价
 (3 个真实模型 798/798 张量验证),写端产物 RWKV Runner 可直接挂载,与 torch 版逐字节相同。
 bf16 靠 `ml_dtypes`(3.8MB)补上 numpy 缺的类型。
@@ -278,6 +288,7 @@ bf16 靠 `ml_dtypes`(3.8MB)补上 numpy 缺的类型。
 | [MLX-LM](https://github.com/ml-explore/mlx-lm) | MIT | 核心训练/推理引擎,提供 `rwkv7.py` 前向 |
 | [Flash Linear Attention](https://github.com/fla-org/flash-linear-attention) | MIT | 线性注意力上游库,模型转换校验基准 |
 | [RWKV-PEFT](https://github.com/Joluck/RWKV-PEFT) | Apache-2.0 | RWKV 参数高效微调方法参考 |
+| [rwkv-metal](https://github.com/RafaelUI/rwkv-metal) | Apache-2.0 | 训练加速:WKV7 Metal checkpoint kernel 移植来源 |
 | [RWKV-LM](https://github.com/BlinkDL/RWKV-LM) | Apache-2.0 | BlinkDL 维护的 RWKV 模型仓库,参考实现 |
 | [BlinkDL/rwkv7-g1](https://huggingface.co/BlinkDL/rwkv7-g1) | Apache-2.0 | RWKV-7 G1 官方权重,实际下载与转换的来源 |
 | [RWKV Runner](https://github.com/josStorer/RWKV-Runner) | MIT | 导出 `.pth` 的挂载目标,与 RWKV 生态直连 |

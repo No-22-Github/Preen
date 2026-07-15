@@ -33,6 +33,9 @@
   - 训练样本长度不整除 chunk(16)时,闭包内就地 pad 序列末尾(算完 slice 回真实长度),因果递归保证 pad 段对结果零影响,不改动数据管线。
   - `TrainConfig` 新增 `wkv_mode`(`"metal"` 默认 / `"ops"`)和 `wkv_chunk`(默认 16)字段;CLI 新增 `--fast-wkv/--no-fast-wkv` 与 `--fast-wkv-chunk`,启动日志与 `events.start` 事件均记录当前 kernel 模式与 chunk,便于排查训练异常是否源于加速路径。`--no-fast-wkv` 回退旧的 Python ops 循环。
   - 推理路径不受影响(`load_model(patch=False)` 仍走 mlx-lm 自带 kernel,实测比上游推理 kernel 快 10%)。
+- **致谢清单补登加速来源**:关于窗口「引用项目与致谢」功勋墙、README 致谢表均新增 [rwkv-metal](https://github.com/RafaelUI/rwkv-metal)(Apache-2.0,作者 RafaelUI)条目,记录 WKV7 Metal checkpoint kernel 的移植来源;README「一些取舍」里原先「训练走 ops、推理走 kernel」的论述已过时,同步改写为训练默认走可微 Metal checkpoint kernel、推理走 mlx-lm 自带 kernel。
+- 关于窗口致谢墙按对 Preen 的实际贡献重排顺序(引擎地基 → 关键加速 → 模型权重 → 方法数据 → 导出校验链路 → 格式与基础设施),rwkv-metal 因提供训练 Metal kernel 加速提升至第三位。
+- **同步 README 滞后的训练默认学习率**:峰值学习率从 `0.01` 调整为 `0.0001`、最低学习率调整为 `0.00001` 的变更此前已在 CLI/`TrainConfig` 与 `docs/快速上手.md` 落地,但 README 的「三步最小流程」示例仍写 `--lr 0.01`、「一些取舍」节仍按 0.01 论述。本次将示例改为 `--lr 0.0001`、取舍节改为从 1e-4 起步 + cosine 衰减口径,并补「历史实验显式传入更大 lr 仍按原配方解读」的说明,与快速上手 FAQ 对齐。
 
 ### 修复
 - **推理速度 benchmark 口径失真**:

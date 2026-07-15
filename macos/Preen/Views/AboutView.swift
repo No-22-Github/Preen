@@ -10,6 +10,33 @@ import SwiftUI
 import AppKit
 
 struct AboutView: View {
+    /// 渡鸦彩蛋:前 7 下(RWKV-7 的 7)是解锁门槛;解锁后每点一下切换一条文案。
+    @State private var ravenTaps = 0
+    @State private var lastTapAt: Date = .distantPast
+    @State private var showEgg = false
+    /// 当前要显示的彩蛋文案。第 0 条固定压轴,其余随机。
+    @State private var eggMessage = ""
+    /// 是否已解锁(首次点满 7 下后永久置真,之后每点切换文案)。
+    @State private var eggUnlocked = false
+    /// 上一次抽中的全局下标,用于避免解锁后连续两次抽到同一条。
+    @State private var lastEggIndex = 0
+    /// 气泡自动收起的计时器;连点换条时取消旧计时重排,防止提前关闭。
+    @State private var dismissWork: DispatchWorkItem?
+
+    /// 彩蛋文案池。索引 0 固定在第 7 下压轴出场,其余随机抽取。
+    private static let eggMessages: [String] = [
+        "Make RWKV Great Again",   // 固定压轴
+        "RNN is All You Need",
+        "There is no attention",
+        "Just recur it",
+        "Attention is overrated",
+        "I'll be recurrent",
+        "One State to rule them all",
+        "State go brrr",
+        "Got state?",
+        "Fear the Goose",
+    ]
+
     /// 版本号从 Bundle 读取(构建时由 pbxproj MARKETING_VERSION 注入)。
     private var versionText: String {
         let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
@@ -24,27 +51,24 @@ struct AboutView: View {
     ]
 
     /// 引用项目清单(名称 / 简述 / 许可证 / 仓库链接)。许可证经 GitHub/HF API 核实。
+    /// 排序口径:按对 Preen 的实际贡献从核心到外围——引擎地基 → 关键加速 → 模型权重 →
+    /// 方法数据 → 导出校验链路 → 格式与基础设施。
     private let credits: [Credit] = [
-        .init(name: "MLX",
-              blurb: "Apple 机器学习框架，张量运算与自动微分的底层地基",
-              license: "MIT",
-              icon: "cpu",
-              url: "https://github.com/ml-explore/mlx"),
         .init(name: "MLX-LM",
               blurb: "核心训练/推理引擎，提供 rwkv7.py 前向与自动微分",
               license: "MIT",
               icon: "gearshape.2",
               url: "https://github.com/ml-explore/mlx-lm"),
-        .init(name: "Flash Linear Attention",
-              blurb: "线性注意力上游库，模型转换校验基准",
+        .init(name: "MLX",
+              blurb: "Apple 机器学习框架，张量运算与自动微分的底层地基",
               license: "MIT",
-              icon: "bolt",
-              url: "https://github.com/fla-org/flash-linear-attention"),
-        .init(name: "RWKV-PEFT",
-              blurb: "RWKV 参数高效微调方法参考",
+              icon: "cpu",
+              url: "https://github.com/ml-explore/mlx"),
+        .init(name: "rwkv-metal",
+              blurb: "训练加速来源，WKV7 Metal checkpoint kernel 移植自此",
               license: "Apache-2.0",
-              icon: "wrench.and.screwdriver",
-              url: "https://github.com/Joluck/RWKV-PEFT"),
+              icon: "gauge.with.dots.needle.67percent",
+              url: "https://github.com/RafaelUI/rwkv-metal"),
         .init(name: "RWKV-LM",
               blurb: "BlinkDL 维护的 RWKV 模型仓库，参考实现",
               license: "Apache-2.0",
@@ -55,16 +79,26 @@ struct AboutView: View {
               license: "Apache-2.0",
               icon: "square.and.arrow.down",
               url: "https://huggingface.co/BlinkDL/rwkv7-g1"),
-        .init(name: "RWKV Runner",
-              blurb: "导出的 .pth 初始 state 挂载目标，与 RWKV 生态直连",
-              license: "MIT",
-              icon: "arrow.down.doc",
-              url: "https://github.com/josStorer/RWKV-Runner"),
+        .init(name: "RWKV-PEFT",
+              blurb: "RWKV 参数高效微调方法参考",
+              license: "Apache-2.0",
+              icon: "wrench.and.screwdriver",
+              url: "https://github.com/Joluck/RWKV-PEFT"),
         .init(name: "NekoQA-10K",
               blurb: "猫娘风格 QA 对话数据集，风格迁移训练数据来源",
               license: "Apache-2.0",
               icon: "person.crop.circle.badge.questionmark",
               url: "https://huggingface.co/datasets/liumindmind/NekoQA-10K"),
+        .init(name: "RWKV Runner",
+              blurb: "导出的 .pth 初始 state 挂载目标，与 RWKV 生态直连",
+              license: "MIT",
+              icon: "arrow.down.doc",
+              url: "https://github.com/josStorer/RWKV-Runner"),
+        .init(name: "Flash Linear Attention",
+              blurb: "线性注意力上游库，模型转换校验基准",
+              license: "MIT",
+              icon: "bolt",
+              url: "https://github.com/fla-org/flash-linear-attention"),
         .init(name: "rwkv7-0.1B-g1",
               blurb: "World Tokenizer 与转换校验模板来源",
               license: "Apache-2.0",
@@ -131,6 +165,8 @@ struct AboutView: View {
 
             Text("Preen")
                 .font(.title.bold())
+                .opacity(showEgg ? 0 : 1)
+                .animation(.easeInOut(duration: 0.3), value: showEgg)
 
             HStack(spacing: 6) {
                 Image("RWKVLogo")
@@ -138,11 +174,19 @@ struct AboutView: View {
                     .resizable()
                     .scaledToFit()
                     .frame(width: 15, height: 15)
+                    .onTapGesture { handleRavenTap() }
+                    .background {
+                        RavenPopoverPresenter(
+                            isPresented: $showEgg,
+                            text: eggMessage
+                        )
+                    }
 
                 Text("RWKV-7 State Tuning")
             }
             .font(.callout)
             .foregroundStyle(.secondary)
+            .animation(.easeInOut(duration: 0.2), value: showEgg)
 
             Text(versionText)
                 .font(.caption)
@@ -159,12 +203,163 @@ struct AboutView: View {
         }
     }
 
+    // MARK: - 渡鸦彩蛋
+
+    /// 渡鸦彩蛋:前 7 下(RWKV-7 的 7)是解锁门槛;解锁后每点一下切换一条文案,
+    /// 直到停手 3.5 秒气泡自动收起——收起即重新锁定,要再玩得重新点满 7 下。
+    /// 首次解锁固定弹压轴句(Make RWKV Great Again),之后随机抽取且避免连抽同一条。
+    private func handleRavenTap() {
+        // 已解锁:每点一下换一条文案,气泡保持开,只重排收起计时。
+        if eggUnlocked {
+            pickNextEgg()
+            scheduleDismiss()
+            return
+        }
+
+        let now = Date()
+        // 上一击已超时 → 从 1 重新计数。
+        if now.timeIntervalSince(lastTapAt) > 1.5 {
+            ravenTaps = 0
+        }
+        lastTapAt = now
+        ravenTaps += 1
+
+        guard ravenTaps == 7 else { return }
+        ravenTaps = 0
+        eggUnlocked = true
+
+        // 首次解锁:固定压轴句。
+        eggMessage = Self.eggMessages[0]
+        lastEggIndex = 0
+        showEgg = true
+        scheduleDismiss()
+    }
+
+    /// 从压轴句之外随机抽一条,且避免与上次相同。
+    private func pickNextEgg() {
+        let pool = Array(Self.eggMessages.indices.dropFirst())
+        guard !pool.isEmpty else { return }
+        var idx = pool.randomElement()!
+        if idx == lastEggIndex, pool.count > 1 {
+            idx = pool.filter { $0 != lastEggIndex }.randomElement()!
+        }
+        lastEggIndex = idx
+        eggMessage = Self.eggMessages[idx]
+    }
+
+    /// 排/重排 3.5 秒后自动收起气泡;连点换条时取消旧计时防止提前关闭。
+    /// 收起时清空解锁态,下一次需重新点满 7 下。
+    private func scheduleDismiss() {
+        dismissWork?.cancel()
+        let work = DispatchWorkItem {
+            eggUnlocked = false
+            showEgg = false
+        }
+        dismissWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.5, execute: work)
+    }
+
     // MARK: - 辅助
 
     private func open(_ urlString: String) {
         if let url = URL(string: urlString) {
             NSWorkspace.shared.open(url)
         }
+    }
+}
+
+// MARK: - 渡鸦原生气泡
+
+/// 用 `NSPopover` 承载彩蛋文案:气泡、箭头、材质和阴影均由 macOS 绘制。
+/// `.applicationDefined` 让连点渡鸦时气泡保持展开,只由外层 3.5 秒计时器收起。
+private struct RavenPopoverPresenter: NSViewRepresentable {
+    @Binding var isPresented: Bool
+    let text: String
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(isPresented: $isPresented)
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        NSView(frame: .zero)
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.isPresented = $isPresented
+        context.coordinator.update(text: text)
+
+        if isPresented {
+            context.coordinator.present(from: nsView)
+        } else {
+            context.coordinator.dismiss()
+        }
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.dismiss()
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, NSPopoverDelegate {
+        var isPresented: Binding<Bool>
+
+        private let popover: NSPopover
+        private let hostingController: NSHostingController<RavenPopoverContent>
+        private var currentText = ""
+
+        init(isPresented: Binding<Bool>) {
+            self.isPresented = isPresented
+            hostingController = NSHostingController(
+                rootView: RavenPopoverContent(text: "")
+            )
+            popover = NSPopover()
+            super.init()
+
+            popover.animates = true
+            popover.behavior = .applicationDefined
+            popover.contentViewController = hostingController
+            popover.delegate = self
+        }
+
+        func update(text: String) {
+            guard text != currentText else { return }
+            currentText = text
+            hostingController.rootView = RavenPopoverContent(text: text)
+            hostingController.view.layoutSubtreeIfNeeded()
+            popover.contentSize = hostingController.view.fittingSize
+        }
+
+        func present(from anchor: NSView) {
+            guard !popover.isShown, anchor.window != nil else { return }
+            popover.show(
+                relativeTo: anchor.bounds,
+                of: anchor,
+                preferredEdge: .maxY
+            )
+        }
+
+        func dismiss() {
+            guard popover.isShown else { return }
+            popover.performClose(nil)
+        }
+
+        func popoverDidClose(_ notification: Notification) {
+            if isPresented.wrappedValue {
+                isPresented.wrappedValue = false
+            }
+        }
+    }
+}
+
+private struct RavenPopoverContent: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.callout.weight(.medium))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .fixedSize()
     }
 }
 
