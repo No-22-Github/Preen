@@ -38,6 +38,7 @@ RTOL_GRAD = 2e-3  # 梯度逐元素相对误差(梯度普遍非零,逐元素 rto
 GOLDEN_B, GOLDEN_T, GOLDEN_H, GOLDEN_D = 2, 64, 4, 64
 GRADIENT_NAMES = ("dr", "dw", "dk", "dv", "da", "db", "dh_in")
 GOLDEN_REL_ERR = 1e-5
+RACE_B, RACE_T, RACE_H, RACE_D = 1, 512, 24, 64
 
 
 def _assert_fwd_close(actual: mx.array, desired: mx.array, msg: str, tol: float = FWD_REL_TOL):
@@ -193,18 +194,81 @@ class TestBackwardGolden:
         )
 
     def test_seven_gradients_are_bitwise_deterministic(self):
-        """同一 compiled Metal backward 连跑两次，七梯度逐位相等。"""
-        inputs, metal_grad, _ = _golden_gradient_functions()
-        first = metal_grad(*inputs)
-        second = metal_grad(*inputs)
-        mx.eval(*first, *second)
+        """T=512/H=24 的 5 次独立 dispatch 中，七梯度逐位相等。
 
-        for name, first_gradient, second_gradient in zip(
-            GRADIENT_NAMES, first, second
-        ):
-            assert mx.array_equal(first_gradient, second_gradient), (
-                f"梯度 {name} 在相同 backward dispatch 之间发生变化"
+        T=64/H=4 是为 CPU golden 准备的小 fixture，不足以稳定触发
+        缺 barrier 的竞态。确定性回归保留原始大配置、bf16 输入、
+        2 次 eager + 3 次 compiled；每次都从 host snapshot 重建
+        primal 并立即 eval，确保不是同一 lazy 结果或单次 dispatch 复用。
+        """
+        mx.random.seed(77)
+        shape = (RACE_B, RACE_T, RACE_H, RACE_D)
+        race_inputs = (
+            (mx.random.normal(shape) * 0.3).astype(mx.bfloat16),
+            (
+                mx.sigmoid(mx.random.normal(shape) * 1.2) * 0.25 + 0.74
+            ).astype(mx.bfloat16),
+            (mx.random.normal(shape) * 0.3).astype(mx.bfloat16),
+            (mx.random.normal(shape) * 0.3).astype(mx.bfloat16),
+            (mx.random.normal(shape) * 0.09).astype(mx.bfloat16),
+            (mx.random.normal(shape) * 0.09).astype(mx.bfloat16),
+        )
+        race_h_in = (
+            mx.random.normal((RACE_B, RACE_H, RACE_D, RACE_D)) * 0.05
+        ).astype(mx.float32)
+        mx.eval(*race_inputs, race_h_in)
+
+        # fp32 host snapshot 保存 bf16 的精确可表示值。每次 run 都会
+        # 生成 storage 独立的 MLX 输入，排除 lazy graph 复用假阳性。
+        input_values = tuple(
+            np.array(value.astype(mx.float32), copy=True) for value in race_inputs
+        )
+        h_in_value = np.array(race_h_in, copy=True)
+        kernel = make_wkv7_checkpoint(RACE_B, RACE_T, RACE_H, RACE_D)
+
+        def loss_fn(r, w, k, v, a, b, state):
+            output, h_out = kernel(r, w, k, v, a, b, state)
+            time_weights = mx.linspace(0.5, 1.5, RACE_T)[None, :, None, None]
+            state_weights = mx.linspace(-0.3, 0.7, RACE_D)[None, None, None, :]
+            return mx.mean(output * time_weights) + mx.mean(
+                h_out * state_weights
             )
+
+        eager = mx.grad(loss_fn, argnums=list(range(7)))
+        compiled = mx.compile(mx.grad(loss_fn, argnums=list(range(7))))
+
+        def run(grad_fn):
+            current_inputs = tuple(
+                mx.array(value).astype(mx.bfloat16) for value in input_values
+            )
+            current_h_in = mx.array(h_in_value)
+            gradients = grad_fn(*current_inputs, current_h_in)
+            mx.eval(*gradients)
+            return tuple(
+                np.array(gradient.astype(mx.float32), copy=True)
+                for gradient in gradients
+            )
+
+        runs = [
+            run(eager),
+            run(eager),
+            run(compiled),
+            run(compiled),
+            run(compiled),
+        ]
+        reference = runs[0]
+        for run_index, gradients in enumerate(runs[1:], start=2):
+            for name, expected, actual in zip(
+                GRADIENT_NAMES, reference, gradients
+            ):
+                np.testing.assert_array_equal(
+                    actual,
+                    expected,
+                    err_msg=(
+                        f"梯度 {name} 在第 {run_index} 次独立 backward "
+                        "dispatch 发生变化"
+                    ),
+                )
 
 
 class TestGradients:

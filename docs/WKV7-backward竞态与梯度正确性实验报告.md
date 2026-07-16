@@ -32,9 +32,11 @@ checkpoint kernel 时原样带入。`mx.compile` 与 bf16 激活直读改变了 
 2. **正确性**：Metal 与 CPU einsum reference 的七梯度最大相对误差必须小于 `1e-5`；
 3. **负对照**：临时移除 barrier 后，同一确定性测试必须能重新抓到梯度漂移。
 
-最终七梯度最坏相对误差为 `2.03e-6`，关键的 `dh_in` 为 `1.73e-7`；移除 barrier 后，
-第 39 次重复 backward 检出 `dw/dk/dv/da/db/dh_in` 不一致。由此形成了从用户行为、
-真实模型梯度、源码竞态、修复、跨实现 golden metric 到负对照的完整证据链。
+最终七梯度最坏相对误差为 `2.03e-6`，关键的 `dh_in` 为 `1.73e-7`。初始
+T=64/H=4 负对照要到第 39 次才检出竞态，证明小配置两次确定性断言杀伤力不足。
+最终 CI 确定性测试因此恢复为 T=512/H=24/bf16、2 eager + 3 compiled 的五次独立
+dispatch；移除 barrier 后第 2 次 dispatch 即在 `dw` 检出 25,502 个元素不一致。由此形成
+了从用户行为、真实模型梯度、源码竞态、修复、跨实现 golden metric 到负对照的完整证据链。
 
 需要单独保留一个数值边界：checkpoint backward 通过除以 `w` 逆向重建 chunk 内历史
 state。当 synthetic decay 接近零时，该逆过程本身会病态放大舍入误差；这是独立于 barrier
@@ -222,11 +224,13 @@ WKV7 专项：9 passed
 全仓快速测试：258 passed, 12 skipped
 ```
 
-Preen 已同步上游最终 golden 口径：使用 T=64 跨越 CHUNK=32 边界、非零
-`h_in`、同时包含 `out` 与 `h_out` 随机投影的 loss，对七个梯度执行 CPU einsum
-reference 的 `rel_err < 1e-5` 正确性断言，并对七梯度做 compiled backward bitwise
-确定性断言。同时保留 Preen 特有的 bf16 直读、fp32 物化和 eager/compiled State
-梯度对照。七梯度最坏相对误差仍为 `2.03e-6`，`dh_in` 为 `1.73e-7`。
+Preen 已同步上游最终 golden 口径。正确性测试使用 T=64 跨越 CHUNK=32 边界、
+非零 `h_in`、同时包含 `out` 与 `h_out` 随机投影的 loss，对七个梯度执行
+CPU einsum reference 的 `rel_err < 1e-5` 断言。确定性测试则单独使用
+T=512/H=24/bf16 大配置，运行 2 次 eager + 3 次 compiled；每次都从 host snapshot
+重建七个 primal 并立即 `mx.eval`，确保五个样本对应五次独立 Metal dispatch。同时保留
+Preen 特有的 bf16 直读、fp32 物化和 eager/compiled State 梯度对照。七梯度最坏相对
+误差仍为 `2.03e-6`，`dh_in` 为 `1.73e-7`。
 
 Preen 修复提交：
 
@@ -302,7 +306,7 @@ rel_err = max_over_tensors(tensor_rel_err)
 跨实现不要求 bitwise，因为 reduction 顺序不同；bitwise 只用于同一 Metal 实现重复执行的
 确定性判定。
 
-### 8.3 测试输入
+### 8.3 正确性测试输入
 
 | 项目 | 设置 | 目的 |
 |---|---|---|
@@ -313,6 +317,14 @@ rel_err = max_over_tensors(tensor_rel_err)
 | a | 每头 L2 归一化 | 对齐模型中的 `a=-kk` |
 | b | `-a * κ`，κ∈[0.9,1.1] | 对齐 delta-rule 结构 |
 | w | `exp(-exp(normal*0.5 - 2.5))` | 非 uniform、约 0.58–0.99 |
+
+### 8.4 确定性压力输入
+
+确定性与正确性使用不同 fixture：前者的目标是放大多 SIMD group 调度竞态，不需要运行
+CPU reference。因此使用 B=1、T=512、H=24、D=64 与 bf16 模型激活，对七个输入梯度执行
+2 次 eager + 3 次 compiled backward。每次运行都重建 storage 独立但数值相同的 primal，并在
+下一次运行前完成 `mx.eval`，避免 lazy graph 或已物化结果导致“两次调用只有一次真实
+dispatch”的假阳性。
 
 ## 9. Reference 精度调查与 CPU 仲裁
 
@@ -423,26 +435,27 @@ float32 中心差分的差异约 `5.6e-4–2.6e-2`。这是因为 loss 为大量
 
 ## 12. 负对照
 
-为了验证确定性测试确实能捕获原竞态，而不是仅在修复后“自然通过”：
-
-1. 临时移除 checkpoint backward 的末尾 barrier；
-2. 保持 T=64、非零 h_in、随机 out/h_out cotangent 与 compiled graph 不变；
-3. 对同一输入最多重复 50 次；
-4. 第 39 次检测到以下梯度 bitwise 不一致：
+初始负对照使用 T=64/H=4、非零 h_in、随机 out/h_out cotangent 与 compiled graph，
+临时移除 checkpoint backward 末尾 barrier 后最多重复 50 次。第 39 次才检测到：
 
 ```text
 dw, dk, dv, da, db, dh_in
 ```
 
 `dr` 没有进入该次不一致列表，符合其计算主要依赖 forward state 与 `d_out`、不依赖后续
-`C_row` 递推的结构。负对照完成后 barrier 已恢复；临时 mutation 不进入提交。
+`C_row` 递推的结构。但这也证明 T=64 只运行两次的 CI 断言极易假阳性通过。
+
+加固后的正式确定性测试恢复 T=512/H=24/bf16 大配置，并对每次运行强制独立
+storage 与求值边界。再次临时移除 barrier 后，第 2 次独立 dispatch 即在 `dw` 梯度中检出
+`25,502 / 786,432` 个元素不一致（3.24%），证明新测试能稳定捕获本竞态。负对照完成后
+barrier 已恢复；临时 mutation 不进入提交。
 
 ## 13. 上游提交与测试
 
 上游 fork 分支：
 
 ```text
-main
+fix/wkv7-backward-race
 ```
 
 提交：
@@ -450,6 +463,7 @@ main
 ```text
 71bca50 Fix WKV-7 backward threadgroup race
 0ecdb91 Add stateful WKV-7 backward golden test
+403d742 test: strengthen WKV7 backward race regression
 ```
 
 上游测试：
@@ -459,8 +473,8 @@ main
 ```
 
 第一笔提交的生产代码只修复两个 kernel 的 barrier，并配套加入确定性回归测试；
-第二笔提交加入 stateful API、CPU einsum golden reference 与七梯度正确性测试，同时将
-确定性测试整合进同一验收文件。现有零 state API 保持兼容。
+第二笔提交加入 stateful API、CPU einsum golden reference 与七梯度正确性测试；第三笔提交恢复
+大配置确定性压力口径，并强制五次 backward 均为独立 dispatch。现有零 state API 保持兼容。
 
 ## 14. 最终结论
 
