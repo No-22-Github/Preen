@@ -1,6 +1,6 @@
 # 更新日志
 
-> 记录首个预览版 [v0.1.0-beta.1](https://github.com/No-22-Github/Preen/releases/latest) 之后的变更。
+> 记录首个预览版 [v0.1.0-beta.1](https://github.com/No-22-Github/Preen/releases/tag/v0.1.0-beta.1) 之后的变更。
 > 格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 >
 > **写入规矩**(固化在 AGENTS.md):有 commit 就记;一连串同主题改动(如纯 UI 体验)合并写一行即可;涉及 API / 后端 / 协议 / 数据格式的改动必须展开说明。
@@ -8,6 +8,10 @@
 ---
 
 ## [未发布]
+
+## [1.0.0] - 2026-07-16
+
+首个正式版。以下为 [v0.1.0-beta.1](https://github.com/No-22-Github/Preen/releases/tag/v0.1.0-beta.1) 之后的全部变更。
 
 ### 新增
 
