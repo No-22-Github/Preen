@@ -43,6 +43,7 @@
 - 优化训练完成页视觉层级:移除灰色产物卡和分散的 Finder 按钮,改为轻量双列摘要,集中展示 held-out loss 变化、数据、模型精度、State、实际轮数与耗时,并突出「去对话」主操作;摘要行字号与内边距对齐其他终态页(失败/取消页),主操作按钮改用 macOS 原生圆角矩形样式并收紧按钮间距。
 
 ### 修复
+- **Metal 训练反向梯度不稳定**:修复 WKV7 checkpoint backward 在相邻时间步复用 threadgroup shared arrays 时缺少同步屏障的问题；此前较快线程可能提前覆盖 `w_sh/a_sh` 等当前步仍在读取的数据，使相同输入的 S₀ 梯度随 GPU 调度漂移，`mx.compile` 与 bf16 直读优化会改变调度并放大为训练后 State 重复或胡言乱语。现补齐时间步边界 barrier，保留训练图编译与 bf16 激活直读加速，并增加 eager/compiled 重复 backward 的逐元素确定性回归测试。受影响版本生成的 State 需要重新训练。
 - **调参面板训练步数预估偏高**:开启早停时,面板预估用「有效条数 × 轮数」(200 条 × 2 轮 = 400 步),但实际训练会先按验证集比例(默认 10%)划出 held-out 验证集,训练子集只有 180 条,实际 `total_steps` 是 360 步 —— 面板多算了那 20 条验证样本 × 2 轮。
   - 预估改为对齐 Python `data.train_test_split` 的 `max(1, int(n * ratio))` 公式:先扣验证集再算步数,早停关闭时才用全量。文案从「N 条有效 · 预计 ~M 步」改为「N 条训练 · K 条验证 · 预计 ~M 步」,让训练 / 验证划分对用户可见。
   - 抽出可测纯函数 `TrainingConfig.projectedCounts(...)` 锁定跨语言公式对齐,并删掉 `DataInspectionRunner` 里无人调用却写错口径(同样没扣 held-out)的 `estimatedSteps` 旧 helper。

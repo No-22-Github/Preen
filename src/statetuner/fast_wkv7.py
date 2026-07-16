@@ -20,8 +20,9 @@ state 语义(与 core.py 同向):
 
 来源:移植自 rwkv-metal(Apache-2.0, Alexei Goncharov / ImpulseLeap)。
        原 make_wkv7_checkpoint 把 h_in 固化成零;本模块改为暴露给调用方,
-       以支持 Preen 的可训练 S₀。kernel 本体(forward/backward Metal 源码)、
-       checkpoint 反向数值稳定设计、bf16 dtype cast 均原样保留。
+       以支持 Preen 的可训练 S₀。kernel 主体、checkpoint 反向数值稳定设计与
+       bf16 dtype cast 保持同源；另补齐上游 backward 时间步边界缺失的
+       threadgroup barrier，防止下一步覆盖仍在读取的 shared arrays。
 
 约束: T % CHUNK(=32) == 0。一次训练 run 内 T 固定 → kernel 只 JIT 一次。
 """
@@ -170,6 +171,11 @@ def _get_ckpt_bwd(H: int, T: int, chunk: int):
 
             for (uint dk=0; dk<HEAD_SIZE_C; dk++)
                 C_row[dk] = C_row[dk]*w_sh[dk] + dsa_dv*a_sh[dk];
+
+            // C_row 更新会读取整行 w_sh/a_sh，而下一时间步各线程会立即覆盖
+            // 自己负责的 shared-array 元素。必须等所有线程读完当前时间步，
+            // 否则执行较快的线程会让较慢线程混读两个时间步，造成梯度竞态。
+            threadgroup_barrier(mem_flags::mem_threadgroup);
         }
     }
     for (uint dk=0; dk<HEAD_SIZE_C; dk++) dh_in_out[hb+dk] = C_row[dk];

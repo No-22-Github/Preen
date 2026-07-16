@@ -8,6 +8,7 @@
   1. forward 数值一致(相对误差 < 1e-3,实测 ~8e-4,fp32 累加顺序差异)
   2. 6 梯度(dr/dw/dk/dv/da/db)一致(相对误差 < 2e-3,实测 < 1.3e-3)
   3. S₀ 透传梯度(d_h_in)一致 —— Preen 唯一可训参数,梯度必须穿回 kernel
+  4. bf16 eager/compiled backward 重复执行逐元素确定，且与 fp32 物化路径一致
 
 口径:用 np.testing.assert_allclose(rtol=...),与 tests/ 现有数值测试同风格。
 """
@@ -93,6 +94,64 @@ class TestForward:
 
 class TestGradients:
     """6 输入梯度 + S₀ 透传梯度一致性。"""
+
+    def test_state_grad_is_deterministic(self, inputs, h_in, wkv7_kernel):
+        """同一输入重复 backward 必须得到完全一致的 S₀ 梯度。
+
+        backward 每个时间步都会重用 threadgroup shared arrays。若上一个时间步
+        仍在读取而下一个时间步已经覆盖它们，单次与 ops 参考值可能仍在容差内，
+        但重复运行会随线程调度产生不同梯度。这里同时锁定 eager 与训练实际使用
+        的 compiled graph，避免这类数据竞争再次潜入训练路径。
+        """
+        # 生产训练路径直接把模型 bf16 激活交给 Metal kernel；这里不能只测
+        # 默认 fp32 随机数组，否则覆盖不到 fe0c493 引入的直读路径。
+        r, w, k, v, a, b = (x.astype(mx.bfloat16) for x in inputs)
+        h_in_np = np.array(h_in, copy=True)
+
+        def loss_met(state):
+            out, _ = wkv7_kernel(r, w, k, v, a, b, state)
+            return mx.mean(out)
+
+        eager_grad = mx.value_and_grad(loss_met)
+        compiled_grad = mx.compile(mx.value_and_grad(loss_met))
+
+        def run(grad_fn):
+            # 每次创建值相同但 storage 独立的输入，确保 Metal backward 真正重跑，
+            # 而不是复用已物化的 lazy graph 输出。
+            state = mx.array(h_in_np)
+            _, grad = grad_fn(state)
+            mx.eval(grad)
+            return np.array(grad, copy=True)
+
+        eager_runs = [run(eager_grad) for _ in range(3)]
+        compiled_runs = [run(compiled_grad) for _ in range(3)]
+        reference = eager_runs[0]
+        for mode, runs in (("eager", eager_runs), ("compiled", compiled_runs)):
+            for index, grad in enumerate(runs, start=1):
+                assert np.array_equal(grad, reference), (
+                    f"{mode} 第 {index} 次 backward 的 S₀ 梯度不确定 —— "
+                    "疑似存在 threadgroup shared-memory 数据竞争"
+                )
+
+    def test_bf16_direct_matches_fp32_materialization(self, inputs, h_in, wkv7_kernel):
+        """bf16 直读保持旧 fp32 物化路径的 loss 与 S₀ 梯度语义。"""
+        bf16_inputs = tuple(x.astype(mx.bfloat16) for x in inputs)
+
+        def loss_direct(state):
+            out, _ = wkv7_kernel(*bf16_inputs, state)
+            return mx.mean(out)
+
+        def loss_materialized(state):
+            fp32_inputs = tuple(x.astype(mx.float32) for x in bf16_inputs)
+            out, _ = wkv7_kernel(*fp32_inputs, state)
+            return mx.mean(out)
+
+        direct_loss, direct_grad = mx.value_and_grad(loss_direct)(h_in)
+        old_loss, old_grad = mx.value_and_grad(loss_materialized)(h_in)
+        mx.eval(direct_loss, direct_grad, old_loss, old_grad)
+
+        np.testing.assert_array_equal(np.asarray(direct_loss), np.asarray(old_loss))
+        np.testing.assert_array_equal(np.asarray(direct_grad), np.asarray(old_grad))
 
     def test_six_input_grads(self, inputs, h_in, wkv7_kernel):
         r, w, k, v, a, b = inputs
