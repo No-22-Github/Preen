@@ -107,7 +107,7 @@ struct TrainingRunningView: View {
                 }
                 if let metric = store.latestProcessMetric {
                     let pressure = store.memoryPressure(for: metric)
-                    Label(String(format: "RSS %.2f G", metric.physicalFootprintGB),
+                    Label(String(format: "RSS %.2f GB", metric.physicalFootprintGiB),
                           systemImage: "memorychip")
                         .foregroundStyle(.secondary)
                     Text(pressure.displayLabel)

@@ -447,14 +447,14 @@ struct TrainingConfigView: View {
                 )
                 TrainingIntParameterRow(
                     title: "预热步数", key: "warmup", detail: "前 N 步从 0 线性升到峰值",
-                    value: $config.warmup, default: 10
+                    value: $config.warmup, default: 50
                 )
             }
 
             Section("训练长度") {
                 TrainingIntParameterRow(
                     title: "训练轮数", key: "epochs", detail: "启用早停时为上限",
-                    value: $config.epochs, default: 20
+                    value: $config.epochs, default: 5
                 )
                 TrainingIntParameterRow(
                     title: "上下文长度", key: "ctx_len", detail: "单条样本最长 token",
@@ -707,12 +707,13 @@ struct PathRow: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(width: 200, alignment: .leading)
-            Text(path.isEmpty ? "（未选）" : URL(fileURLWithPath: path).lastPathComponent)
+            Text(path.isEmpty ? "（未选）" : path)
                 .font(.body)
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .foregroundStyle(path.isEmpty ? .secondary : .primary)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .help(path.isEmpty ? "尚未选择路径" : path)
             Button("选择…") { pick() }
         }
     }

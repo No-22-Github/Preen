@@ -86,6 +86,11 @@ final class ChatStore {
     // === 配置 ===
     var genConfig: GenConfig = .defaultConfig
     var statePath: String?  // 当前 state 文件路径(nil = 无 state 基线)
+    /// 当前已连接的模型路径(connect 时记录,disconnect 清)。供状态栏与 toolbar 展示。
+    private(set) var connectedModelPath: String?
+    /// 模型 + State 已真正落到可用会话上的递增信号。
+    /// set_state 的 ok 或 new_session 成功后递增,供顶部模型 chip 做克制的完成反馈。
+    private(set) var activationRevision: Int = 0
 
     // MARK: - 生命周期
 
@@ -93,6 +98,7 @@ final class ChatStore {
     /// 启动期间 stderr 实时推到 `startupLog`(供启动日志弹窗展示)。
     func connect(model: URL) {
         disconnect()
+        connectedModelPath = model.path
         // 重置启动日志(新一轮连接)。
         startupLog = ""
         startupError = nil
@@ -140,6 +146,7 @@ final class ChatStore {
         isConnected = false
         sessionId = nil
         isGenerating = false
+        connectedModelPath = nil
         backendStore.updateInference(phase: .idle, message: "推理未启动")
         // 清理启动日志状态(下次连接重新累积)。
         startupError = nil
@@ -235,6 +242,9 @@ final class ChatStore {
                     // set_state 成功 = 重置会话(history/cache 清空)。
                     self.messages.removeAll()
                     _ = payload  // stateLabel 等可后续展示
+                    // state 变了,刷新状态栏摘要(模型 + 新 state)。
+                    self.backendStore.updateInference(phase: .ready, message: self.inferenceSummary)
+                    self.activationRevision &+= 1
                 }
             } catch {
                 self.lastError = error.localizedDescription
@@ -253,6 +263,25 @@ final class ChatStore {
         }
     }
 
+    /// 预注入 state 路径(不立即下发后端):供「去对话」一键流程在未连接时使用。
+    /// 仅写本地 statePath,这样随后 connect → ready → newSession() 会自动带上该 state,
+    /// 无需用户手动加载。
+    func prepareInjectedState(path: String) {
+        statePath = path
+    }
+
+    /// 推理状态摘要:「模型 X · state Y」或「模型 X · 基线」。供全局状态栏展示。
+    var inferenceSummary: String {
+        let modelPart = connectedModelPath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "模型"
+        let statePart: String
+        if let p = statePath {
+            statePart = "state \(URL(fileURLWithPath: p).lastPathComponent)"
+        } else {
+            statePart = "基线"
+        }
+        return "\(modelPart) · \(statePart)"
+    }
+
     /// 新建会话(连接后自动调,或换模板/切 state 后重建)。
     func newSession(template: String = "qa", reasoning: Bool? = nil, think: String? = nil) {
         Task { [weak self] in
@@ -263,6 +292,7 @@ final class ChatStore {
                                                             genConfig: self.genConfig.toDTO())
                 self.sessionId = sid
                 self.messages.removeAll()
+                self.activationRevision &+= 1
             } catch {
                 self.lastError = "建会话失败：\(error.localizedDescription)"
             }
@@ -275,7 +305,7 @@ final class ChatStore {
         switch event {
         case .ready:
             isConnected = true
-            backendStore.updateInference(phase: .ready, pid: client?.pid, message: "推理就绪")
+            backendStore.updateInference(phase: .ready, pid: client?.pid, message: inferenceSummary)
             // 自动建会话(qa 模板默认)。
             newSession()
         case .textChunk(let id, _, let delta, let phase):

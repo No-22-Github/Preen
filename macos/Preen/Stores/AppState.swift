@@ -166,16 +166,36 @@ final class AppState {
         }
     }
 
-    // === 跨面板:训练完成 → 跳对话,自动设上产物 state ===
+    // === 跨面板:训练完成 → 跳对话,一键启动模型 + 加载产物 state ===
     var injectedStatePath: String?
 
-    /// 「去对话」入口:训练完成态的按钮调用。
-    func goToChat(stateURL: URL) {
+    /// 「去对话」入口:训练完成态(或历史记录详情)的按钮调用。
+    ///
+    /// 一键流程(用户裁决):
+    ///  1. 若 `trainingModelPath` 与当前全局模型不同 → 切到训练用的模型(selectModel 会
+    ///     disconnect 旧模型 + 清旧 state);
+    ///  2. 把产物 state 路径预注入 chatStore.statePath(未连接时 newSession 会自动带上);
+    ///  3. 切到对话面板;
+    ///  4. 若后端未连接 → 自动 connect(ready 后 newSession 用预注入的 state)。
+    ///     已连接则直接 setState 下发。
+    func goToChat(stateURL: URL, trainingModelPath: String?) {
+        // 1. 模型一致性:训练模型与当前不同则切换(会 disconnect 旧模型 + clearState)。
+        if let trainingModel = trainingModelPath,
+           !trainingModel.isEmpty,
+           trainingModel != modelPath {
+            selectModel(path: trainingModel)
+        }
+        // 2. 预注入 state(不立即下发后端;已连接路径下面 setState,未连接则 newSession 带上)。
+        chatStore.prepareInjectedState(path: stateURL.path)
         injectedStatePath = stateURL.path
+        // 3. 切到对话面板。
         selection = .chat
-        // 如果对话面板已连接,立即设 state;否则用户点连接后 onChange 会接住。
+        // 4. 启动:未连接则自动 connect(用当前 modelPath,即上面可能已切换的训练模型);
+        //    已连接则直接下发 state。
         if chatStore.isConnected {
             chatStore.setState(path: stateURL.path)
+        } else {
+            connectInference()
         }
     }
 }

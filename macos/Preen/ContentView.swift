@@ -17,6 +17,9 @@ struct ContentView: View {
     @State private var isShowingChatGenerationParameters = false
     /// 待执行的 state 动作(有聊天记录时拦截,确认后才执行,与垃圾桶同逻辑)。
     @State private var pendingStateAction: PendingStateAction?
+    /// 「去对话」的一键加载真正完成后,顶部模型 chip 短暂变绿。
+    @State private var isModelChipAcknowledged = false
+    @State private var modelChipPulseID = UUID()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -28,7 +31,7 @@ struct ContentView: View {
                     .toolbar {
                         if appState.selection == .chat && appState.chatStore.isConnected {
                             ToolbarItemGroup(placement: .primaryAction) {
-                                Button(action: appState.disconnectInference) {
+                                Button(action: requestDisconnect) {
                                     HStack(spacing: 6) {
                                         if #available(macOS 15.0, *) {
                                             Image(systemName: "personalhotspot.slash")
@@ -101,30 +104,37 @@ struct ContentView: View {
         }
         .frame(minWidth: 1000, minHeight: 680)
         .confirmationDialog(
-            pendingStateAction == .load ? "替换 State 会清空当前会话？" : "卸下 State 会清空当前会话？",
+            confirmationTitle,
             isPresented: Binding(
                 get: { pendingStateAction != nil },
                 set: { if !$0 { pendingStateAction = nil } }
             ),
             titleVisibility: .visible
         ) {
-            Button(pendingStateAction == .load ? "替换" : "卸下", role: .destructive) {
+            Button(confirmationDestructiveButtonTitle, role: .destructive) {
                 let action = pendingStateAction
                 pendingStateAction = nil
                 switch action {
                 case .load: performLoadState()
                 case .clear: performClearState()
+                case .disconnect: appState.disconnectInference()
                 case .none: break
                 }
             }
             Button("取消", role: .cancel) { pendingStateAction = nil }
         } message: {
-            Text("加载或卸下 State 都会重置会话历史，此操作无法撤销。")
+            Text(confirmationMessage)
         }
         // 欢迎窗口:作为主窗口的模态 sheet,从顶部滑出、盖在主窗口上方、锁定(点背景不响应)。
         // 首启 / 「窗口 → 欢迎使用 Preen」翻 isWelcomePresented=true 弹出;同一标志也驱动侧栏收起。
         .sheet(isPresented: $appState.isWelcomePresented) {
             WelcomeView(appState: appState)
+        }
+        .onChange(of: appState.chatStore.activationRevision) { _, _ in
+            // 模型 + State 真正落到可用会话:连接就绪(new_session 成功)或切换 state 后,
+            // 顶部模型 chip 短暂变绿。覆盖正常点「连接」、去对话一键加载、手动切 state 等所有就绪时刻。
+            appState.injectedStatePath = nil
+            acknowledgeModelChip()
         }
     }
 
@@ -155,7 +165,15 @@ struct ContentView: View {
                         .truncationMode(.middle)
                 }
             }
-            .help("选择 RWKV-7 模型")
+            // Menu 的 label 会被系统样式化覆盖,自定义颜色/背景塞在 label 内不生效;
+            // 把就绪反馈做成独立 overlay 叠在 Menu 外,绕开 Menu 的样式化。
+            .overlay {
+                Capsule()
+                    .strokeBorder(Color.green.opacity(isModelChipAcknowledged ? 0.9 : 0), lineWidth: 1.5)
+                    .padding(-5)
+            }
+            .animation(.easeInOut(duration: 0.2), value: isModelChipAcknowledged)
+            .help(modelPickerHelp)
 
             // 精度胶囊:独立于 Menu label,避免 Menu 对多视图渲染的限制。
             if !appState.modelPath.isEmpty {
@@ -215,6 +233,31 @@ struct ContentView: View {
         return attr
     }
 
+    /// 模型 chip 的辅助提示:不占页面空间,但能核对实际模型与 State 路径。
+    private var modelPickerHelp: String {
+        guard appState.chatStore.isConnected else {
+            return appState.modelPath.isEmpty
+                ? "选择 RWKV-7 模型"
+                : "选择 RWKV-7 模型\n当前：\(appState.modelPath)"
+        }
+        let state = appState.chatStore.statePath ?? "未加载（基线模式）"
+        return "模型已加载\n模型：\(appState.modelPath)\nState：\(state)"
+    }
+
+    private func acknowledgeModelChip() {
+        let pulseID = UUID()
+        modelChipPulseID = pulseID
+        withAnimation(.easeOut(duration: 0.16)) {
+            isModelChipAcknowledged = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            guard modelChipPulseID == pulseID else { return }
+            withAnimation(.easeInOut(duration: 0.35)) {
+                isModelChipAcknowledged = false
+            }
+        }
+    }
+
     private func pickModel() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -244,6 +287,16 @@ struct ContentView: View {
         }
     }
 
+    /// 请求断开推理连接:有聊天记录时先拦截确认(断开会终止会话历史)。
+    /// 空会话直接断开,无破坏性后果,不打扰用户。
+    private func requestDisconnect() {
+        if appState.chatStore.messages.isEmpty {
+            appState.disconnectInference()
+        } else {
+            pendingStateAction = .disconnect
+        }
+    }
+
     /// 实际执行:弹文件选择器 → 应用 state。
     private func performLoadState() {
         let panel = NSOpenPanel()
@@ -267,6 +320,38 @@ struct ContentView: View {
         return URL(fileURLWithPath: path).lastPathComponent
     }
 
+    /// 确认弹窗标题(按待执行动作切换)。
+    private var confirmationTitle: String {
+        switch pendingStateAction {
+        case .load: return "替换 State 会清空当前会话？"
+        case .clear: return "卸下 State 会清空当前会话？"
+        case .disconnect: return "断开会清除当前会话？"
+        case .none: return ""
+        }
+    }
+
+    /// 确认弹窗的破坏性按钮文案。
+    private var confirmationDestructiveButtonTitle: String {
+        switch pendingStateAction {
+        case .load: return "替换"
+        case .clear: return "卸下"
+        case .disconnect: return "断开"
+        case .none: return ""
+        }
+    }
+
+    /// 确认弹窗的说明文字。
+    private var confirmationMessage: String {
+        switch pendingStateAction {
+        case .load, .clear:
+            return "加载或卸下 State 都会重置会话历史，此操作无法撤销。"
+        case .disconnect:
+            return "断开推理连接将终止后端进程并清除当前会话历史，此操作无法撤销。"
+        case .none:
+            return ""
+        }
+    }
+
     @ViewBuilder
     private var detail: some View {
         switch appState.selection {
@@ -282,7 +367,7 @@ struct ContentView: View {
                 onConvertModel: { appState.goToModelConversion() },
                 welcomePresented: appState.isWelcomePresented,
                 onStart: { appState.startTraining(config: $0) },
-                onGoToChat: { appState.goToChat(stateURL: $0) }
+                onGoToChat: { appState.goToChat(stateURL: $0, trainingModelPath: $1) }
             )
         case .chat:
             if appState.modelPath.isEmpty {
@@ -290,7 +375,6 @@ struct ContentView: View {
             } else {
                 ChatPanel(store: appState.chatStore,
                           modelPath: appState.modelPath,
-                          injectedStatePath: $appState.injectedStatePath,
                           isShowingGenerationParameters: $isShowingChatGenerationParameters,
                           onConnect: { appState.connectInference() })
             }
@@ -336,8 +420,9 @@ struct ContentView: View {
 
 }
 
-/// 待执行的对话 state 动作(加载/卸下),用于有聊天记录时的确认拦截。
+/// 待执行的对话 state 动作(加载/卸下/断开),用于有聊天记录时的确认拦截。
 private enum PendingStateAction {
-    case load   // 加载/替换 state
-    case clear  // 卸下 state
+    case load       // 加载/替换 state
+    case clear      // 卸下 state
+    case disconnect // 断开推理连接(会终止会话)
 }

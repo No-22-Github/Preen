@@ -21,8 +21,6 @@ struct ChatPanel: View {
     @Bindable var store: ChatStore
     /// 模型路径(顶部中央 toolbar 选的,从 app-wide 注入)。
     var modelPath: String
-    /// 外部「去对话」入口注入的 state 路径(训练完成 → 跳对话,自动设上)。
-    @Binding var injectedStatePath: String?
     /// 由窗口 toolbar 打开的生成参数 sheet。
     @Binding var isShowingGenerationParameters: Bool
     var onConnect: () -> Void
@@ -78,12 +76,6 @@ struct ChatPanel: View {
         }
         .sheet(isPresented: $isShowingGenerationParameters) {
             samplerSheet
-        }
-        .onChange(of: injectedStatePath) { _, newPath in
-            // 训练完成跳来:自动连 + 切 state。
-            if let path = newPath, store.isConnected {
-                store.setState(path: path)
-            }
         }
     }
 

@@ -145,7 +145,7 @@ struct TrainingRunDetailView: View {
 
     private func goToChat() {
         guard let path = run.artifacts.statePath else { return }
-        appState.goToChat(stateURL: URL(fileURLWithPath: path))
+        appState.goToChat(stateURL: URL(fileURLWithPath: path), trainingModelPath: run.config?.modelPath)
     }
 
     private func exportPth() {

@@ -28,8 +28,8 @@ struct TrainingPanel: View {
 
     var onStart: (TrainingConfig) -> Void
 
-    /// 「去对话」回调(把产物 state 路径传给对话面板)。
-    var onGoToChat: (URL) -> Void
+    /// 「去对话」回调:把产物 state 路径 + 训练用的模型路径传给对话面板(一键启动)。
+    var onGoToChat: (URL, String?) -> Void
 
     /// idle 态子阶段。
     private enum Phase {
@@ -88,7 +88,8 @@ struct TrainingPanel: View {
                 finishingView
 
             case .completed:
-                TrainingDoneView(store: store, onGoToChat: onGoToChat) {
+                TrainingDoneView(store: store, onGoToChat: onGoToChat,
+                                 onGoHome: { store.reset(); phase = .empty }) {
                     showingChart = true
                 }
 

@@ -215,13 +215,25 @@ final class TrainStore {
         dockProgress.clear()
     }
 
+    /// 测试钩子:把状态机置为 `.running`,模拟 `launch()` 设过 running 之后、事件流到来之前的状态。
+    /// 正常流程下 `.running` 由 `launch()` 设置(它启动真实进程,单测无法走),纯事件驱动的测试
+    /// 需要这个入口才能验证 completed/failed/cancelled 等终态分支「前置 running」的副作用。
+    internal func enterRunningStateForTesting() {
+        state = .running
+    }
+
     // MARK: - 事件消费(穷举,不许 default — design.md §4.2)
 
     /// 实时训练事件入口。装配数据后执行全部实时副作用(Dock / 通知 / backendStore / 持久化)。
     /// 历史回放用 `replay(events:)`,只装配数据、不触发任何对外副作用。
+    ///
+    /// ⚠️ previousState 快照:必须在 `applyDataOnly` 改动 state 之前采样,
+    /// 再透传给 `applySideEffects` 判通知。否则终态分支读到的 state 已是完成态,
+    /// `shouldNotify` 永远 false,`dockProgress.clear()` 不会执行 → badge 卡在 100%。
     func consume(event: TrainEvent) {
+        let previousState = state
         applyDataOnly(event)
-        applySideEffects(for: event)
+        applySideEffects(for: event, previousState: previousState)
     }
 
     /// 仅装配 chart 与状态字段,无任何对外副作用。历史详情回放专用。
@@ -301,14 +313,16 @@ final class TrainStore {
     }
 
     /// 实时训练专属副作用。回放(`replay`)不调用。
-    private func applySideEffects(for event: TrainEvent) {
+    /// `previousState`:事件处理前的状态快照,用于判完成/失败/取消通知(此时 state 已被
+    /// `applyDataOnly` 改成终态,不能直接读 `state`,否则 `shouldNotify` 永远 false)。
+    private func applySideEffects(for event: TrainEvent, previousState: TrainState) {
         switch event {
         case .step(let step, _, _, _, _, _):
             backendStore.updateTrainingProgress(step: step, secondsPerStep: currentSecondsPerStep)
             dockProgress.update(progress: progress)
         case .completed(let path, _, _, _):
             // ✅ 唯一可信完成信号。
-            let shouldNotify = state == .running || state == .finishing
+            let shouldNotify = previousState == .running || previousState == .finishing
             backendStore.updateTraining(phase: .idle, message: "训练已完成")
             if shouldNotify {
                 finishBackgroundFeedback(
@@ -317,11 +331,11 @@ final class TrainStore {
                 )
             }
         case .failed(let message, _, _):
-            let shouldNotify = state == .running || state == .finishing
+            let shouldNotify = previousState == .running || previousState == .finishing
             backendStore.updateTraining(phase: .failed, message: message)
             if shouldNotify { finishBackgroundFeedback(title: "训练失败", body: message) }
         case .cancelled(let message, _):
-            let shouldNotify = state == .running || state == .finishing
+            let shouldNotify = previousState == .running || previousState == .finishing
             backendStore.updateTraining(phase: .idle, message: "训练已取消")
             if shouldNotify { finishBackgroundFeedback(title: "训练已取消", body: message) }
         case .start, .resume, .epochStart, .epochEnd, .stdWarning,
@@ -528,18 +542,18 @@ final class TrainStore {
 
     var latestProcessMetric: ProcessMetric? { backendStore.latestProcessMetric }
 
-    /// 训练运行时图表统一使用十进制 GB；doctor 尚未完成时直接读取本机物理内存兜底。
-    var memoryCapacityGB: Double {
-        if let reported = backendStore.runtime.report?.memorySizeGB, reported > 0 {
+    /// App 图表内部统一用 GiB；产品界面按约定将该数值标为 GB。
+    var memoryCapacityGiB: Double {
+        if let reported = backendStore.runtime.report?.displayedMemorySizeGiB, reported > 0 {
             return reported
         }
-        return Double(ProcessInfo.processInfo.physicalMemory) / 1e9
+        return Double(ProcessInfo.processInfo.physicalMemory) / Double(1024 * 1024 * 1024)
     }
 
     func memoryPressure(for metric: ProcessMetric) -> MemoryPressureLevel {
         MemoryMetricMath.pressureLevel(
-            footprintGB: metric.physicalFootprintGB,
-            physicalMemoryGB: memoryCapacityGB,
+            footprintGiB: metric.physicalFootprintGiB,
+            physicalMemoryGiB: memoryCapacityGiB,
             systemPressure: metric.pressure
         )
     }

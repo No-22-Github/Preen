@@ -2,7 +2,7 @@
 //  TrainingDoneView.swift
 //  Preen
 //
-//  训练完成态。产物卡片 + 「去对话」按钮(design.md §4 最重要动线)。
+//  训练完成态。轻量结果摘要 + 「去对话」按钮(design.md §4 最重要动线)。
 //
 //  注意 completed 事件没有最终 loss / data_sha256(子 Agent 契约已确认):
 //   - 最终 loss:从 final.best 取(held-out 最佳)。
@@ -14,116 +14,173 @@ import SwiftUI
 
 struct TrainingDoneView: View {
     @Bindable var store: TrainStore
-    /// 「去对话」回调:把 state 路径传给对话面板。
-    var onGoToChat: (URL) -> Void
+    /// 「去对话」回调:把 state 路径 + 训练用的模型路径传给对话面板(一键启动)。
+    var onGoToChat: (URL, String?) -> Void
+    /// 「返回首页」回调:reset store + 回训练面板空态落地页。
+    var onGoHome: () -> Void
     var onShowChart: () -> Void
 
     var body: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 0) {
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 48))
                 .foregroundStyle(.green)
                 .accessibilityHidden(true)
 
             Text("训练完成")
-                .font(.largeTitle)
+                .font(.title.weight(.semibold))
+                .padding(.top, 14)
 
-            // 产物卡片。
-            productCard
-                .frame(maxWidth: 500)
+            resultSummary
+                .frame(maxWidth: 640)
+                .padding(.top, 22)
 
-            // 按钮组。
-            HStack(spacing: 12) {
+            HStack(spacing: 10) {
+                if let path = store.outputPath {
+                    Button {
+                        onGoToChat(URL(fileURLWithPath: path), store.currentRun?.config?.modelPath)
+                    } label: {
+                        Text("去对话")
+                            .frame(minWidth: 120)
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+
                 Button {
                     onShowChart()
                 } label: {
-                    Label("查看曲线", systemImage: "chart.xyaxis.line")
+                    Text("查看曲线")
+                        .frame(minWidth: 120)
                 }
+                .buttonStyle(.bordered)
                 .disabled(store.lossPoints.isEmpty)
-                if let path = store.outputPath {
-                    Button {
-                        onGoToChat(URL(fileURLWithPath: path))
-                    } label: {
-                        Label("去对话", systemImage: "bubble.left.and.bubble.right")
-                            .frame(minWidth: 120)
-                    }
-                    .preenGlassButton(prominent: true)
-                    .controlSize(.large)
-                }
-                if let path = store.outputPath {
-                    Button {
-                        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
-                    } label: {
-                        Label("在 Finder 中显示", systemImage: "folder")
-                    }
-                }
             }
+            .padding(.top, 26)
 
-            // 「再训一个」。
-            Button("再训一个") {
-                store.reset()
-            }
-            .padding(.top, 8)
+            Button("返回首页") { onGoHome() }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .padding(.top, 14)
         }
-        .padding(32)
+        .padding(.horizontal, 32)
+        .padding(.vertical, 32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     @ViewBuilder
-    private var productCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            // state 路径。
-            if let path = store.outputPath {
-                LabeledRow(label: "state 文件") {
-                    Text(URL(fileURLWithPath: path).lastPathComponent)
-                        .font(.body)
-                        .textSelection(.enabled)
-                }
-            }
-            // 最终 loss(held-out 最佳)。
+    private var resultSummary: some View {
+        VStack(spacing: 14) {
             if let best = store.finalBest {
-                LabeledRow(label: "最终 held-out loss") {
-                    Text(String(format: "%.4f", best))
-                        .font(.body.monospacedDigit())
+                SummaryRow(label: "held-out loss") {
+                    HStack(spacing: 4) {
+                        if let initial = initialHeldOutLoss,
+                           store.heldOutPoints.count > 1 {
+                            Text(formatLoss(initial))
+                                .foregroundStyle(.tertiary)
+                            Image(systemName: "arrow.right")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+                        Text(formatLoss(best))
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.primary)
+                    }
+                    .font(.body.monospacedDigit())
                 }
             }
-            // 轮数。
-            if let cfg = store.configSnapshot {
-                LabeledRow(label: "训练轮数") {
-                    Text("\(cfg.epochs)")
+
+            if let dataPath = store.currentRun?.config?.dataPath {
+                SummaryRow(label: "训练数据") {
+                    Text(URL(fileURLWithPath: dataPath).lastPathComponent)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(dataPath)
                 }
             }
-            // 耗时。
-            if let elapsed = store.elapsed {
-                LabeledRow(label: "总耗时") {
-                    Text(TrainStore.formatDuration(elapsed))
+
+            if let modelPath = store.currentRun?.config?.modelPath {
+                SummaryRow(label: "基础模型") {
+                    HStack(spacing: 8) {
+                        Text(URL(fileURLWithPath: modelPath).lastPathComponent)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Text("·")
+                            .foregroundStyle(.tertiary)
+                        Text(ModelConfigProbe.precisionBadge(for: modelPath).uppercased())
+                            .foregroundStyle(.secondary)
+                    }
+                    .help(modelPath)
                 }
             }
-            // 早停信息(若触发)。
-            if let early = store.earlyStopInfo {
-                LabeledRow(label: "早停") {
-                    Text("第 \(early.epoch + 1) 轮触发")
-                        .foregroundStyle(.orange)
+
+            if let path = store.outputPath {
+                SummaryRow(label: "State") {
+                    HStack(spacing: 12) {
+                        Text(URL(fileURLWithPath: path).lastPathComponent)
+                            .fontWeight(.semibold)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .textSelection(.enabled)
+                        Button {
+                            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+                        } label: {
+                            Image(systemName: "folder")
+                                .foregroundStyle(.secondary)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help("在 Finder 中显示")
+                    }
                 }
+            }
+
+            SummaryRow(label: "训练轮数") {
+                HStack(spacing: 6) {
+                    Text("\(actualEpochs) 轮")
+                    if let elapsed = store.elapsed {
+                        Text("·")
+                        Text(TrainStore.formatDuration(elapsed))
+                    }
+                    if store.earlyStopInfo != nil {
+                        Text("· 提前停止")
+                            .foregroundStyle(.orange)
+                    }
+                }
+                .foregroundStyle(.secondary)
             }
         }
-        .padding(16)
-        .background(.quaternary, in: .rect)
+    }
+
+    private var initialHeldOutLoss: Double? {
+        store.heldOutPoints.first?.loss
+    }
+
+    private var actualEpochs: Int {
+        store.currentRun?.summary.actualEpochs
+            ?? (store.epochLossPoints.last.map { $0.epoch + 1 })
+            ?? store.configSnapshot?.epochs
+            ?? 0
+    }
+
+    private func formatLoss(_ loss: Double) -> String {
+        String(format: "%.2f", loss)
     }
 }
 
-/// 标签行:左侧副标签,右侧值。
-struct LabeledRow<Content: View>: View {
+/// 训练摘要行:左侧固定标签列,右侧结果列。
+private struct SummaryRow<Content: View>: View {
     let label: String
     @ViewBuilder var content: Content
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline) {
+        HStack(alignment: .firstTextBaseline, spacing: 16) {
             Text(label)
-                .font(.caption)
+                .font(.body)
                 .foregroundStyle(.secondary)
-            Spacer()
+                .frame(width: 140, alignment: .leading)
             content
+                .font(.body)
+                .frame(maxWidth: .infinity, alignment: .trailing)
         }
     }
 }
