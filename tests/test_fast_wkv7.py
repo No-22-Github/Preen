@@ -8,9 +8,13 @@
   1. forward 数值一致(相对误差 < 1e-3,实测 ~8e-4,fp32 累加顺序差异)
   2. 6 梯度(dr/dw/dk/dv/da/db)一致(相对误差 < 2e-3,实测 < 1.3e-3)
   3. S₀ 透传梯度(d_h_in)一致 —— Preen 唯一可训参数,梯度必须穿回 kernel
-  4. bf16 eager/compiled backward 重复执行逐元素确定，且与 fp32 物化路径一致
+  4. T=64 跨 chunk、非零 h_in 与 h_out cotangent 下,七梯度对 CPU einsum
+     reference 的最坏相对误差 < 1e-5
+  5. 七梯度 compiled backward 重复执行 bitwise 确定
+  6. bf16 eager/compiled State backward 确定，且与 fp32 物化路径一致
 
-口径:用 np.testing.assert_allclose(rtol=...),与 tests/ 现有数值测试同风格。
+口径:旧 ops 对照保留 np.testing.assert_allclose；跨实现 golden 用各梯度
+max-abs 差除以 reference max-abs，再取七梯度最坏值。
 """
 import numpy as np
 import pytest
@@ -28,6 +32,12 @@ B, T, H, D = 1, 512, 16, 64
 # 全局相对误差仅 8e-4,纯属 fp32 累加顺序差异,非数值错误)。
 FWD_REL_TOL = 1e-3
 RTOL_GRAD = 2e-3  # 梯度逐元素相对误差(梯度普遍非零,逐元素 rtol 合适;实测 < 1.3e-3)
+
+# Metal backward 的严格 golden 口径。T=64 刚好跨越两个 CHUNK=32，
+# 又足够小，可以在快速测试中用 CPU einsum 作独立 reference。
+GOLDEN_B, GOLDEN_T, GOLDEN_H, GOLDEN_D = 2, 64, 4, 64
+GRADIENT_NAMES = ("dr", "dw", "dk", "dv", "da", "db", "dh_in")
+GOLDEN_REL_ERR = 1e-5
 
 
 def _assert_fwd_close(actual: mx.array, desired: mx.array, msg: str, tol: float = FWD_REL_TOL):
@@ -65,6 +75,69 @@ def _ops_forward(r, w, k, v, a, b, h_in):
     return mx.stack(ys, axis=1)
 
 
+def _einsum_reference_with_state(r, w, k, v, a, b, h_in):
+    """CPU einsum reference，显式接受 h_in 并返回 h_out。
+
+    GPU einsum 在该 reduction 上会有约 1e-3 的 throughput-oriented
+    累加偏差，无法作为 1e-5 golden 的仲裁。CPU stream 使这项
+    测试真正衡量 Metal kernel，而不是 reference 自身的 GPU reduction。
+    """
+    with mx.stream(mx.cpu):
+        h = h_in
+        outputs = []
+        for t in range(r.shape[1]):
+            r_t, w_t, k_t = r[:, t], w[:, t], k[:, t]
+            v_t, a_t, b_t = v[:, t], a[:, t], b[:, t]
+            sa = mx.einsum("bhsd,bhd->bhs", h, a_t)
+            h = (
+                h * w_t[:, :, None, :]
+                + mx.einsum("bhs,bhd->bhsd", v_t, k_t)
+                + mx.einsum("bhs,bhd->bhsd", sa, b_t)
+            )
+            outputs.append(mx.einsum("bhsd,bhd->bhs", h, r_t))
+        return mx.stack(outputs, axis=1), h
+
+
+def _make_golden_inputs():
+    """RWKV7 真实形态的 fp32 输入，避免近零 decay 病态放大。"""
+    mx.random.seed(0)
+    shape = (GOLDEN_B, GOLDEN_T, GOLDEN_H, GOLDEN_D)
+    r, k, v = tuple(mx.random.normal(shape) * 0.5 for _ in range(3))
+    a = mx.random.normal(shape)
+    a = a / mx.sqrt(mx.sum(a * a, axis=-1, keepdims=True) + 1e-12)
+    b = -a * mx.random.uniform(0.9, 1.1, shape=shape)
+    w = mx.exp(-mx.exp(mx.random.normal(shape) * 0.5 - 2.5))
+    h_in = mx.random.normal((GOLDEN_B, GOLDEN_H, GOLDEN_D, GOLDEN_D)) * 0.1
+    p_out = mx.random.normal(shape)
+    p_h = mx.random.normal((GOLDEN_B, GOLDEN_H, GOLDEN_D, GOLDEN_D))
+    mx.eval(r, w, k, v, a, b, h_in, p_out, p_h)
+    return (r, w, k, v, a, b, h_in), p_out, p_h
+
+
+def _projected_loss(forward, p_out, p_h):
+    """让 out 和 h_out 都产生非零、全元素混合的 cotangent。"""
+    def loss(r, w, k, v, a, b, h_in):
+        out, h_out = forward(r, w, k, v, a, b, h_in)
+        return (out * p_out).sum() + (h_out * p_h).sum()
+
+    return loss
+
+
+def _golden_gradient_functions():
+    inputs, p_out, p_h = _make_golden_inputs()
+    metal = make_wkv7_checkpoint(
+        GOLDEN_B, GOLDEN_T, GOLDEN_H, GOLDEN_D, chunk=32
+    )
+    metal_grad = mx.compile(
+        mx.grad(_projected_loss(metal, p_out, p_h), argnums=list(range(7)))
+    )
+    reference_grad = mx.grad(
+        _projected_loss(_einsum_reference_with_state, p_out, p_h),
+        argnums=list(range(7)),
+    )
+    return inputs, metal_grad, reference_grad
+
+
 @pytest.fixture(scope="module")
 def inputs():
     return _make_inputs()
@@ -90,6 +163,48 @@ class TestForward:
         out_ops = _ops_forward(r, w, k, v, a, b, h_in)
         out_met, _ = wkv7_kernel(r, w, k, v, a, b, h_in)
         _assert_fwd_close(out_met, out_ops, "forward: Metal kernel vs ops 循环不一致")
+
+
+class TestBackwardGolden:
+    """T=64 跨 chunk 时的七梯度正确性与确定性。"""
+
+    def test_gradients_match_cpu_einsum_reference(self):
+        """七梯度最大相对误差必须小于 fp32 golden 线 1e-5。"""
+        inputs, metal_grad, reference_grad = _golden_gradient_functions()
+        metal_gradients = metal_grad(*inputs)
+        reference_gradients = reference_grad(*inputs)
+        mx.eval(*metal_gradients, *reference_gradients)
+
+        relative_errors = {}
+        for name, actual, expected in zip(
+            GRADIENT_NAMES, metal_gradients, reference_gradients
+        ):
+            scale = float(mx.abs(expected).max()) + 1e-30
+            max_error = float(mx.abs(actual - expected).max())
+            relative_errors[name] = max_error / scale
+
+        worst_name = max(relative_errors, key=relative_errors.get)
+        worst = relative_errors[worst_name]
+        details = ", ".join(
+            f"{name}={relative_errors[name]:.2e}" for name in GRADIENT_NAMES
+        )
+        assert worst < GOLDEN_REL_ERR, (
+            f"GOLDEN METRIC FAILED: {worst_name}={worst:.2e}; {details}"
+        )
+
+    def test_seven_gradients_are_bitwise_deterministic(self):
+        """同一 compiled Metal backward 连跑两次，七梯度逐位相等。"""
+        inputs, metal_grad, _ = _golden_gradient_functions()
+        first = metal_grad(*inputs)
+        second = metal_grad(*inputs)
+        mx.eval(*first, *second)
+
+        for name, first_gradient, second_gradient in zip(
+            GRADIENT_NAMES, first, second
+        ):
+            assert mx.array_equal(first_gradient, second_gradient), (
+                f"梯度 {name} 在相同 backward dispatch 之间发生变化"
+            )
 
 
 class TestGradients:
