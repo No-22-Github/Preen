@@ -203,7 +203,10 @@ def make_wkv7_checkpoint(B: int, T: int, H: int, D: int = HEAD_SIZE, chunk: int 
     @mx.custom_function
     def _fwd(r, w, k, v, a, b, h_in):
         res = _get_ckpt_fwd(H, T, chunk)(
-            inputs=[x.astype(mx.float32) for x in [r, w, k, v, a, b, h_in]],
+            # r/w/k/v/a/b 保持模型 bf16 storage，Metal 读取标量时隐式提升
+            # 到 kernel 内的 float 局部变量；h_in 本身按训练契约就是 fp32。
+            # 旧实现先物化六份 fp32 激活，只增加带宽/临时内存，并不提高累加精度。
+            inputs=[r, w, k, v, a, b, h_in],
             grid=(B * H, D, 1), threadgroup=(1, 1, 1),
             output_shapes=[(B, T, H, D), (B, H, D, D), (B, T, H, D), (B, H, N, D, D)],
             output_dtypes=[mx.float32] * 4,
@@ -216,7 +219,9 @@ def make_wkv7_checkpoint(B: int, T: int, H: int, D: int = HEAD_SIZE, chunk: int 
         d_out, d_h_out, _, _ = cotangents
         _, _, sa_fwd, h_ckpts = outputs
         res = _get_ckpt_bwd(H, T, chunk)(
-            inputs=[x.astype(mx.float32) for x in [r, w, k, v, a, b, h_ckpts, sa_fwd, d_out, d_h_out]],
+            # 与 forward 同理：模型激活直接以 bf16 输入，checkpoint/sa/cotangent
+            # 仍按各自 fp32 dtype 传入；kernel 内反向重构和累加始终使用 float。
+            inputs=[r, w, k, v, a, b, h_ckpts, sa_fwd, d_out, d_h_out],
             grid=(B * H * D, 1, 1), threadgroup=(D, 1, 1),
             output_shapes=[(B, T, H, D)] * 6 + [(B, H, D, D)],
             output_dtypes=[mx.float32] * 7,

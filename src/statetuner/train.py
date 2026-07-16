@@ -129,6 +129,30 @@ def _to_mx_batch(sample: Sample):
     )
 
 
+def _make_loss_and_grad(model, *, compile_graph: bool):
+    """构造训练 loss+grad callable；Metal fast path 可复用编译图。
+
+    loss 口径保持与历史训练循环完全一致。把 ``inp/lab/msk`` 改为显式参数，
+    避免每步创建捕获不同数组的闭包，也让 ``mx.compile`` 能按输入形状缓存图。
+    ``model.state`` 作为 captured inputs 声明，供 MLX 正确追踪冻结模型权重。
+
+    ops 排查路径不编译：逐 token Python 图很大，编译会显著增加冷启动与内存，
+    且 ``--no-fast-wkv`` 的职责就是保留最朴素的可微基线。
+    """
+
+    def _loss_fn(sd, inp, lab, msk):
+        batch_size = inp.shape[0]
+        logits = forward_with_state(model, inp, sd, batch_size)
+        lp = nn.log_softmax(logits, -1)
+        g = mx.take_along_axis(lp, lab[..., None], -1).squeeze(-1)
+        return (-g * msk).sum() / mx.maximum(msk.sum(), 1.0)
+
+    loss_and_grad = mx.value_and_grad(_loss_fn)
+    if compile_graph:
+        loss_and_grad = mx.compile(loss_and_grad, inputs=model.state)
+    return loss_and_grad
+
+
 def _eval_loss(model, samples: List[Sample], states: Dict[int, "mx.array"]) -> float:
     """在样本集上算平均 masked loss(无 grad)。供 held-out 早停用。"""
     if not samples:
@@ -200,6 +224,12 @@ class Trainer:
         total_steps = cfg.total_steps(len(samples))
         self.emitter.emit(events.start({**cfg.to_dict(), "n_samples": len(samples)}))
 
+        # fast Metal 路径把 loss+backward 编译一次并按输入形状复用。训练数据、
+        # lr、梯度裁剪和 Adam 更新仍逐步执行，步数与事件进度口径不变。
+        loss_and_grad = _make_loss_and_grad(
+            self.model, compile_graph=(cfg.wkv_mode == "metal")
+        )
+
         step = start_epoch * len(samples)
         global_step_offset = step
 
@@ -219,18 +249,10 @@ class Trainer:
             for si in order:
                 batch = _to_mx_batch(samples[si])
                 inp, lab, msk = batch
-                B = inp.shape[0]
-
-                # 用 dict 输入闭包, value_and_grad 返回 dict grads
-                def _loss_fn(sd):
-                    logits = forward_with_state(self.model, inp, sd, B)
-                    lp = nn.log_softmax(logits, -1)
-                    g = mx.take_along_axis(lp, lab[..., None], -1).squeeze(-1)
-                    return (-g * msk).sum() / mx.maximum(msk.sum(), 1.0)
 
                 lr = cosine_lr(step, total_steps, cfg)
                 opt.learning_rate = lr
-                loss, grads = mx.value_and_grad(_loss_fn)(states)
+                loss, grads = loss_and_grad(states, inp, lab, msk)
                 # TR4: value clipping(逐元素 clip 到 [-c, c]),非 global-norm。
                 # 改方向不等比缩放;state tuning 实测此阈值可用,不要按 norm clip 常识调参。
                 grads = {k: mx.clip(g, -cfg.grad_clip, cfg.grad_clip) for k, g in grads.items()}

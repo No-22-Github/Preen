@@ -48,6 +48,41 @@ def test_train_config_learning_rate_defaults():
     assert cfg.lr_floor == pytest.approx(0.00001)
 
 
+def test_compiled_loss_and_grad_matches_eager(monkeypatch):
+    """阶段一：compiled fast path 不改变 masked loss 与 state 梯度。"""
+    import mlx.core as mx
+
+    import statetuner.train as train_module
+
+    class _TinyModel:
+        state = {}
+
+    def _fake_forward(_model, input_ids, states, batch_size):
+        assert batch_size == input_ids.shape[0]
+        scale = input_ids.astype(mx.float32)[..., None]
+        return scale * states[0][None, None, :]
+
+    monkeypatch.setattr(train_module, "forward_with_state", _fake_forward)
+    model = _TinyModel()
+    states = {0: mx.array([0.1, -0.2, 0.3, 0.05], dtype=mx.float32)}
+    inp = mx.array([[1, 2, 3]])
+    lab = mx.array([[1, 2, 0]])
+    msk = mx.array([[0.0, 1.0, 1.0]], dtype=mx.float32)
+
+    eager = train_module._make_loss_and_grad(model, compile_graph=False)
+    compiled = train_module._make_loss_and_grad(model, compile_graph=True)
+    eager_loss, eager_grads = eager(states, inp, lab, msk)
+    compiled_loss, compiled_grads = compiled(states, inp, lab, msk)
+    mx.eval(eager_loss, eager_grads, compiled_loss, compiled_grads)
+
+    np.testing.assert_allclose(
+        np.array(compiled_loss), np.array(eager_loss), rtol=1e-6, atol=1e-6
+    )
+    np.testing.assert_allclose(
+        np.array(compiled_grads[0]), np.array(eager_grads[0]), rtol=1e-6, atol=1e-6
+    )
+
+
 def test_encode_template_stop_and_mask():
     """验收 b:任一样本 full_ids[-1]==stop_token 且对应 mask==1。
 
