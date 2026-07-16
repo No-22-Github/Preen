@@ -27,9 +27,6 @@ struct DataInspectionResult: Decodable, Equatable {
         case maxTokens = "max_tokens"
         case ctxLen = "ctx_len"
     }
-
-    /// 预计训练步数(上限):epochs × 有效样本数(早停会提前)。
-    func estimatedSteps(epochs: Int) -> Int { epochs * valid }
 }
 
 /// data-info 的一次性执行结果:成功带 inspection,失败带错误文案。

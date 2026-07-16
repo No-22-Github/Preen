@@ -38,6 +38,9 @@
 - **同步 README 滞后的训练默认学习率**:峰值学习率从 `0.01` 调整为 `0.0001`、最低学习率调整为 `0.00001` 的变更此前已在 CLI/`TrainConfig` 与 `docs/快速上手.md` 落地,但 README 的「三步最小流程」示例仍写 `--lr 0.01`、「一些取舍」节仍按 0.01 论述。本次将示例改为 `--lr 0.0001`、取舍节改为从 1e-4 起步 + cosine 衰减口径,并补「历史实验显式传入更大 lr 仍按原配方解读」的说明,与快速上手 FAQ 对齐。
 
 ### 修复
+- **调参面板训练步数预估偏高**:开启早停时,面板预估用「有效条数 × 轮数」(200 条 × 2 轮 = 400 步),但实际训练会先按验证集比例(默认 10%)划出 held-out 验证集,训练子集只有 180 条,实际 `total_steps` 是 360 步 —— 面板多算了那 20 条验证样本 × 2 轮。
+  - 预估改为对齐 Python `data.train_test_split` 的 `max(1, int(n * ratio))` 公式:先扣验证集再算步数,早停关闭时才用全量。文案从「N 条有效 · 预计 ~M 步」改为「N 条训练 · K 条验证 · 预计 ~M 步」,让训练 / 验证划分对用户可见。
+  - 抽出可测纯函数 `TrainingConfig.projectedCounts(...)` 锁定跨语言公式对齐,并删掉 `DataInspectionRunner` 里无人调用却写错口径(同样没扣 held-out)的 `estimatedSteps` 旧 helper。
 - **推理速度 benchmark 口径失真**:
   - `GenerationResult` 新增 `decode_steps`, `generation_tps` 改按 `generation_time` 实际覆盖的 `step>0` 前向次数计算,不再把归入 prefill 的首 token 重复计入 decode 分子; 分段计时改用单调高精度时钟。
   - 异步流水启用后，`generation_time` 统一按“首 token 就绪到最后一个 decode token 就绪”的墙钟区间统计，使 BF16 流水线与 int8 eager 都反映 GPU/CPU 重叠后的实际连续出字速度，避免累加局部阻塞时间造成虚高。

@@ -223,12 +223,14 @@ struct TrainingConfigView: View {
         }
     }
 
-    /// 数据摘要:有效条数 · 预计步数 · 截断处理(只警告不阻断)。
+    /// 数据摘要:训练/验证条数 · 预计步数 · 截断处理(只警告不阻断)。
     /// 丢弃模式:有效数扣掉截断条,步数据此重算,显示丢弃数。
     /// 保留模式:完全截断橙色警告(target 前段丢失),仅部分截断黄色提示(截头保尾)。
     private func dataSummary(_ insp: DataInspectionResult) -> some View {
-        let effectiveValid = config.dropTruncated ? insp.valid - insp.truncated : insp.valid
-        let steps = max(0, effectiveValid) * config.epochs
+        let projection = projectedCounts(insp)
+        let trainCount = projection.train
+        let heldOutCount = projection.heldOut
+        let steps = projection.steps
         // 严重度:丢弃模式无警告(已处理) > 完全截断(橙) > 仅部分截断(黄) > 无(绿)
         let hasFullyTruncated = !config.dropTruncated && insp.targetFullyTruncated > 0
         let hasPartialOnly = !config.dropTruncated && insp.truncated > 0 && !hasFullyTruncated
@@ -240,7 +242,11 @@ struct TrainingConfigView: View {
 
         return HStack(spacing: 6) {
             Image(systemName: icon).foregroundStyle(tint)
-            Text("\(max(0, effectiveValid)) 条有效 · 预计 ~\(steps) 步")
+            if config.earlyStop {
+                Text("\(trainCount) 条训练 · \(heldOutCount) 条验证 · 预计 ~\(steps) 步")
+            } else {
+                Text("\(trainCount) 条训练 · 预计 ~\(steps) 步")
+            }
             if config.dropTruncated, insp.truncated > 0 {
                 Text("· 丢弃 \(insp.truncated) 条超长").foregroundStyle(.secondary)
             } else if hasFullyTruncated {
@@ -266,6 +272,21 @@ struct TrainingConfigView: View {
             lines.append("\(insp.truncated) 条超长,截头部保尾部 stop(target 保留,可训练)")
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// 按 service.run_training 的口径预估训练/验证条数与步数。
+    /// 早停开启时（面板无独立 test_data 选项）从有效样本划 test_ratio 做验证，
+    /// 对齐 data.train_test_split 的 max(1, int(n*ratio)) 公式，与实际 total_steps 一致；
+    /// 早停关闭 = 全量训练，不划分。委托给可测的 TrainingConfig.projectedCounts。
+    private func projectedCounts(_ insp: DataInspectionResult) -> (train: Int, heldOut: Int, steps: Int) {
+        TrainingConfig.projectedCounts(
+            effectiveValid: insp.valid,
+            truncated: insp.truncated,
+            dropTruncated: config.dropTruncated,
+            earlyStop: config.earlyStop,
+            testRatio: config.testRatio,
+            epochs: config.epochs
+        )
     }
 
     // MARK: - 路径区

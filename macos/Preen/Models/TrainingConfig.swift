@@ -69,6 +69,25 @@ struct TrainingConfig: Equatable {
     /// lr > 0.1 时给 inline warning(design.md §4:lr=1.0 会爆炸,实测)。
     var lrWarnsExplosion: Bool { lr > 0.1 }
 
+    /// 按 service.run_training 的口径预估训练/验证条数与步数。
+    /// 早停开启时从有效样本划 test_ratio 做验证，对齐 data.train_test_split 的
+    /// `max(1, int(n * ratio))` 公式；早停关闭 = 全量训练，不划分。
+    /// 与 Python 侧 total_steps 一致（步数 = 训练条数 × epochs）。
+    /// 抽成静态纯函数便于单测锁定跨语言公式对齐。
+    static func projectedCounts(
+        effectiveValid: Int,
+        truncated: Int,
+        dropTruncated: Bool,
+        earlyStop: Bool,
+        testRatio: Double,
+        epochs: Int
+    ) -> (train: Int, heldOut: Int, steps: Int) {
+        let valid = max(0, dropTruncated ? effectiveValid - truncated : effectiveValid)
+        let heldOut = earlyStop ? max(1, Int(Double(valid) * testRatio)) : 0
+        let train = max(0, valid - heldOut)
+        return (train, heldOut, train * epochs)
+    }
+
     /// 必填字段是否齐全(model + data + out)。
     var canStart: Bool {
         !modelPath.isEmpty && !dataPath.isEmpty && !outPath.isEmpty
