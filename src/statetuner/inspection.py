@@ -405,20 +405,18 @@ def _hardware_report() -> dict[str, str]:
 
 
 def _metal_memory_report(info: dict[str, Any]) -> dict[str, float]:
-    """将 MLX device_info 的字节数转换成明确标注单位的报告字段。
+    """将 MLX device_info 的字节数转换为后端统一的十进制 GB 字段。
 
-    设备总内存与 MLX 建议工作集额外提供 GiB，供 macOS 环境信息 UI 展示；
-    十进制 GB 字段继续保留，训练、缓存和削顶判据仍统一使用 GB。
+    macOS App 若需界面口径，自行从 GB 还原 bytes 后换算为 GiB；后端、CLI、
+    事件、日志、训练、缓存和削顶判据不产出或记录 GiB。
     """
     result: dict[str, float] = {}
     memory_size = info.get("memory_size", 0)
     if isinstance(memory_size, (int, float)) and memory_size > 0:
         result["memory_size_gb"] = round(memory_size / 1e9, 2)
-        result["memory_size_gib"] = round(memory_size / (1024**3), 2)
     working_set = info.get("max_recommended_working_set_size", 0)
     if isinstance(working_set, (int, float)) and working_set > 0:
         result["working_set_gb"] = round(working_set / 1e9, 2)
-        result["working_set_gib"] = round(working_set / (1024**3), 2)
     return result
 
 

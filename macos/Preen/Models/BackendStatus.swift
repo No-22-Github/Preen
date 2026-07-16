@@ -62,29 +62,29 @@ struct DoctorReport: Codable, Equatable {
         appleSilicon && mlx.ok && mlxLM.ok && metalAvailable
     }
 
-    /// 新后端直接提供 GiB；旧后端回退用十进制 GB 还原，仅用于设备容量展示。
+    /// 新后端只提供十进制 GB，App 还原 bytes 后换算为 GiB；旧 `_gib` 仅兼容读取。
     var displayedMemorySizeGiB: Double? {
-        if let memorySizeGiB { return memorySizeGiB }
-        return memorySizeGB.map { $0 * 1e9 / Double(1024 * 1024 * 1024) }
+        if let memorySizeGB { return memorySizeGB * 1e9 / Double(1024 * 1024 * 1024) }
+        return memorySizeGiB
     }
 
     var memorySizeLabel: String? {
         guard let value = displayedMemorySizeGiB else { return nil }
         let rounded = value.rounded()
         return abs(value - rounded) < 0.005
-            ? String(format: "%.0f GiB", rounded)
-            : String(format: "%.2f GiB", value)
+            ? String(format: "%.0f GB", rounded)
+            : String(format: "%.2f GB", value)
     }
 
-    /// 新后端直接提供展示口径；旧后端从兼容的十进制 GB 字段换算。
+    /// 新后端只提供十进制 GB；旧 `_gib` 字段仅作解码兼容。
     var displayedWorkingSetGiB: Double? {
-        if let workingSetGiB { return workingSetGiB }
-        return workingSetGB.map { $0 * 1e9 / Double(1024 * 1024 * 1024) }
+        if let workingSetGB { return workingSetGB * 1e9 / Double(1024 * 1024 * 1024) }
+        return workingSetGiB
     }
 
     var workingSetLabel: String? {
         guard let value = displayedWorkingSetGiB else { return nil }
-        return String(format: "%.2f GiB", value)
+        return String(format: "%.2f GB", value)
     }
 
     var operatingSystemLabel: String {

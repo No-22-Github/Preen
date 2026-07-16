@@ -54,7 +54,7 @@ def test_hardware_report_uses_only_safe_sysctl_fields(monkeypatch):
     }
 
 
-def test_metal_memory_report_keeps_gib_and_gb_units_distinct():
+def test_metal_memory_report_uses_backend_decimal_gb_only():
     report = inspection._metal_memory_report(
         {
             "memory_size": 17_179_869_184,
@@ -62,10 +62,10 @@ def test_metal_memory_report_keeps_gib_and_gb_units_distinct():
         }
     )
 
-    assert report["memory_size_gib"] == 16.0
     assert report["memory_size_gb"] == 17.18
     assert report["working_set_gb"] == 12.71
-    assert report["working_set_gib"] == 11.84
+    assert "memory_size_gib" not in report
+    assert "working_set_gib" not in report
 
 
 def test_inspect_data_counts_invalid_and_truncated(tmp_path):

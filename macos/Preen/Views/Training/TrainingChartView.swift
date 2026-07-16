@@ -27,12 +27,12 @@ struct TrainingChartView: View {
         1...max(store.totalSteps, 2)
     }
 
-    private var memoryCapacityGB: Double {
-        max(store.memoryCapacityGB, 1)
+    private var memoryCapacityGiB: Double {
+        max(store.memoryCapacityGiB, 1)
     }
 
-    private var criticalMemoryGB: Double {
-        memoryCapacityGB * MemoryMetricMath.criticalRatio
+    private var criticalMemoryGiB: Double {
+        memoryCapacityGiB * MemoryMetricMath.criticalRatio
     }
 
     var body: some View {
@@ -47,8 +47,8 @@ struct TrainingChartView: View {
                     + store.heldOutPoints.map(\.loss)
             )
             let memoryPoints = MemoryMetricMath.ema(
-                store.processMetrics,
-                physicalMemoryGB: memoryCapacityGB
+            store.processMetrics,
+            physicalMemoryGiB: memoryCapacityGiB
             )
             let memoryAreaGradient = memoryPressureGradient(
                 points: memoryPoints,
@@ -198,7 +198,7 @@ struct TrainingChartView: View {
             HStack(spacing: 8) {
                 Text("进程内存")
                     .font(.headline)
-                Text(String(format: "上限 %.1f G", memoryCapacityGB))
+                Text(String(format: "上限 %.1f GB", memoryCapacityGiB))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -443,7 +443,7 @@ struct TrainingChartView: View {
                 AreaMark(
                     x: .value("步", point.step + 1),
                     yStart: .value("基线", 0),
-                    yEnd: .value("EMA 进程内存 GB", point.physicalFootprintGB),
+                    yEnd: .value("EMA 进程内存 GB", point.physicalFootprintGiB),
                     series: .value("内存", "进程内存")
                 )
                 .foregroundStyle(areaGradient)
@@ -452,7 +452,7 @@ struct TrainingChartView: View {
 
                 LineMark(
                     x: .value("步", point.step + 1),
-                    y: .value("EMA 进程内存 GB", point.physicalFootprintGB),
+                    y: .value("EMA 进程内存 GB", point.physicalFootprintGiB),
                     series: .value("内存", "进程内存")
                 )
                 .foregroundStyle(lineGradient)
@@ -461,7 +461,7 @@ struct TrainingChartView: View {
                 .alignsMarkStylesWithPlotArea()
             }
 
-            RuleMark(y: .value("严重阈值", criticalMemoryGB))
+            RuleMark(y: .value("严重阈值", criticalMemoryGiB))
                 .foregroundStyle(MemoryPressureLevel.critical.chartColor.opacity(0.70))
                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
 
@@ -476,13 +476,13 @@ struct TrainingChartView: View {
                         overflowResolution: .init(x: .fit(to: .chart), y: .disabled)
                     ) {
                         ChartHoverValueLabel(
-                            text: String(format: "%.2f G", metric.physicalFootprintGB),
+                            text: String(format: "%.2f GB", metric.physicalFootprintGiB),
                             color: point.pressure.chartColor
                         )
                     }
                 PointMark(
                     x: .value("选中步", point.step + 1),
-                    y: .value("选中原始内存", metric.physicalFootprintGB)
+                    y: .value("选中原始内存", metric.physicalFootprintGiB)
                 )
                 .foregroundStyle(point.pressure.chartColor)
                 .symbolSize(40)
@@ -492,7 +492,7 @@ struct TrainingChartView: View {
             domain: displayedStepDomain,
             range: .plotDimension(startPadding: 8, endPadding: 8)
         )
-        .chartYScale(domain: 0...memoryCapacityGB)
+        .chartYScale(domain: 0...memoryCapacityGiB)
         .chartXAxis {
             AxisMarks(values: TrainingMetricMath.displayedStepAxisValues(
                 totalSteps: store.totalSteps,
@@ -505,11 +505,11 @@ struct TrainingChartView: View {
             }
         }
         .chartYAxis {
-            AxisMarks(values: [0, memoryCapacityGB / 2, memoryCapacityGB]) { value in
+            AxisMarks(values: [0, memoryCapacityGiB / 2, memoryCapacityGiB]) { value in
                 AxisGridLine()
                 AxisValueLabel {
                     if let gb = value.as(Double.self) {
-                        Text(String(format: "%6.1f G", gb))
+                        Text(String(format: "%6.1f GB", gb))
                             .monospacedDigit()
                             .frame(width: yAxisLabelWidth, alignment: .leading)
                     }

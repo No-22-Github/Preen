@@ -40,12 +40,14 @@ class _DummyTokenizer:
         return "".join(chr(i) for i in ids)
 
 
-def test_train_config_learning_rate_defaults():
+def test_train_config_product_defaults():
     from statetuner.train import TrainConfig
 
     cfg = TrainConfig()
     assert cfg.lr == pytest.approx(0.0001)
     assert cfg.lr_floor == pytest.approx(0.00001)
+    assert cfg.warmup == 50
+    assert cfg.epochs == 5
 
 
 def test_compiled_loss_and_grad_matches_eager(monkeypatch):

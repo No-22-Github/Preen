@@ -87,6 +87,50 @@ final class TrainingMetricTests: XCTestCase {
         XCTAssertEqual(dock.clearCount, 1)
     }
 
+    /// 回归:训练完成(实时路径)必须清 Dock badge。
+    /// 历史 bug:`consume` 先调 `applyDataOnly` 把 state 改成 `.completed`,
+    /// 再调 `applySideEffects` 时判据 `state == .running` 已不成立 → `clear()` 从不执行,
+    /// badge 卡在最后一步的 100%。修复后应在 completed 瞬间清掉。
+    func testCompletedClearsDockBadge() throws {
+        let dock = DockProgressSpy()
+        let store = TrainStore(
+            repository: RunRepository(),
+            backendStore: BackendStore(),
+            dockProgress: dock
+        )
+        store.consume(event: .start(config: try snapshot(samples: 5, epochs: 2), timestamp: 10))
+        // launch() 设 running 这步在单测里走不到(会启真实进程),用测试钩子模拟。
+        store.enterRunningStateForTesting()
+        // 跑两步,让 badge 推进到非零。
+        store.consume(event: .step(step: 1, totalSteps: 10, loss: 2.5, lr: 0.001, epoch: 0, timestamp: 100))
+        store.consume(event: .step(step: 2, totalSteps: 10, loss: 2.4, lr: 0.001, epoch: 0, timestamp: 102))
+        XCTAssertEqual(dock.updates, [0.2, 0.3])
+        XCTAssertEqual(dock.clearCount, 0)
+
+        // completed:前置态是 running,应触发 finishBackgroundFeedback → clear。
+        store.consume(event: .completed(path: "/tmp/state.npz", elapsed: 20, message: nil, timestamp: 120))
+        XCTAssertEqual(store.state, .completed)
+        XCTAssertEqual(dock.clearCount, 1, "完成时必须清 Dock badge,不能卡在 100%")
+    }
+
+    /// 回归:训练失败(实时路径,running 前置态)也必须清 badge。
+    func testFailedClearsDockBadge() throws {
+        let dock = DockProgressSpy()
+        let store = TrainStore(
+            repository: RunRepository(),
+            backendStore: BackendStore(),
+            dockProgress: dock
+        )
+        store.consume(event: .start(config: try snapshot(samples: 5, epochs: 2), timestamp: 10))
+        store.enterRunningStateForTesting()
+        store.consume(event: .step(step: 1, totalSteps: 10, loss: 2.5, lr: 0.001, epoch: 0, timestamp: 100))
+        XCTAssertEqual(dock.clearCount, 0)
+
+        store.consume(event: .failed(message: "boom", path: nil, timestamp: 110))
+        XCTAssertEqual(store.state, .failed)
+        XCTAssertEqual(dock.clearCount, 1, "失败时必须清 Dock badge")
+    }
+
     func testDockBadgeLabelUsesClampedRoundedPercentage() {
         XCTAssertEqual(DockProgressController.badgeLabel(for: -0.2), "0%")
         XCTAssertEqual(DockProgressController.badgeLabel(for: 0.404), "40%")
@@ -101,14 +145,18 @@ final class TrainingMetricTests: XCTestCase {
         XCTAssertTrue(TrainingNotificationController.authorizationOptions.contains(.badge))
     }
 
-    func testTrainingDefaultsMatchBackendLearningRates() {
+    func testTrainingDefaultsMatchBackendProductDefaults() {
         let config = TrainingConfig()
         XCTAssertEqual(config.lr, 0.0001)
         XCTAssertEqual(config.lrFloor, 0.00001)
+        XCTAssertEqual(config.warmup, 50)
+        XCTAssertEqual(config.epochs, 5)
 
         let arguments = config.commandLineArguments()
         XCTAssertEqual(arguments[arguments.firstIndex(of: "--lr")! + 1], "0.0001")
         XCTAssertEqual(arguments[arguments.firstIndex(of: "--lr-floor")! + 1], "1e-05")
+        XCTAssertEqual(arguments[arguments.firstIndex(of: "--warmup")! + 1], "50")
+        XCTAssertEqual(arguments[arguments.firstIndex(of: "--epochs")! + 1], "5")
     }
 
     func testProgressEtaAndEpochEndUseZeroBasedEventsCorrectly() throws {

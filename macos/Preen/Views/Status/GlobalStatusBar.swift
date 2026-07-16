@@ -20,8 +20,8 @@ struct GlobalStatusBar: View {
                 Text("loss \(train.lossDisplay)")
                 if let metric = backend.latestProcessMetric {
                     let pressure = train.memoryPressure(for: metric)
-                    Text(String(format: "RSS %.2f G", metric.physicalFootprintGB))
-                    Text(String(format: "swap %.2f G", metric.swapUsedGB))
+                    Text(String(format: "RSS %.2f GB", metric.physicalFootprintGiB))
+                    Text(String(format: "swap %.2f GB", metric.swapUsedGiB))
                     Text(pressure.displayLabel)
                         .foregroundStyle(pressure.chartColor)
                     if let seconds = metric.secondsPerStep {

@@ -10,8 +10,8 @@ final class RuntimeCheckTests: XCTestCase {
         XCTAssertEqual(result.report?.python, "3.11.15")
         XCTAssertEqual(result.report?.chipName, "Apple M5")
         XCTAssertEqual(result.report?.hardwareModel, "Mac17,3")
-        XCTAssertEqual(result.report?.memorySizeLabel, "16 GiB")
-        XCTAssertEqual(result.report?.workingSetLabel, "11.84 GiB")
+        XCTAssertEqual(result.report?.memorySizeLabel, "16 GB")
+        XCTAssertEqual(result.report?.workingSetLabel, "11.84 GB")
         XCTAssertEqual(result.report?.isUsable, true)
         XCTAssertNil(result.errorMessage)
     }
@@ -44,8 +44,8 @@ final class RuntimeCheckTests: XCTestCase {
         XCTAssertTrue(markdown.contains("- 芯片: Apple M5"))
         XCTAssertTrue(markdown.contains("- 系统: macOS 26.5.2 (25F84)"))
         XCTAssertFalse(markdown.contains("- macOS: macOS"))
-        XCTAssertTrue(markdown.contains("- 统一内存: 16 GiB"))
-        XCTAssertTrue(markdown.contains("- MLX 建议工作集上限: 11.84 GiB"))
+        XCTAssertTrue(markdown.contains("- 统一内存: 16 GB"))
+        XCTAssertTrue(markdown.contains("- MLX 建议工作集上限: 11.84 GB"))
         XCTAssertTrue(markdown.contains("- 推理服务: 失败"))
         XCTAssertFalse(markdown.contains("/Users/alice"))
         XCTAssertFalse(markdown.contains("123"))
@@ -59,7 +59,7 @@ final class RuntimeCheckTests: XCTestCase {
         XCTAssertEqual(result.errorMessage, "python executable not found")
     }
 
-    func testLegacyDoctorFixtureFallsBackFromDecimalGBForDisplay() {
+    func testDoctorDecimalGBIsConvertedForAppDisplay() {
         let legacyJSON = successJSON
             .replacingOccurrences(
                 of: ",\"os_version\":\"26.5.2\",\"os_build\":\"25F84\",\"chip_name\":\"Apple M5\",\"hardware_model\":\"Mac17,3\"",
@@ -72,8 +72,8 @@ final class RuntimeCheckTests: XCTestCase {
         )
 
         XCTAssertEqual(result.report?.memorySizeGB, 17.18)
-        XCTAssertEqual(result.report?.memorySizeLabel, "16 GiB")
-        XCTAssertEqual(result.report?.workingSetLabel, "11.84 GiB")
+        XCTAssertEqual(result.report?.memorySizeLabel, "16 GB")
+        XCTAssertEqual(result.report?.workingSetLabel, "11.84 GB")
         XCTAssertEqual(result.report?.operatingSystemLabel, "macOS")
     }
 

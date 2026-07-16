@@ -78,8 +78,8 @@ def doctor(
     typer.echo(f"Metal: {'✓' if report.get('metal_available') else '✗'}")
     if report.get("metal_available"):
         typer.echo(
-            f"内存: physical={report.get('memory_size_gib', 0):g}GiB "
-            f"working_set={report.get('working_set_gib', 0):.2f}GiB"
+            f"内存: physical={report.get('memory_size_gb', 0):g}GB "
+            f"working_set={report.get('working_set_gb', 0):.2f}GB"
         )
 
 
@@ -187,9 +187,9 @@ def train(
     ),
     lr: float = typer.Option(1e-4, "--lr", help="学习率(默认 0.0001;1.0 会爆炸)"),
     lr_floor: float = typer.Option(1e-5, "--lr-floor", help="cosine 衰减终点(默认 0.00001)"),
-    warmup: int = typer.Option(10, "--warmup", help="warmup 步数"),
+    warmup: int = typer.Option(50, "--warmup", help="warmup 步数(默认 50)"),
     ctx_len: int = typer.Option(512, "--ctx-len", help="上下文长度"),
-    epochs: int = typer.Option(20, "--epochs", help="epoch 数(配早停后是上限)"),
+    epochs: int = typer.Option(5, "--epochs", help="epoch 数(默认 5;配早停后是上限)"),
     grad_clip: float = typer.Option(1.0, "--grad-clip"),
     log_every: int = typer.Option(
         1, "--log-every",

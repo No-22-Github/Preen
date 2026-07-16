@@ -11,8 +11,9 @@ struct ProcessMetric: Identifiable, Equatable {
     let id = UUID()
     let timestamp: Date
     let step: Int
-    let physicalFootprintGB: Double
-    let swapUsedGB: Double
+    /// App 展示口径使用 GiB 数值；界面按产品约定标为 GB。
+    let physicalFootprintGiB: Double
+    let swapUsedGiB: Double
     let pressure: MemoryPressureLevel
     let secondsPerStep: Double?
 
@@ -21,8 +22,8 @@ struct ProcessMetric: Identifiable, Equatable {
         ProcessMetric(
             timestamp: max(timestamp, newer.timestamp),
             step: step,
-            physicalFootprintGB: max(physicalFootprintGB, newer.physicalFootprintGB),
-            swapUsedGB: max(swapUsedGB, newer.swapUsedGB),
+            physicalFootprintGiB: max(physicalFootprintGiB, newer.physicalFootprintGiB),
+            swapUsedGiB: max(swapUsedGiB, newer.swapUsedGiB),
             pressure: MemoryMetricMath.moreSevere(pressure, newer.pressure),
             secondsPerStep: newer.secondsPerStep ?? secondsPerStep
         )
@@ -32,7 +33,7 @@ struct ProcessMetric: Identifiable, Equatable {
 struct SmoothedMemoryPoint: Identifiable, Equatable {
     var id: Int { step }
     let step: Int
-    let physicalFootprintGB: Double
+    let physicalFootprintGiB: Double
     let pressure: MemoryPressureLevel
 }
 
@@ -43,7 +44,7 @@ enum MemoryMetricMath {
 
     static func ema(
         _ metrics: [ProcessMetric],
-        physicalMemoryGB: Double,
+        physicalMemoryGiB: Double,
         smoothing: Double = emaSmoothing
     ) -> [SmoothedMemoryPoint] {
         let grouped = Dictionary(grouping: metrics, by: \.step)
@@ -59,15 +60,15 @@ enum MemoryMetricMath {
         var previous: Double?
         return perStep.map { metric in
             let value = previous.map {
-                amount * $0 + (1 - amount) * metric.physicalFootprintGB
-            } ?? metric.physicalFootprintGB
+                amount * $0 + (1 - amount) * metric.physicalFootprintGiB
+            } ?? metric.physicalFootprintGiB
             previous = value
             return SmoothedMemoryPoint(
                 step: metric.step,
-                physicalFootprintGB: value,
+                physicalFootprintGiB: value,
                 pressure: pressureLevel(
-                    footprintGB: value,
-                    physicalMemoryGB: physicalMemoryGB,
+                    footprintGiB: value,
+                    physicalMemoryGiB: physicalMemoryGiB,
                     systemPressure: metric.pressure
                 )
             )
@@ -75,12 +76,12 @@ enum MemoryMetricMath {
     }
 
     static func pressureLevel(
-        footprintGB: Double,
-        physicalMemoryGB: Double,
+        footprintGiB: Double,
+        physicalMemoryGiB: Double,
         systemPressure: MemoryPressureLevel
     ) -> MemoryPressureLevel {
-        guard physicalMemoryGB > 0 else { return systemPressure }
-        let ratio = max(0, footprintGB) / physicalMemoryGB
+        guard physicalMemoryGiB > 0 else { return systemPressure }
+        let ratio = max(0, footprintGiB) / physicalMemoryGiB
         let estimated: MemoryPressureLevel
         if ratio >= criticalRatio {
             estimated = .critical
@@ -132,6 +133,7 @@ final class MemoryPressureMonitor: @unchecked Sendable {
 }
 
 final class ProcessMetricsSampler: @unchecked Sendable {
+    private static let bytesPerGiB = Double(1024 * 1024 * 1024)
     typealias FootprintProvider = (Int32) -> UInt64?
     typealias SwapProvider = () -> UInt64
 
@@ -154,8 +156,8 @@ final class ProcessMetricsSampler: @unchecked Sendable {
         return ProcessMetric(
             timestamp: Date(),
             step: step,
-            physicalFootprintGB: Double(footprint) / 1e9,
-            swapUsedGB: Double(swapProvider()) / 1e9,
+            physicalFootprintGiB: Double(footprint) / Self.bytesPerGiB,
+            swapUsedGiB: Double(swapProvider()) / Self.bytesPerGiB,
             pressure: pressureMonitor.current,
             secondsPerStep: secondsPerStep
         )

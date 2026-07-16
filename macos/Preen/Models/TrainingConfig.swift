@@ -41,9 +41,9 @@ struct TrainingConfig: Equatable {
     // === 超参(默认值与 cli.py 一致)===
     var lr: Double = 1e-4
     var lrFloor: Double = 1e-5
-    var warmup: Int = 10
+    var warmup: Int = 50
     var ctxLen: Int = 512
-    var epochs: Int = 20
+    var epochs: Int = 5
     var gradClip: Double = 1.0
     var logEvery: Int = 1
     var earlyStop: Bool = true

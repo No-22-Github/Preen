@@ -46,9 +46,9 @@ class TrainConfig:
 
     lr: float = 1e-4  # 产品默认峰值;1.0 会爆炸
     lr_floor: float = 1e-5  # cosine 衰减终点
-    warmup: int = 10  # warmup 步数
+    warmup: int = 50  # warmup 步数
     ctx_len: int = 512
-    epochs: int = 20  # 配 early_stop 后是上限
+    epochs: int = 5  # 配 early_stop 后是上限
     grad_clip: float = 1.0  # value clipping(mx.clip(g,-c,c));注意是逐元素 clip
                             # 而非 global norm clip —— 改变梯度方向(非等比缩放)。
                             # state tuning 实测此值合理;改语义前先读这行。
