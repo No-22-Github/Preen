@@ -3,9 +3,9 @@ import SwiftUI
 extension MemoryPressureLevel {
     var displayLabel: String {
         switch self {
-        case .normal: return "压力正常"
-        case .warning: return "压力警告"
-        case .critical: return "压力严重"
+        case .normal: return L10n.string("压力正常")
+        case .warning: return L10n.string("压力警告")
+        case .critical: return L10n.string("压力严重")
         }
     }
 

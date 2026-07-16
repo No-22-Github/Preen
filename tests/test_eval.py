@@ -88,7 +88,7 @@ def test_run_evaluation_data_load_failure_raises(tmp_path):
     request = EvaluationRequest(
         engine=engine, state="s.npz", template="qa", config=cfg, data=bad, limit=3
     )
-    with pytest.raises(ValueError, match="非空字符串"):
+    with pytest.raises(ValueError, match="non-empty string"):
         run_evaluation(request)
     assert engine.calls == []  # 加载失败 → 不生成
 

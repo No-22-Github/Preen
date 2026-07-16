@@ -201,7 +201,7 @@ def _load_state_dict(state: StateInput) -> Optional[Dict[int, "mx.array"]]:
 
     path = Path(state)
     if not path.exists():
-        raise FileNotFoundError(f"state 文件不存在: {path}")
+        raise FileNotFoundError(f"State file does not exist: {path}")
 
     if path.suffix == ".npz":
         # P0 内部格式: layer_{i}
@@ -218,7 +218,7 @@ def _load_state_dict(state: StateInput) -> Optional[Dict[int, "mx.array"]]:
         raw = load_pth_as_numpy(path)  # {layer: ndarray}, 原样 = 训练方向
         return {i: mx.array(arr) for i, arr in raw.items()}
 
-    raise ValueError(f"不支持的 state 文件格式: {path.suffix} (支持 .npz / .pth)")
+        raise ValueError(f"Unsupported state file format: {path.suffix} (supported: .npz / .pth)")
 
 
 def generate(

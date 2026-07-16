@@ -156,10 +156,10 @@ def read_records(path: Path) -> List[dict]:
     suffix = path.suffix.lower()
     if suffix == ".parquet":
         raise ValueError(
-            "parquet 暂不支持(pyarrow 依赖 ~100MB,伤 bundle 体积)。"
-            "请先用 `python -c \"import pandas,json,sys; "
+            "Parquet is not supported yet (pyarrow adds about 100 MB to the bundle). "
+            "Convert it to JSONL/JSON first with `python -c \"import pandas,json,sys; "
             "print(json.dumps(pandas.read_parquet(sys.argv[1]).to_dict('records')))\" "
-            f"{path} > out.json` 转成 jsonl/json 后再导入。"
+            f"{path} > out.json`, then import the result."
         )
     if suffix == ".csv":
         with path.open("r", encoding="utf-8", newline="") as f:
@@ -175,7 +175,7 @@ def read_records(path: Path) -> List[dict]:
                 if isinstance(value, list):
                     return value
             return [loaded]
-        raise ValueError(f"{path}: 顶层 JSON 既非数组也非对象")
+        raise ValueError(f"{path}: top-level JSON must be an array or object")
     # 默认按 jsonl 读(无后缀也走这里)
     items: List[dict] = []
     for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
@@ -185,9 +185,9 @@ def read_records(path: Path) -> List[dict]:
         try:
             item = json.loads(line)
         except json.JSONDecodeError as exc:
-            raise ValueError(f"{path} 第 {lineno} 行 JSON 解析失败: {exc.msg}") from exc
+            raise ValueError(f"Failed to parse JSON in {path} at line {lineno}: {exc.msg}") from exc
         if not isinstance(item, dict):
-            raise ValueError(f"{path} 第 {lineno} 行不是 JSON 对象")
+            raise ValueError(f"Line {lineno} in {path} is not a JSON object")
         items.append(item)
     return items
 
@@ -305,19 +305,19 @@ def detection_for_fields(
     prompt_key = prompt_key.strip()
     response_key = response_key.strip()
     if not prompt_key or not response_key:
-        raise ValueError("手动映射必须同时提供 prompt_key 和 response_key")
+        raise ValueError("Manual mapping requires both prompt_key and response_key")
     if prompt_key == response_key:
-        raise ValueError("prompt_key 和 response_key 不能相同")
+        raise ValueError("prompt_key and response_key cannot be the same")
     sample_items = items[:SAMPLE_LIMIT]
     if not sample_items:
-        raise ValueError("数据为空，无法建立字段映射")
+        raise ValueError("Data is empty; field mapping cannot be created")
     hits = sum(
         1 for item in sample_items
         if isinstance(item, dict) and prompt_key in item and response_key in item
     )
     if hits == 0:
         raise ValueError(
-            f"采样数据中找不到字段组合 {prompt_key!r}/{response_key!r}"
+            f"Field pair {prompt_key!r}/{response_key!r} was not found in sampled data"
         )
     return SchemaDetection(
         schema="bare_qa",
@@ -365,7 +365,7 @@ def convert(
     system 消息:两种策略下都丢弃并计数(§4.3)。
     """
     if turn_policy not in ("first", "all"):
-        raise ValueError(f"turn_policy 只支持 first / all, 收到 {turn_policy!r}")
+        raise ValueError(f"turn_policy supports only first / all; received {turn_policy!r}")
 
     records: List[dict] = []
     dropped_system = 0
@@ -476,7 +476,7 @@ def convert(
 
     # unknown:不转换,抛错让调用方(UI/CLI)走手动映射
     raise ValueError(
-        f"探测结果 unknown,无法自动转换(请手动指定 prompt/response 字段)。"
+        f"Detection result is unknown; automatic conversion is unavailable (specify prompt/response fields manually)."
         f" confidence={detection.confidence:.2f}, sample keys="
         f"{list(detection.sample[0].keys()) if detection.sample else []}"
     )
@@ -563,7 +563,7 @@ def preview_records(
     from .templates import INSTRUCTION, QA
 
     if template not in ("qa", "instruction"):
-        raise ValueError(f"预览模板只支持 qa / instruction, 收到 {template!r}")
+        raise ValueError(f"Preview templates support only qa / instruction; received {template!r}")
     tmpl = QA if template == "qa" else INSTRUCTION
 
     rendered: List[RenderedSample] = []

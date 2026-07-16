@@ -173,7 +173,7 @@ class ServeSessionManager:
                 penalty_decay=float(gen_config_params.get("penalty_decay", 0.996)),
             )
         except (ValueError, TypeError) as exc:
-            raise ProtocolError(f"gen_config 字段类型错误: {exc}") from exc
+            raise ProtocolError(f"Invalid gen_config field type: {exc}") from exc
 
         # state 加载(若提供路径)
         state = None
@@ -212,21 +212,21 @@ class ServeSessionManager:
         template: str, reasoning: bool, think: str, gen_config: dict
     ) -> None:
         if template not in ("qa", "instruction", "raw"):
-            raise ProtocolError(f"template 只支持 qa / instruction / raw, 收到 {template!r}")
+            raise ProtocolError(f"template supports only qa / instruction / raw; received {template!r}")
         if think not in ("off", "fast", "on"):
-            raise ProtocolError(f"think 只支持 off / fast / on, 收到 {think!r}")
+            raise ProtocolError(f"think supports only off / fast / on; received {think!r}")
         if think != "off" and not reasoning:
-            raise ProtocolError("think 仅在 reasoning=True 时合法")
+            raise ProtocolError("think is valid only when reasoning=True")
         # gen_config 数值校验(复用 GenerationConfig.validate 的子集)
         mt = gen_config.get("max_tokens", 300)
         if not isinstance(mt, int) or mt <= 0:
-            raise ProtocolError("gen_config.max_tokens 必须 > 0")
+            raise ProtocolError("gen_config.max_tokens must be > 0")
 
     def get_session(self, session_id: str) -> ManagedSession:
         with self._lock:
             managed = self._sessions.get(session_id)
         if managed is None:
-            raise ProtocolError(f"session 不存在: {session_id}", code="not_found")
+            raise ProtocolError(f"Session does not exist: {session_id}", code="not_found")
         return managed
 
     def close_session(self, session_id: str) -> None:
@@ -247,7 +247,7 @@ class ServeSessionManager:
         """
         prompt = params.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip():
-            raise ProtocolError("preview 需要 prompt 字符串")
+            raise ProtocolError("preview requires a prompt string")
         template = params.get("template", "raw")
         reasoning = bool(params.get("reasoning", False))
         think = params.get("think", "off")
@@ -258,7 +258,7 @@ class ServeSessionManager:
         self._validate_session_params(template, reasoning, think, gen_config_params)
 
         if ab and not state_path:
-            raise ProtocolError("ab=True 需要 state_path")
+            raise ProtocolError("ab=True requires state_path")
 
         # T4:gen_config 类型转换错误 → bad_request(而非 internal)
         try:
@@ -272,7 +272,7 @@ class ServeSessionManager:
                 template,
             )
         except (ValueError, TypeError) as exc:
-            raise ProtocolError(f"gen_config 字段类型错误: {exc}") from exc
+            raise ProtocolError(f"Invalid gen_config field type: {exc}") from exc
         wrapped = render_prompt(prompt, template, reasoning=reasoning, think=think)
         state = str(state_path) if state_path else None
 
@@ -314,27 +314,27 @@ class ServeSessionManager:
 
         data_path = params.get("data_path")
         if not isinstance(data_path, str) or not data_path.strip():
-            raise ProtocolError("detect_import 需要 data_path 字符串")
+            raise ProtocolError("detect_import requires a data_path string")
         path = Path(data_path).expanduser()
         if not path.is_file():
-            raise ProtocolError(f"数据文件不存在: {path}", code="not_found")
+            raise ProtocolError(f"Data file does not exist: {path}", code="not_found")
 
         items = read_records(path)
         detection = detect_schema(items)
         prompt_key = params.get("prompt_key")
         response_key = params.get("response_key")
         if (prompt_key is None) != (response_key is None):
-            raise ProtocolError("prompt_key 与 response_key 必须同时提供")
+            raise ProtocolError("prompt_key and response_key must be provided together")
         if prompt_key is not None:
             if not isinstance(prompt_key, str) or not isinstance(response_key, str):
-                raise ProtocolError("prompt_key/response_key 必须是字符串")
+                raise ProtocolError("prompt_key/response_key must be strings")
             detection = detection_for_fields(items, prompt_key, response_key)
         turn_policy = params.get("turn_policy", "first")
         if turn_policy not in ("first", "all"):
-            raise ProtocolError("turn_policy 只支持 first / all")
+            raise ProtocolError("turn_policy supports only first / all")
         ctx_len = params.get("ctx_len")
         if ctx_len is not None and (not isinstance(ctx_len, int) or ctx_len <= 0):
-            raise ProtocolError("ctx_len 必须是正整数")
+            raise ProtocolError("ctx_len must be a positive integer")
 
         # 探测失败时仍返回 detection(含 sample 原文),UI 走手动映射;
         # 转换只在非 unknown 时做(unknown convert 会抛错)。
@@ -373,28 +373,28 @@ class ServeSessionManager:
         out_path = params.get("out_path")
         turn_policy = params.get("turn_policy", "first")
         if not isinstance(data_path, str) or not data_path.strip():
-            raise ProtocolError("import 需要 data_path 字符串")
+            raise ProtocolError("import requires a data_path string")
         if not isinstance(out_path, str) or not out_path.strip():
-            raise ProtocolError("import 需要 out_path 字符串")
+            raise ProtocolError("import requires an out_path string")
         if turn_policy not in ("first", "all"):
-            raise ProtocolError(f"turn_policy 只支持 first / all, 收到 {turn_policy!r}")
+            raise ProtocolError(f"turn_policy supports only first / all; received {turn_policy!r}")
 
         src = Path(data_path).expanduser()
         if not src.is_file():
-            raise ProtocolError(f"数据文件不存在: {src}", code="not_found")
+            raise ProtocolError(f"Data file does not exist: {src}", code="not_found")
 
         try:
             prompt_key = params.get("prompt_key")
             response_key = params.get("response_key")
             if (prompt_key is None) != (response_key is None):
-                raise ValueError("prompt_key 与 response_key 必须同时提供")
+                raise ValueError("prompt_key and response_key must be provided together")
             artifact, result = _do_import(
                 src, Path(out_path), turn_policy=turn_policy,
                 prompt_key=prompt_key, response_key=response_key,
             )
         except ValueError as exc:
             # 探测失败(unknown)或转换错误 → bad_request(附原因供 UI 展示)
-            raise ProtocolError(f"导入失败: {exc}") from exc
+            raise ProtocolError(f"Import failed: {exc}") from exc
         return {
             "jsonl_path": str(artifact.jsonl_path),
             "sidecar_path": str(artifact.sidecar_path),
@@ -491,7 +491,7 @@ class ServeProtocol:
                     continue
                 self._queue.put(stripped)
         except Exception as exc:  # 读线程不能崩
-            self._log(f"# 读线程异常: {exc}")
+            self._log(f"# Reader thread error: {exc}")
         finally:
             self._queue.put(None)  # EOF 信号
 
@@ -535,10 +535,10 @@ class ServeProtocol:
         try:
             req = json.loads(line)
         except json.JSONDecodeError as exc:
-            self._emit(_error("bad_request", f"JSON 解析失败: {exc.msg}"))
+            self._emit(_error("bad_request", f"Failed to parse JSON: {exc.msg}"))
             return
         if not isinstance(req, dict):
-            self._emit(_error("bad_request", "请求必须是 JSON 对象"))
+            self._emit(_error("bad_request", "Request must be a JSON object"))
             return
 
         cmd = req.get("cmd")
@@ -546,7 +546,7 @@ class ServeProtocol:
         params = {k: v for k, v in req.items() if k not in ("cmd", "id")}
 
         if not isinstance(cmd, str) or not cmd:
-            self._emit(_error("bad_request", "缺少 cmd 字段", id_=id_))
+            self._emit(_error("bad_request", "Missing cmd field", id_=id_))
             return
 
         try:
@@ -557,7 +557,7 @@ class ServeProtocol:
             self._emit(_error(exc.code, str(exc), id_=id_))
         except GenerationAborted:
             # send/preview 被中断:已被 handle_send 处理,不会到这里
-            self._emit(_error("aborted", "生成已中断", id_=id_))
+            self._emit(_error("aborted", "Generation aborted", id_=id_))
         except Exception as exc:  # internal:未预期异常,附 traceback 摘要(§3.5)
             tb = traceback.format_exc()
             summary = tb[-500:] if len(tb) > 500 else tb
@@ -576,7 +576,7 @@ class ServeProtocol:
         if cmd == "close_session":
             sid = params.get("session_id")
             if not isinstance(sid, str):
-                raise ProtocolError("close_session 需要 session_id")
+                raise ProtocolError("close_session requires session_id")
             self.manager.close_session(sid)
             self._emit(_ok(id_))
             return
@@ -611,7 +611,7 @@ class ServeProtocol:
         if cmd in ("set_state", "set_config", "rewind", "reset"):
             self._handle_session_cmd(cmd, id_, params)
             return
-        raise ProtocolError(f"未知指令: {cmd!r}")
+        raise ProtocolError(f"Unknown command: {cmd!r}")
 
     # ── send(流式 + abort)─────────────────────────────────
 
@@ -630,14 +630,14 @@ class ServeProtocol:
         sid = params.get("session_id")
         text = params.get("text")
         if not isinstance(sid, str):
-            raise ProtocolError("send 需要 session_id")
+            raise ProtocolError("send requires session_id")
         if not isinstance(text, str) or not text.strip():
-            raise ProtocolError("send 需要非空 text")
+            raise ProtocolError("send requires non-empty text")
 
         managed = self.manager.get_session(sid)  # 可能 raise not_found
 
         if not self._busy.acquire(blocking=False):
-            raise ProtocolError("busy: 已有生成进行中", code="busy")
+            raise ProtocolError("busy: generation already in progress", code="busy")
         self._in_flight_id = id_
         self._abort_event.clear()
         try:
@@ -675,7 +675,7 @@ class ServeProtocol:
                 # 置 cache=None + cache_clean=False(续传路径的 self.cache 可能
                 # 已被前向就地污染),下轮强制重放。旧注释"cache 自动重建无需修补"
                 # 是错的(重放只在 cache_clean=False 时触发,abort 路径原先没置 False)。
-                self._emit(_error("aborted", "生成已中断", id_=id_))
+                self._emit(_error("aborted", "Generation aborted", id_=id_))
                 return
 
             # turn_end:result = GenerationResult.to_dict()(§3.4)
@@ -705,7 +705,7 @@ class ServeProtocol:
         ab=True  → turn_end{side:with_state} → turn_end{side:baseline} → ok
         """
         if not self._busy.acquire(blocking=False):
-            raise ProtocolError("busy: 已有生成进行中", code="busy")
+            raise ProtocolError("busy: generation already in progress", code="busy")
         self._in_flight_id = id_
         self._abort_event.clear()
         try:
@@ -715,7 +715,7 @@ class ServeProtocol:
                 self._emit(evt)
             self._emit(_ok(id_))
         except GenerationAborted:
-            self._emit(_error("aborted", "生成已中断", id_=id_))
+            self._emit(_error("aborted", "Generation aborted", id_=id_))
         finally:
             self._in_flight_id = None
             self._abort_event.clear()
@@ -726,7 +726,7 @@ class ServeProtocol:
     def _handle_session_cmd(self, cmd: str, id_: Optional[str], params: dict) -> None:
         sid = params.get("session_id")
         if not isinstance(sid, str):
-            raise ProtocolError(f"{cmd} 需要 session_id")
+            raise ProtocolError(f"{cmd} requires session_id")
         managed = self.manager.get_session(sid)
         session = managed.session
 
@@ -735,7 +735,7 @@ class ServeProtocol:
             # 不再从 reply.lines[0] 捞中文人话(改 CLI 文案协议会跟着变)。
             state_path = params.get("state_path")  # None = 关闭 state
             if state_path is not None and not isinstance(state_path, str):
-                raise ProtocolError("set_state 的 state_path 必须是字符串或 null")
+                raise ProtocolError("set_state state_path must be a string or null")
             result = session.set_state(state_path)
             if not result.ok:
                 # 加载失败 → bad_request(附 message 供 UI 展示)
@@ -752,7 +752,7 @@ class ServeProtocol:
         if cmd == "set_config":
             gen_config = params.get("gen_config")
             if not isinstance(gen_config, dict):
-                raise ProtocolError("set_config 需要 gen_config 对象")
+                raise ProtocolError("set_config requires a gen_config object")
             self._apply_gen_config(session, gen_config)
             self._emit(_ok(id_))
             return
@@ -760,7 +760,7 @@ class ServeProtocol:
         if cmd == "rewind":
             n = params.get("n", 1)
             if not isinstance(n, int) or n < 1:
-                raise ProtocolError("rewind 的 n 必须是 >= 1 的整数")
+                raise ProtocolError("rewind n must be an integer >= 1")
             result = session.rewind(n)
             self._emit(_ok(
                 id_,
@@ -798,7 +798,7 @@ class ServeProtocol:
             new_config = replace(session.config, **updates)
             new_config.validate()
         except (ValueError, TypeError) as exc:
-            raise ProtocolError(f"gen_config 参数非法: {exc}") from exc
+            raise ProtocolError(f"Invalid gen_config parameters: {exc}") from exc
         session.config = new_config
 
 
@@ -818,7 +818,7 @@ def run_serve(model_path: str, *, cache_limit_spec: Optional[str] = None) -> Non
         apply_cache_limit(cache_limit_spec)
     except ValueError as exc:
         # serve 进程启动期:错误发到 stderr 后退出(协议尚未就绪,无法发 error 事件)
-        sys.stderr.write(f"# cache-limit 错误: {exc}\n")
+        sys.stderr.write(f"# cache-limit error: {exc}\n")
         sys.exit(2)
     model, tok = load_model(model_path, patch=False)
     engine = InferenceEngine(model, tok)

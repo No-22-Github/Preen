@@ -201,11 +201,11 @@ def convert(
     say = log or (lambda message: None)
     rwkv7_path = str(rwkv7_path)
     output = str(output)
-    notify("read", "读取原生 .pth 权重", None, None)
-    say(f"加载源权重: {rwkv7_path}")
+    notify("read", "Reading native .pth weights", None, None)
+    say(f"Loading source weights: {rwkv7_path}")
     weights = read_pth(rwkv7_path)  # {name: np.ndarray}, 纯 Python 读取
     config = infer_config(weights)
-    say(f"推断配置: layers={config['num_hidden_layers']} "
+    say(f"Inferred configuration: layers={config['num_hidden_layers']} "
         f"hidden={config['hidden_size']} vocab={config['vocab_size']} "
         f"ffn={config['intermediate_size']}")
 
@@ -218,12 +218,12 @@ def convert(
     # 否则用仓库内置 fixture(从 fla-hub 0.1B 生成,只存 ndim)。
     if ref_path is not None:
         template, top_template = load_reference_template(ref_path)
-        say(f"参考模板(活模型 {ref_path}): "
-            f"{len(template)} 个层内键 + {len(top_template)} 个顶层键")
+        say(f"Reference template (live model {ref_path}): "
+            f"{len(template)} per-layer keys + {len(top_template)} top-level keys")
     else:
         template, top_template = load_template_from_fixture(_DEFAULT_FIXTURE)
-        say(f"参考模板(内置 fixture): "
-            f"{len(template)} 个层内键 + {len(top_template)} 个顶层键")
+        say(f"Reference template (bundled fixture): "
+            f"{len(template)} per-layer keys + {len(top_template)} top-level keys")
 
     # tokenizer 来源:显式提供则用之,否则用仓库 vendored 目录。
     if tokenizer_src is None:
@@ -234,10 +234,10 @@ def convert(
     total_weights = len(weights)
     for index, src_name in enumerate(weights, 1):
         if index == 1 or index == total_weights or index % max(1, total_weights // 100) == 0:
-            notify("convert", f"转换张量 {index}/{total_weights}", index, total_weights)
+            notify("convert", f"Converting tensor {index}/{total_weights}", index, total_weights)
         rel_name, transposed = translate(src_name, config["num_hidden_layers"])
         if not rel_name:
-            say(f"  [跳过] {src_name} (unused)")
+            say(f"  [skip] {src_name} (unused)")
             continue
         if "{N}" in rel_name:
             li = int(src_name.split(".")[1])
@@ -269,15 +269,15 @@ def convert(
                 ok = len(ref_shape) == weight.ndim
             if not ok:
                 raise ValueError(
-                    f"维度数校验失败 {fla_name}: 参考={ref_shape}(ndim={len(ref_shape)}) "
-                    f"实际={tuple(weight.shape)}(ndim={weight.ndim})"
+                    f"Rank validation failed for {fla_name}: reference={ref_shape}(ndim={len(ref_shape)}) "
+                    f"actual={tuple(weight.shape)}(ndim={weight.ndim})"
                 )
             reported_layer0.add(rel_check)
         if li == 0 and fla_name in top_template:
             ref_shape = top_template[fla_name]
             if len(ref_shape) != weight.ndim:
                 raise ValueError(
-                    f"顶层维度数校验失败 {fla_name}: 参考={ref_shape} 实际={tuple(weight.shape)}"
+                    f"Top-level rank validation failed for {fla_name}: reference={ref_shape} actual={tuple(weight.shape)}"
                 )
 
         new_weights[fla_name] = np.ascontiguousarray(weight.astype(dtype))
@@ -288,14 +288,14 @@ def convert(
         # pre_norm (ln0) 可能缺失,允许
         for u in uncovered:
             if "pre_norm" in u:
-                say(f"  [注意] layer0 缺 {u} (ln0,允许缺失)")
+                say(f"  [note] layer0 is missing {u} (ln0; allowed)")
             else:
-                say(f"  [警告] layer0 模板键未被覆盖: {u}")
+                say(f"  [warning] layer0 template key was not covered: {u}")
 
     os.makedirs(output, exist_ok=True)
     out_st = os.path.join(output, "model.safetensors")
-    notify("write", "写入 model.safetensors", None, None)
-    say(f"保存权重: {out_st} ({len(new_weights)} 个张量, {precision})")
+    notify("write", "Writing model.safetensors", None, None)
+    say(f"Saving weights: {out_st} ({len(new_weights)} tensors, {precision})")
     out_st_tmp = out_st + ".tmp"
     save_file(new_weights, out_st_tmp, metadata={"format": "pt"})
     os.replace(out_st_tmp, out_st)
@@ -342,7 +342,7 @@ def convert(
     with open(config_tmp, "w") as f:
         json.dump(config_json, f, indent=2, ensure_ascii=False)
     os.replace(config_tmp, config_path)
-    say("保存 config.json")
+    say("Saving config.json")
 
     # tokenizer (官方脚本不输出 tokenizer,需从 fla-hub 拷贝)
     for fn in ["hf_rwkv_tokenizer.py", "tokenizer_config.json",
@@ -351,12 +351,12 @@ def convert(
         src = os.path.join(tokenizer_src, fn)
         if os.path.exists(src):
             shutil.copy2(src, os.path.join(output, fn))
-            say(f"拷贝 tokenizer: {fn}")
+            say(f"Copying tokenizer file: {fn}")
         else:
-            raise FileNotFoundError(f"tokenizer 文件缺失: {src}")
+            raise FileNotFoundError(f"Tokenizer file is missing: {src}")
 
-    say(f"\n转换完成 → {output}")
-    say("下一步: 用 mlx_lm.load 或 transformers 加载验证")
+    say(f"\nConversion complete -> {output}")
+    say("Next: validate by loading with mlx_lm.load or transformers")
     return {
         "output_path": output,
         "weights_path": out_st,
@@ -373,10 +373,10 @@ def main() -> None:
     p.add_argument("--rwkv7", required=True)
     p.add_argument("--output", required=True)
     p.add_argument("--reference", default=None,
-                   help="可选:同架构 fla 模型的 safetensors,做活模型 ground truth 校验"
-                        "(缺省用仓库内 tools/fixtures/rwkv7_hf_template.json)")
+                   help="Optional safetensors from an FLA model with the same architecture for live ground-truth validation "
+                        "(defaults to tools/fixtures/rwkv7_hf_template.json)")
     p.add_argument("--tokenizer-src", default=None,
-                   help="可选:tokenizer 来源目录(缺省用 assets/rwkv_world_tokenizer/)")
+                   help="Optional tokenizer source directory (defaults to assets/rwkv_world_tokenizer/)")
     p.add_argument("--precision", default="bf16",
                    choices=["bf16", "fp16", "fp32"])
     args = p.parse_args()

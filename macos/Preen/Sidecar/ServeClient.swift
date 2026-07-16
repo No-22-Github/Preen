@@ -102,7 +102,7 @@ final class ServeClient {
         // 最高频根因是 PREEN_SIDECAR_PYTHON 没进子进程环境 → fallback 到
         // /usr/bin/python3(系统自带,无 mlx 依赖,import 即崩)。这里一眼能看出来。
         let pythonPath = PythonResolver.repoRoot?
-            .appendingPathComponent("src").path ?? "（无 — 环境变量缺失，可能用错解释器）"
+            .appendingPathComponent("src").path ?? L10n.string("（无 — 环境变量缺失，可能用错解释器）")
         let diag = """
         # [Preen] sidecar python: \(PythonResolver.executable.path)
         # [Preen] PYTHONPATH: \(pythonPath)
@@ -135,7 +135,7 @@ final class ServeClient {
         } catch {
             // 启动失败:用合成 error 事件通知 UI。
             continuation.yield(.error(id: nil, code: .internal,
-                                      message: "无法启动 serve 进程：\(error.localizedDescription)"))
+                                      message: L10n.format("无法启动 serve 进程：%@", error.localizedDescription)))
             continuation.finish()
             return stream
         }
@@ -208,7 +208,7 @@ final class ServeClient {
         } catch {
             // 写失败:立刻 resume(不让 awaiter 永远挂)。
             _ = unregisterContinuation(id: request.id)
-            cont.resume(returning: .error(code: .internal, message: "写 stdin 失败：\(error.localizedDescription)"))
+            cont.resume(returning: .error(code: .internal, message: L10n.format("写 stdin 失败：%@", error.localizedDescription)))
         }
         }.serving()  // 把 .error 转成 throw(详见 ServeResponse.serving)
     }
@@ -222,7 +222,7 @@ final class ServeClient {
         let resp = try await send(.newSession(id: newId(), template: template, reasoning: reasoning,
                                               think: think, statePath: statePath, genConfig: genConfig))
         guard case .ok(let payload) = resp, let sid = payload.sessionId else {
-            throw ServeError.serveError(code: .internal, message: "new_session 未返回 session_id")
+            throw ServeError.serveError(code: .internal, message: L10n.string("new_session 未返回 session_id"))
         }
         return sid
     }
@@ -262,7 +262,7 @@ final class ServeClient {
                     event = try JSONDecoder().decode(ServeEvent.self, from: data)
                 } catch {
                     #if DEBUG
-                    print("[ServeClient] 解码失败 line=\(line.prefix(200)) error=\(error)")
+                    print("[ServeClient] decode failed line=\(line.prefix(200)) error=\(error)")
                     #endif
                     continue  // 丢一行坏数据(serve 不变量:不让坏行影响后续)
                 }
@@ -270,7 +270,7 @@ final class ServeClient {
             }
         } catch {
             #if DEBUG
-            print("[ServeClient] stdout 读异常:\(error)")
+            print("[ServeClient] stdout read failed: \(error)")
             #endif
         }
 
@@ -317,7 +317,7 @@ final class ServeClient {
         guard let id = event.requestId else { return }
         guard let cont = unregisterContinuation(id: id) else {
             #if DEBUG
-            print("[ServeClient] 收到终结事件但无挂起 continuation: id=\(id)")
+            print("[ServeClient] terminal event has no pending continuation: id=\(id)")
             #endif
             return
         }
@@ -361,15 +361,15 @@ final class ServeClient {
         continuations.removeAll()
         lock.unlock()
         for (_, cont) in pending {
-            cont.resume(returning: .error(code: .internal, message: "serve 进程已退出"))
+            cont.resume(returning: .error(code: .internal, message: L10n.string("serve 进程已退出")))
         }
     }
 
     // MARK: - stdin / stderr
 
     private func writeStdin(_ line: String) throws {
-        guard let handle = stdinHandle else { throw ServeError.ioError("stdin 未就绪") }
-        guard let data = line.data(using: .utf8) else { throw ServeError.ioError("编码失败") }
+        guard let handle = stdinHandle else { throw ServeError.ioError(L10n.string("stdin 未就绪")) }
+        guard let data = line.data(using: .utf8) else { throw ServeError.ioError(L10n.string("编码失败")) }
         try handle.write(contentsOf: data)
     }
 

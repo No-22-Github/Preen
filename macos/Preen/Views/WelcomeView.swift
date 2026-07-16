@@ -104,7 +104,7 @@ struct WelcomeView: View {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        panel.prompt = "选择模型目录"
+        panel.prompt = L10n.string("选择模型目录")
         if panel.runModal() == .OK, let url = panel.url {
             appState.selectModel(path: url.path)
             appState.selection = .training
@@ -188,10 +188,10 @@ private struct WelcomeAction: View {
                     .frame(width: 28)
                     .foregroundStyle(prominent ? Color.accentColor : .secondary)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
+                    Text(L10n.string(title))
                         .font(.body.weight(.medium))
                         .foregroundStyle(.primary)
-                    Text(subtitle)
+                    Text(L10n.string(subtitle))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -270,6 +270,6 @@ private struct WelcomeRecentRow: View {
                 (isQuantized ? Color.orange : Color.secondary).opacity(0.15),
                 in: RoundedRectangle(cornerRadius: 4, style: .continuous)
             )
-            .help(isQuantized ? "INT8 · 仅推理，不可训练" : "BF16 标准精度")
+            .help(L10n.string(isQuantized ? "INT8 · 仅推理，不可训练" : "BF16 标准精度"))
     }
 }

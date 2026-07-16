@@ -35,7 +35,7 @@ final class ToolJobRunner {
         } catch {
             continuation.yield(ToolEvent(
                 type: .failed, tool: "process", timestamp: Date().timeIntervalSince1970,
-                phase: nil, message: "无法启动工具进程：\(error.localizedDescription)",
+                phase: nil, message: L10n.format("无法启动工具进程：%@", error.localizedDescription),
                 current: nil, total: nil, progress: nil, path: nil, result: nil
             ))
             continuation.finish()
@@ -55,16 +55,16 @@ final class ToolJobRunner {
                         }
                         continuation.yield(event)
                     } catch {
-                        self.appendLog("无法解析工具事件：\(line.prefix(500))\n")
+                        self.appendLog(L10n.format("无法解析工具事件：%@\n", String(line.prefix(500))))
                     }
                 }
             } catch {
-                self.appendLog("读取工具输出失败：\(error.localizedDescription)\n")
+                self.appendLog(L10n.format("读取工具输出失败：%@\n", error.localizedDescription))
             }
             self.process.waitUntilExit()
             if !sawTerminal {
                 let message = self.stderrLog.isEmpty
-                    ? "工具进程异常退出（code \(self.process.terminationStatus)）"
+                    ? L10n.format("工具进程异常退出（code %d）", self.process.terminationStatus)
                     : self.stderrLog
                 continuation.yield(ToolEvent(
                     type: self.process.terminationReason == .uncaughtSignal ? .cancelled : .failed,

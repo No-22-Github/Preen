@@ -109,7 +109,7 @@ def _proc_pid_rusage(pid: int) -> _RusageInfoV4:
     """读 rusage_info_v4。仅 macOS。失败抛 OSError。"""
     global _libc
     if sys.platform != "darwin":
-        raise OSError("phys_footprint 仅在 macOS 可用")
+        raise OSError("phys_footprint is available only on macOS")
     if _libc is None:
         _libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
     buf = _RusageInfoV4()
@@ -118,7 +118,7 @@ def _proc_pid_rusage(pid: int) -> _RusageInfoV4:
     )
     if rc != 0:
         err = ctypes.get_errno()
-        raise OSError(err, f"proc_pid_rusage(pid={pid}) 失败: errno={err}")
+        raise OSError(err, f"proc_pid_rusage(pid={pid}) failed: errno={err}")
     return buf
 
 
@@ -230,7 +230,7 @@ class MemorySnapshot:
         return (
             f"footprint {g(self.footprint_gb)} (peak {g(self.peak_footprint_gb)}) · "
             f"mlx active {g(self.mlx_active_gb)} + cache {g(self.mlx_cache_gb)} · "
-            f"rss {g(self.rss_gb)} [仅对照]"
+            f"rss {g(self.rss_gb)} [reference only]"
         )
 
 
@@ -305,17 +305,17 @@ def apply_cache_limit(spec: Optional[str]) -> Optional[int]:
         info = mx.device_info()
         total = info.get("memory_size")
         if not total:
-            raise ValueError("无法读取物理内存(device_info 无 memory_size),请显式指定 GB 数")
+            raise ValueError("Unable to read physical memory (device_info has no memory_size); specify a GB value explicitly")
         gb = total / 1e9 * 0.25
     else:
         try:
             gb = float(spec)
         except ValueError as exc:
             raise ValueError(
-                f"--cache-limit-gb 只接受 'auto' 或正数, 收到 {spec!r}"
+                f"--cache-limit-gb accepts only 'auto' or a positive number; received {spec!r}"
             ) from exc
     if gb <= 0:
-        raise ValueError("cache-limit-gb 必须 > 0")
+        raise ValueError("cache-limit-gb must be > 0")
     limit = int(gb * 1e9)
     mx.set_cache_limit(limit)
     return limit
@@ -329,11 +329,11 @@ if __name__ == "__main__":
     target = int(sys.argv[1]) if len(sys.argv) > 1 else os.getpid()
     snap = memory_report(target, cross_check=True)
     print(f"pid={snap.pid}")
-    print(f"  footprint       {snap.footprint_gb}        ← 应 == Activity Monitor「内存」")
+    print(f"  footprint       {snap.footprint_gb}        <- should match Activity Monitor memory")
     print(f"  peak footprint  {snap.peak_footprint_gb}")
-    print(f"  vmmap current   {snap.vmmap_footprint_gb}  ← 独立信源,应与 footprint 一致")
-    print(f"  vmmap peak      {snap.vmmap_peak_gb}       ← 独立信源,应与 peak footprint 一致")
-    print(f"  rss             {snap.rss_gb}              ← 仅对照(漏 IOKit,必然偏小)")
+    print(f"  vmmap current   {snap.vmmap_footprint_gb}  <- independent source; should match footprint")
+    print(f"  vmmap peak      {snap.vmmap_peak_gb}       <- independent source; should match peak footprint")
+    print(f"  rss             {snap.rss_gb}              <- reference only (excludes IOKit and is lower)")
     print(f"  mlx active      {snap.mlx_active_gb}")
     print(f"  mlx cache       {snap.mlx_cache_gb}")
-    print(f"  mlx peak        {snap.mlx_peak_gb}         ← 已知漏报,勿用于判断")
+    print(f"  mlx peak        {snap.mlx_peak_gb}         <- known undercount; do not use for decisions")

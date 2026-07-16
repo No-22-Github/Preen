@@ -73,17 +73,17 @@ class GenerationConfig:
 
     def validate(self) -> None:
         if self.max_tokens <= 0:
-            raise ValueError("max_tokens 必须 > 0")
+            raise ValueError("max_tokens must be > 0")
         if self.temperature < 0:
-            raise ValueError("temperature 必须 >= 0")
+            raise ValueError("temperature must be >= 0")
         if not 0 < self.top_p <= 1:
-            raise ValueError("top_p 必须在 (0, 1] 范围内")
+            raise ValueError("top_p must be in the range (0, 1]")
         if self.presence_penalty < 0:
-            raise ValueError("presence_penalty 必须 >= 0")
+            raise ValueError("presence_penalty must be >= 0")
         if self.frequency_penalty < 0:
-            raise ValueError("frequency_penalty 必须 >= 0")
+            raise ValueError("frequency_penalty must be >= 0")
         if not 0 < self.penalty_decay <= 1:
-            raise ValueError("penalty_decay 必须在 (0, 1] 范围内")
+            raise ValueError("penalty_decay must be in the range (0, 1]")
 
 
 @dataclass(frozen=True)
@@ -213,15 +213,15 @@ def render_prompt(
     """
     if think != "off" and not reasoning:
         raise ValueError(
-            f"--think 仅在 reasoning 模型上生效(reasoning=False 时 think 必须 off),收到 think={think!r}"
+            f"--think applies only to reasoning models (think must be off when reasoning=False); received think={think!r}"
         )
     if reasoning and think not in ThinkSuffix:
-        raise ValueError(f"不支持的 think 档位: {think!r}(合法: off/fast/on)")
+        raise ValueError(f"Unsupported think mode: {think!r} (valid: off/fast/on)")
 
     if template == "raw":
         if reasoning or think != "off":
             raise ValueError(
-                "raw 模板不与 reasoning/think 组合(裸文本无 Assistant: 锚点)"
+                "The raw template cannot be combined with reasoning/think (plain text has no Assistant: anchor)"
             )
         return prompt
 
@@ -234,13 +234,13 @@ def render_prompt(
     if template == "instruction":
         if reasoning or think != "off":
             raise ValueError(
-                "instruction 模板不与 reasoning/think 组合(v1 不做 reasoning 指令)"
+                "The instruction template cannot be combined with reasoning/think (reasoning instructions are not supported in v1)"
             )
         return INSTRUCTION.format_prefix(
             instruction=prompt, input=instruction_input
         )
 
-    raise ValueError(f"不支持的模板: {template!r}")
+    raise ValueError(f"Unsupported template: {template!r}")
 
 
 def with_template_stops(
@@ -259,7 +259,7 @@ def with_template_stops(
         return replace(config, stop_sequences=QA.inference_stop_sequences)
     if template == "instruction":
         return replace(config, stop_sequences=INSTRUCTION.inference_stop_sequences)
-    raise ValueError(f"不支持的模板: {template!r}")
+    raise ValueError(f"Unsupported template: {template!r}")
 
 
 def _last_token_logits(model, input_ids, caches):
@@ -341,7 +341,7 @@ class _CompiledRwkv7Decode:
         if not self._cache_holders or not all(
             hasattr(cache, "state") for cache in self._cache_holders
         ):
-            raise TypeError("RWKV7 compiled decode 需要 ArraysCache 风格 holder")
+            raise TypeError("RWKV7 compiled decode requires an ArraysCache-style holder")
 
         def decode_step(input_ids, cache_state):
             for holder, layer_state in zip(self._cache_holders, cache_state):
@@ -446,7 +446,7 @@ class InferenceEngine:
 
         prompt_ids = self.tokenizer.encode(prompt)
         if not prompt_ids:
-            raise ValueError("prompt 编码后为空")
+            raise ValueError("Prompt is empty after encoding")
 
         mx.random.seed(cfg.seed)
         sampler = None
@@ -653,7 +653,7 @@ class InferenceEngine:
     ) -> ABResult:
         """相同配置/seed 下生成 tuned state 与零 state 基线。"""
         if state is None:
-            raise ValueError("A/B 对比必须提供 state")
+            raise ValueError("A/B comparison requires a state")
         cfg = config or GenerationConfig()
         return ABResult(
             prompt=prompt,

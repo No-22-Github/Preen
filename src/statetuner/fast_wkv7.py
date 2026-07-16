@@ -172,9 +172,9 @@ def _get_ckpt_bwd(H: int, T: int, chunk: int):
             for (uint dk=0; dk<HEAD_SIZE_C; dk++)
                 C_row[dk] = C_row[dk]*w_sh[dk] + dsa_dv*a_sh[dk];
 
-            // C_row 更新会读取整行 w_sh/a_sh，而下一时间步各线程会立即覆盖
-            // 自己负责的 shared-array 元素。必须等所有线程读完当前时间步，
-            // 否则执行较快的线程会让较慢线程混读两个时间步，造成梯度竞态。
+            // Updating C_row reads the entire w_sh/a_sh row, while each thread will
+            // immediately overwrite its shared-array element for the next timestep.
+            // Wait until every thread finishes reading to avoid a cross-timestep race.
             threadgroup_barrier(mem_flags::mem_threadgroup);
         }
     }
@@ -202,8 +202,8 @@ def make_wkv7_checkpoint(B: int, T: int, H: int, D: int = HEAD_SIZE, chunk: int 
       chunk=8  → ~(1/0.9)^8 ≈ 2.3×(最精确,反向重构次数 4×)
     与 core._wkv7_train 闭包约定一致:h_in 即 (B,H,D,D) 广播后的可训练 state。
     """
-    assert T % chunk == 0, f"T={T} 必须整除 chunk={chunk}(checkpoint kernel 约束)"
-    assert D == HEAD_SIZE, f"D={D} != HEAD_SIZE={HEAD_SIZE}(kernel 硬编码)"
+    assert T % chunk == 0, f"T={T} must be divisible by chunk={chunk} (checkpoint kernel constraint)"
+    assert D == HEAD_SIZE, f"D={D} != HEAD_SIZE={HEAD_SIZE} (kernel constant)"
     N = T // chunk
 
     @mx.custom_function
@@ -253,7 +253,7 @@ def wkv7_train_zero(r, w, k, v, a, b, *, num_heads: int, head_dim: int):
     每次按 (B,T,H,D) 查/建 kernel。head_dim 必须为 64(kernel 硬编码)。
     """
     B, T, H, D = r.shape
-    assert H == num_heads and D == head_dim, f"形状不匹配: got (H={H},D={D}) expect ({num_heads},{head_dim})"
+    assert H == num_heads and D == head_dim, f"Shape mismatch: got (H={H},D={D}), expected ({num_heads},{head_dim})"
     wkv7_train = make_wkv7_checkpoint(B, T, H, D)
     h0 = mx.zeros((B, H, D, D), dtype=r.dtype)
     out, _ = wkv7_train(r, w, k, v, a, b, h0)

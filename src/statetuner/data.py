@@ -199,7 +199,7 @@ def load_standard_jsonl(
     elif template == "instruction":
         tmpl = INSTRUCTION
     else:
-        raise ValueError(f"标准 jsonl 只支持 qa / instruction 模板, 收到 {template!r}")
+        raise ValueError(f"Standard JSONL supports only qa / instruction templates; received {template!r}")
 
     items = load_jsonl(Path(path))
     samples = []

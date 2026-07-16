@@ -191,7 +191,7 @@ struct ContentView: View {
         var detail = AttributedString("\t\(badge.uppercased())")
         detail.foregroundColor = .secondary
         if badge == "int8" {
-            var hint = AttributedString(" · 仅推理")
+            var hint = AttributedString(L10n.string(" · 仅推理"))
             hint.foregroundColor = .orange
             detail += hint
         }
@@ -218,7 +218,7 @@ struct ContentView: View {
                 (isQuantized ? Color.orange : Color.secondary).opacity(0.15),
                 in: RoundedRectangle(cornerRadius: 5, style: .continuous)
             )
-            .help(isQuantized ? "INT8 · 仅支持推理，不支持训练" : "BF16 标准精度")
+            .help(L10n.string(isQuantized ? "INT8 · 仅支持推理，不支持训练" : "BF16 标准精度"))
             .contentShape(Rectangle())
     }
 
@@ -226,7 +226,7 @@ struct ContentView: View {
     /// 能穿透 Menu label 的系统样式覆盖(.fontWeight 修饰符会被 Menu 忽略)。
     private var menuLabelText: AttributedString {
         if appState.modelPath.isEmpty {
-            return AttributedString("选择模型")
+            return AttributedString(L10n.string("选择模型"))
         }
         var attr = AttributedString(URL(fileURLWithPath: appState.modelPath).lastPathComponent)
         attr.font = .body.weight(.semibold)
@@ -237,11 +237,11 @@ struct ContentView: View {
     private var modelPickerHelp: String {
         guard appState.chatStore.isConnected else {
             return appState.modelPath.isEmpty
-                ? "选择 RWKV-7 模型"
-                : "选择 RWKV-7 模型\n当前：\(appState.modelPath)"
+                ? L10n.string("选择 RWKV-7 模型")
+                : L10n.format("选择 RWKV-7 模型\n当前：%@", appState.modelPath)
         }
-        let state = appState.chatStore.statePath ?? "未加载（基线模式）"
-        return "模型已加载\n模型：\(appState.modelPath)\nState：\(state)"
+        let state = appState.chatStore.statePath ?? L10n.string("未加载（基线模式）")
+        return L10n.format("模型已加载\n模型：%@\nState：%@", appState.modelPath, state)
     }
 
     private func acknowledgeModelChip() {
@@ -263,7 +263,7 @@ struct ContentView: View {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        panel.prompt = "选择模型目录"
+        panel.prompt = L10n.string("选择模型目录")
         if panel.runModal() == .OK, let url = panel.url {
             appState.selectModel(path: url.path)
         }
@@ -323,9 +323,9 @@ struct ContentView: View {
     /// 确认弹窗标题(按待执行动作切换)。
     private var confirmationTitle: String {
         switch pendingStateAction {
-        case .load: return "替换 State 会清空当前会话？"
-        case .clear: return "卸下 State 会清空当前会话？"
-        case .disconnect: return "断开会清除当前会话？"
+        case .load: return L10n.string("替换 State 会清空当前会话？")
+        case .clear: return L10n.string("卸下 State 会清空当前会话？")
+        case .disconnect: return L10n.string("断开会清除当前会话？")
         case .none: return ""
         }
     }
@@ -333,9 +333,9 @@ struct ContentView: View {
     /// 确认弹窗的破坏性按钮文案。
     private var confirmationDestructiveButtonTitle: String {
         switch pendingStateAction {
-        case .load: return "替换"
-        case .clear: return "卸下"
-        case .disconnect: return "断开"
+        case .load: return L10n.string("替换")
+        case .clear: return L10n.string("卸下")
+        case .disconnect: return L10n.string("断开")
         case .none: return ""
         }
     }
@@ -344,9 +344,9 @@ struct ContentView: View {
     private var confirmationMessage: String {
         switch pendingStateAction {
         case .load, .clear:
-            return "加载或卸下 State 都会重置会话历史，此操作无法撤销。"
+            return L10n.string("加载或卸下 State 都会重置会话历史，此操作无法撤销。")
         case .disconnect:
-            return "断开推理连接将终止后端进程并清除当前会话历史，此操作无法撤销。"
+            return L10n.string("断开推理连接将终止后端进程并清除当前会话历史，此操作无法撤销。")
         case .none:
             return ""
         }

@@ -7,9 +7,9 @@ enum RunRepositoryError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unsupportedSchema(let schema):
-            return "不支持的训练记录版本：\(schema)"
+            return L10n.format("不支持的训练记录版本：%lld", schema)
         case .runStillActive:
-            return "训练仍在运行，请先取消训练再删除记录"
+            return L10n.string("训练仍在运行，请先取消训练再删除记录")
         }
     }
 }
@@ -128,7 +128,7 @@ actor RunRepository {
             run.status = .interrupted
             run.updatedAt = date
             run.finishedAt = date
-            run.failureMessage = "App 上次退出时训练尚未结束"
+            run.failureMessage = L10n.string("App 上次退出时训练尚未结束")
             try save(run)
             updated.append(run)
         }

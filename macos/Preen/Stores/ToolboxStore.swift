@@ -283,7 +283,7 @@ final class ToolboxStore {
 
     func previewDataset(modelPath: String) {
         guard canPreviewDataset, !modelPath.isEmpty else {
-            errorMessage = "请先在窗口顶部选择模型，数据预览需要对应 tokenizer"
+            errorMessage = L10n.string("请先在窗口顶部选择模型，数据预览需要对应 tokenizer")
             return
         }
         removeDatasetPreviewCache()
@@ -297,7 +297,7 @@ final class ToolboxStore {
         begin(tool: "dataset")
         datasetState = .running
         datasetNeedsRefresh = false
-        statusMessage = "正在启动检查进程…"
+        statusMessage = L10n.string("正在启动检查进程…")
         var argv = [
             "-m", "statetuner.cli", "dataset-preview",
             "--model", modelPath,
@@ -324,7 +324,7 @@ final class ToolboxStore {
         // 避免进度条瞬间出现/消失导致内容上下跳动。
         begin(tool: "dataset-page")
         datasetState = .running
-        statusMessage = "加载第 \(page) 页"
+        statusMessage = L10n.format("加载第 %lld 页", page)
         let argv = [
             "-m", "statetuner.cli", "dataset-preview-page",
             "--cache", cachePath,
@@ -351,7 +351,7 @@ final class ToolboxStore {
 
     func cancel() {
         runner?.cancel()
-        statusMessage = "正在取消…"
+        statusMessage = L10n.string("正在取消…")
     }
 
     func clearError() { errorMessage = nil }
@@ -426,7 +426,7 @@ final class ToolboxStore {
         progress = nil
         progressCurrent = nil
         progressTotal = nil
-        statusMessage = "准备中"
+        statusMessage = L10n.string("准备中")
         warnings = []
         errorMessage = nil
         presentationTool = tool
@@ -436,29 +436,29 @@ final class ToolboxStore {
     }
 
     private static func modelSourceValidationError(for path: String) -> String? {
-        guard !path.isEmpty else { return "请选择原生 RWKV-7 .pth 模型" }
+        guard !path.isEmpty else { return L10n.string("请选择原生 RWKV-7 .pth 模型") }
         let url = URL(fileURLWithPath: path)
         guard url.pathExtension.lowercased() == "pth" else {
-            return "源模型必须是 .pth 文件"
+            return L10n.string("源模型必须是 .pth 文件")
         }
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory),
               !isDirectory.boolValue else {
-            return "找不到所选的 .pth 模型文件"
+            return L10n.string("找不到所选的 .pth 模型文件")
         }
         return nil
     }
 
     /// 量化源校验:必须是含 config.json 的模型目录(转换产物),而非 .pth 文件。
     private static func quantizeSourceValidationError(for path: String) -> String? {
-        guard !path.isEmpty else { return "请选择源 BF16 模型目录" }
+        guard !path.isEmpty else { return L10n.string("请选择源 BF16 模型目录") }
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory),
               isDirectory.boolValue else {
-            return "源路径必须是模型目录（转换后的 HF 目录）"
+            return L10n.string("源路径必须是模型目录（转换后的 HF 目录）")
         }
         guard FileManager.default.fileExists(atPath: "\(path)/config.json") else {
-            return "源目录缺少 config.json，不是有效的模型目录"
+            return L10n.string("源目录缺少 config.json，不是有效的模型目录")
         }
         return nil
     }
@@ -495,12 +495,12 @@ final class ToolboxStore {
             if let current = event.current { progressCurrent = current }
             if let total = event.total { progressTotal = total }
         }
-        statusMessage = event.message ?? statusMessage
+        statusMessage = localizedStatus(for: event)
         switch event.type {
         case .started, .progress:
             break
         case .warning:
-            if let message = event.message { warnings.append(message) }
+            warnings.append(L10n.backendMessage(event.message ?? "", fallback: "数据检查发现需要注意的问题"))
         case .completed:
             do {
                 if event.tool == "model_conversion", let result = event.result {
@@ -532,10 +532,10 @@ final class ToolboxStore {
                     quantizeState = .completed
                 }
             } catch {
-                fail("无法解析工具结果：\(error.localizedDescription)")
+                fail(L10n.format("无法解析工具结果：%@", error.localizedDescription))
             }
         case .failed:
-            fail(event.message ?? "工具任务失败")
+            fail(L10n.backendMessage(event.message ?? "", fallback: "工具任务失败，请查看诊断日志"))
         case .cancelled:
             modelState = modelState == .running ? .cancelled : modelState
             quantizeState = quantizeState == .running ? .cancelled : quantizeState
@@ -548,6 +548,41 @@ final class ToolboxStore {
         if modelState == .running { modelState = .failed }
         if quantizeState == .running { quantizeState = .failed }
         if datasetState == .running { datasetState = .failed }
+    }
+
+    private func localizedStatus(for event: ToolEvent) -> String {
+        switch event.type {
+        case .started:
+            switch event.tool {
+            case "model_conversion": return L10n.string("正在转换模型…")
+            case "quantization": return L10n.string("正在量化模型…")
+            case "dataset_preview": return L10n.string("正在检查数据集…")
+            case "dataset_preview_page": return L10n.string("正在加载预览…")
+            case "dataset_import": return L10n.string("正在转换数据集…")
+            default: return L10n.string("正在启动工具任务…")
+            }
+        case .progress:
+            switch event.phase {
+            case "read": return L10n.string("正在读取模型权重…")
+            case "convert": return L10n.string("正在转换模型权重…")
+            case "write": return L10n.string("正在写入模型…")
+            case "load": return L10n.string("正在加载模型…")
+            case "quantize": return L10n.string("正在量化模型权重…")
+            case "save": return L10n.string("正在保存量化模型…")
+            case "tokenizer": return L10n.string("正在加载 tokenizer…")
+            case "inspect": return L10n.string("正在准备数据检查…")
+            case "render": return L10n.string("正在检查并渲染样本…")
+            default: return L10n.string("工具任务进行中…")
+            }
+        case .warning:
+            return L10n.string("数据检查发现需要注意的问题")
+        case .completed:
+            return L10n.string("工具任务已完成")
+        case .failed:
+            return L10n.string("工具任务失败")
+        case .cancelled:
+            return L10n.string("工具任务已取消")
+        }
     }
 
     private func resetDatasetPreviewPage() {

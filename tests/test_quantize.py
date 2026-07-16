@@ -76,5 +76,5 @@ def test_quantize_rejects_nonempty_out(tmp_path):
     out = tmp_path / "out"
     out.mkdir()
     (out / "stale.txt").write_text("x")
-    with pytest.raises(ValueError, match="非空"):
+    with pytest.raises(ValueError, match="not empty"):
         quantize(MODEL_PATH, out)

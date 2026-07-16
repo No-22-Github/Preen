@@ -174,7 +174,7 @@ private struct SummaryRow<Content: View>: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 16) {
-            Text(label)
+            Text(L10n.string(label))
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .frame(width: 140, alignment: .leading)

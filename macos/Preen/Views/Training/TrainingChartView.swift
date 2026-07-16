@@ -192,13 +192,12 @@ struct TrainingChartView: View {
         selection: Binding<Int?>
     ) -> some View {
         let selectedPoint = nearestMemoryPoint(to: selection.wrappedValue, in: points)
-        let selectedMetric = nearestMemoryMetric(to: selection.wrappedValue)
 
         return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Text("进程内存")
                     .font(.headline)
-                Text(String(format: "上限 %.1f GB", memoryCapacityGiB))
+                Text(L10n.format("上限 %.1f GB", memoryCapacityGiB))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -223,7 +222,6 @@ struct TrainingChartView: View {
                 areaGradient: areaGradient,
                 lineGradient: lineGradient,
                 selectedPoint: selectedPoint,
-                selectedMetric: selectedMetric,
                 selection: selection
             )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -239,9 +237,9 @@ struct TrainingChartView: View {
         Chart {
                 ForEach(store.lossPoints) { point in
                     LineMark(
-                        x: .value("步", point.displayedStep),
-                        y: .value("Raw loss", point.loss),
-                        series: .value("曲线", "Raw")
+                        x: .value(L10n.string("步"), point.displayedStep),
+                        y: .value(L10n.string("Raw loss"), point.loss),
+                        series: .value(L10n.string("曲线"), L10n.string("Raw"))
                     )
                     .foregroundStyle(Color.accentColor.opacity(0.22))
                     .lineStyle(StrokeStyle(lineWidth: 0.8))
@@ -250,9 +248,9 @@ struct TrainingChartView: View {
 
                 ForEach(points) { point in
                     LineMark(
-                        x: .value("步", point.step + 1),
-                        y: .value("EMA loss", point.smoothedLoss),
-                        series: .value("曲线", "EMA")
+                        x: .value(L10n.string("步"), point.step + 1),
+                        y: .value(L10n.string("EMA loss"), point.smoothedLoss),
+                        series: .value(L10n.string("曲线"), "EMA")
                     )
                     .foregroundStyle(Color.accentColor)
                     .lineStyle(StrokeStyle(lineWidth: 2))
@@ -261,22 +259,22 @@ struct TrainingChartView: View {
 
                 ForEach(store.heldOutPoints) { point in
                     LineMark(
-                        x: .value("步", point.step + 1),
-                        y: .value("Held-out loss", point.loss),
-                        series: .value("曲线", "Held-out")
+                        x: .value(L10n.string("步"), point.step + 1),
+                        y: .value(L10n.string("Held-out loss"), point.loss),
+                        series: .value(L10n.string("曲线"), L10n.string("Held-out"))
                     )
                     .foregroundStyle(.secondary)
                     .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
                 }
 
                 ForEach(store.epochBoundaries) { boundary in
-                    RuleMark(x: .value("Epoch", boundary.step + 1))
+                    RuleMark(x: .value(L10n.string("Epoch"), boundary.step + 1))
                         .foregroundStyle(.quaternary)
                         .lineStyle(StrokeStyle(lineWidth: 0.5, dash: [2, 2]))
                 }
 
                 if let point = selectedPoint {
-                    RuleMark(x: .value("选中步", point.step + 1))
+                    RuleMark(x: .value(L10n.string("选中步"), point.step + 1))
                         .foregroundStyle(Color.accentColor.opacity(0.75))
                         .lineStyle(StrokeStyle(lineWidth: 1))
                         .annotation(
@@ -295,8 +293,8 @@ struct TrainingChartView: View {
                             )
                         }
                     PointMark(
-                        x: .value("选中步", point.step + 1),
-                        y: .value("选中 EMA loss", point.smoothedLoss)
+                        x: .value(L10n.string("选中步"), point.step + 1),
+                        y: .value(L10n.string("选中 EMA loss"), point.smoothedLoss)
                     )
                     .foregroundStyle(Color.accentColor)
                     .symbolSize(45)
@@ -348,9 +346,9 @@ struct TrainingChartView: View {
         Chart {
             ForEach(store.lossPoints) { point in
                 LineMark(
-                    x: .value("步", point.displayedStep),
-                    y: .value("Learning rate", point.learningRate),
-                    series: .value("曲线", "LR")
+                    x: .value(L10n.string("步"), point.displayedStep),
+                    y: .value(L10n.string("Learning rate"), point.learningRate),
+                    series: .value(L10n.string("曲线"), "LR")
                 )
                 .foregroundStyle(.teal)
                 .lineStyle(StrokeStyle(lineWidth: 2))
@@ -358,19 +356,19 @@ struct TrainingChartView: View {
             }
 
             ForEach(store.epochBoundaries) { boundary in
-                RuleMark(x: .value("Epoch", boundary.step + 1))
+                RuleMark(x: .value(L10n.string("Epoch"), boundary.step + 1))
                     .foregroundStyle(.quaternary)
                     .lineStyle(StrokeStyle(lineWidth: 0.5, dash: [2, 2]))
             }
 
             if let warmupEndDisplayedStep {
-                RuleMark(x: .value("Warmup 完成", warmupEndDisplayedStep))
+                RuleMark(x: .value(L10n.string("Warmup 完成"), warmupEndDisplayedStep))
                     .foregroundStyle(.teal.opacity(0.55))
                     .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
             }
 
             if let point = selectedPoint {
-                RuleMark(x: .value("选中步", point.displayedStep))
+                RuleMark(x: .value(L10n.string("选中步"), point.displayedStep))
                     .foregroundStyle(Color.teal.opacity(0.75))
                     .lineStyle(StrokeStyle(lineWidth: 1))
                     .annotation(
@@ -385,8 +383,8 @@ struct TrainingChartView: View {
                         )
                     }
                 PointMark(
-                    x: .value("选中步", point.displayedStep),
-                    y: .value("选中 LR", point.learningRate)
+                    x: .value(L10n.string("选中步"), point.displayedStep),
+                    y: .value(L10n.string("选中 LR"), point.learningRate)
                 )
                 .foregroundStyle(.teal)
                 .symbolSize(40)
@@ -435,25 +433,24 @@ struct TrainingChartView: View {
         areaGradient: LinearGradient,
         lineGradient: LinearGradient,
         selectedPoint: SmoothedMemoryPoint?,
-        selectedMetric: ProcessMetric?,
         selection: Binding<Int?>
     ) -> some View {
         Chart {
             ForEach(points) { point in
                 AreaMark(
-                    x: .value("步", point.step + 1),
-                    yStart: .value("基线", 0),
-                    yEnd: .value("EMA 进程内存 GB", point.physicalFootprintGiB),
-                    series: .value("内存", "进程内存")
+                    x: .value(L10n.string("步"), point.step + 1),
+                    yStart: .value(L10n.string("基线"), 0),
+                    yEnd: .value(L10n.string("EMA 进程内存 GB"), point.physicalFootprintGiB),
+                    series: .value(L10n.string("内存"), L10n.string("进程内存"))
                 )
                 .foregroundStyle(areaGradient)
                 .interpolationMethod(.linear)
                 .alignsMarkStylesWithPlotArea()
 
                 LineMark(
-                    x: .value("步", point.step + 1),
-                    y: .value("EMA 进程内存 GB", point.physicalFootprintGiB),
-                    series: .value("内存", "进程内存")
+                    x: .value(L10n.string("步"), point.step + 1),
+                    y: .value(L10n.string("EMA 进程内存 GB"), point.physicalFootprintGiB),
+                    series: .value(L10n.string("内存"), L10n.string("进程内存"))
                 )
                 .foregroundStyle(lineGradient)
                 .lineStyle(StrokeStyle(lineWidth: 1.5))
@@ -461,12 +458,12 @@ struct TrainingChartView: View {
                 .alignsMarkStylesWithPlotArea()
             }
 
-            RuleMark(y: .value("严重阈值", criticalMemoryGiB))
+            RuleMark(y: .value(L10n.string("严重阈值"), criticalMemoryGiB))
                 .foregroundStyle(MemoryPressureLevel.critical.chartColor.opacity(0.70))
                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
 
-            if let point = selectedPoint, let metric = selectedMetric {
-                RuleMark(x: .value("选中步", point.step + 1))
+            if let point = selectedPoint {
+                RuleMark(x: .value(L10n.string("选中步"), point.step + 1))
                     .foregroundStyle(point.pressure.chartColor.opacity(0.80))
                     .lineStyle(StrokeStyle(lineWidth: 1))
                     .annotation(
@@ -476,13 +473,13 @@ struct TrainingChartView: View {
                         overflowResolution: .init(x: .fit(to: .chart), y: .disabled)
                     ) {
                         ChartHoverValueLabel(
-                            text: String(format: "%.2f GB", metric.physicalFootprintGiB),
+                            text: String(format: "%.2f GB", point.physicalFootprintGiB),
                             color: point.pressure.chartColor
                         )
                     }
                 PointMark(
-                    x: .value("选中步", point.step + 1),
-                    y: .value("选中原始内存", metric.physicalFootprintGiB)
+                    x: .value(L10n.string("选中步"), point.step + 1),
+                    y: .value(L10n.string("选中平滑内存"), point.physicalFootprintGiB)
                 )
                 .foregroundStyle(point.pressure.chartColor)
                 .symbolSize(40)
@@ -541,13 +538,6 @@ struct TrainingChartView: View {
         in points: [SmoothedMemoryPoint]
     ) -> SmoothedMemoryPoint? {
         nearestPoint(to: displayedStep, in: points) { $0.step + 1 }
-    }
-
-    private func nearestMemoryMetric(to displayedStep: Int?) -> ProcessMetric? {
-        guard let displayedStep else { return nil }
-        return store.processMetrics.min {
-            abs(($0.step + 1) - displayedStep) < abs(($1.step + 1) - displayedStep)
-        }
     }
 
     /// 训练点按 step 递增，二分定位避免每个 hover 事件线性扫描整条曲线。
@@ -737,12 +727,12 @@ private struct ChartLineLegend: View {
             .frame(width: 26, height: 10)
             .accessibilityHidden(true)
 
-            Text(label)
+            Text(L10n.string(label))
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(label) 曲线")
+        .accessibilityLabel(L10n.format("%@ 曲线", L10n.string(label)))
     }
 }
 

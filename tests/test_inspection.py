@@ -93,14 +93,14 @@ def test_inspect_data_counts_invalid_and_truncated(tmp_path):
 def test_inspect_data_reports_jsonl_line(tmp_path):
     path = tmp_path / "bad.jsonl"
     path.write_text('{"instruction":"q","output":"a"}\n{bad}\n', encoding="utf-8")
-    with pytest.raises(ValueError, match="第 2 行"):
+    with pytest.raises(ValueError, match="line 2"):
         inspect_data(path, CharTokenizer())
 
 
 def test_inspect_data_rejects_wrong_field_type(tmp_path):
     path = tmp_path / "data.json"
     path.write_text('[{"instruction": 123, "output": "a"}]', encoding="utf-8")
-    with pytest.raises(ValueError, match="instruction 必须是字符串"):
+    with pytest.raises(ValueError, match="instruction must be a string"):
         inspect_data(path, CharTokenizer())
 
 
@@ -113,7 +113,7 @@ def test_load_qa_pairs_allows_missing_reference(tmp_path):
 def test_load_qa_pairs_rejects_empty_question(tmp_path):
     path = tmp_path / "eval.json"
     path.write_text('[{"instruction":"","output":"a"}]', encoding="utf-8")
-    with pytest.raises(ValueError, match="非空字符串"):
+    with pytest.raises(ValueError, match="non-empty string"):
         load_qa_pairs(path)
 
 
@@ -185,7 +185,7 @@ def test_validate_state_rejects_layer_count_mismatch(tmp_path):
     path = _save_state_npz(
         tmp_path, {0: np.zeros((16, 64, 64), dtype=np.float32)}
     )
-    with pytest.raises(ValueError, match="层数 1 与模型层数 2 不匹配"):
+    with pytest.raises(ValueError, match="1 layers, but the model has 2"):
         validate_state_for_model(path, _FakeModel(n_layers=2))
 
 
@@ -196,7 +196,7 @@ def test_validate_state_rejects_shape_mismatch(tmp_path):
         {0: np.zeros((8, 64, 64), dtype=np.float32),   # 头数错(8 vs 16)
          1: np.zeros((16, 64, 64), dtype=np.float32)},
     )
-    with pytest.raises(ValueError, match="shape 与模型不匹配"):
+    with pytest.raises(ValueError, match="shape does not match the model"):
         validate_state_for_model(path, _FakeModel(n_layers=2))
 
 

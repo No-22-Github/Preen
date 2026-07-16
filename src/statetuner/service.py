@@ -49,30 +49,30 @@ def validate_training_request(request: TrainingRequest) -> None:
     cfg = request.train_config
     if request.template not in ("qa", "instruction"):
         raise ValueError(
-            f"训练模板只支持 qa / instruction，收到 {request.template!r}"
+            f"Training templates support only qa / instruction; received {request.template!r}"
         )
     if not request.model.is_dir():
-        raise ValueError(f"模型目录不存在: {request.model}")
+        raise ValueError(f"Model directory does not exist: {request.model}")
     if not request.data.is_file():
-        raise ValueError(f"训练数据不存在: {request.data}")
+        raise ValueError(f"Training data does not exist: {request.data}")
     if request.test_data is not None and not request.test_data.is_file():
-        raise ValueError(f"held-out 数据不存在: {request.test_data}")
+        raise ValueError(f"Held-out data does not exist: {request.test_data}")
     # S1:遗留数据(无 importer sidecar)只能走 qa 模板。load_qa_dataset 无条件
     # 按 QA 编码,放行 instruction 会在 metadata 里写假话却按 QA 训练。
     # 在校验阶段就拦下(早于模型加载),便于 Q5 单测且避免无谓 load_model。
     if request.template == "instruction" and not _has_import_sidecar(request.data):
         raise ValueError(
-            "遗留数据(无 .import.json sidecar)不支持 instruction 模板;"
-            "请先用 `statetuner import` 转标准 jsonl,或显式 --template qa"
+            "Legacy data without an .import.json sidecar does not support the instruction template; "
+            "convert it to standard JSONL with `statetuner import`, or explicitly use --template qa"
         )
     if cfg.lr <= 0 or cfg.lr_floor <= 0 or cfg.lr_floor > cfg.lr:
-        raise ValueError("lr/lr_floor 参数范围非法")
+        raise ValueError("lr/lr_floor parameters are out of range")
     if cfg.warmup < 0 or cfg.ctx_len <= 0 or cfg.epochs <= 0 or cfg.grad_clip <= 0:
-        raise ValueError("warmup/ctx-len/epochs/grad_clip 参数范围非法")
+        raise ValueError("warmup/ctx-len/epochs/grad_clip parameters are out of range")
     if not 0 < request.test_ratio < 1:
-        raise ValueError("test_ratio 必须在 (0, 1) 范围内")
+        raise ValueError("test_ratio must be in the range (0, 1)")
     if request.pth_out is not None and not request.export_pth:
-        raise ValueError("pth_out 必须配合 export_pth")
+        raise ValueError("pth_out requires export_pth")
     # 训练精度契约:权重 bf16 + state fp32(docs/decision-precision.md)。
     # int8 量化模型是推理专用产物(state tuning 的 S₀ 叠加到量化权重上会破坏
     # 精度契约)→ 读 config.json 的 quantization 字段早期拦下。
@@ -83,8 +83,8 @@ def validate_training_request(request: TrainingRequest) -> None:
         _cfg = json.loads(_config_path.read_text())
         if _cfg.get("quantization") or _cfg.get("quantization_config"):
             raise ValueError(
-                "检测到量化模型(config 含 quantization 字段),训练要求 bf16 权重。"
-                "请用未量化的模型目录训练(量化模型仅用于推理)。"
+                "A quantized model was detected (config contains quantization), but training requires BF16 weights. "
+                "Use an unquantized model directory for training; quantized models are for inference only."
             )
 
 
@@ -97,17 +97,17 @@ def _check_data_warnings(summary, ctx_len: int, notify: StatusCallback) -> None:
     """
     if summary.p95_near_limit:
         notify(
-            f"⚠ p95_tokens={summary.p95_tokens:.0f} 接近 16G bf16 训练红线"
-            f"(均值 591 / max 644,见 AGENTS.md);长样本可能触发换页。"
+            f"Warning: p95_tokens={summary.p95_tokens:.0f} is near the 16 GB BF16 training limit "
+            f"(mean 591 / max 644; see AGENTS.md); long samples may trigger paging."
         )
         if ctx_len >= 580:
             notify(
-                f"  建议:--ctx-len 降到 ~480(当前 {ctx_len}),或减小 --cache-limit-gb。"
+                f"  Recommendation: reduce --ctx-len to about 480 (currently {ctx_len}), or lower --cache-limit-gb."
             )
     if summary.truncated > 0 and ctx_len < summary.p95_tokens:
         notify(
-            f"⚠ {summary.truncated} 条样本 > ctx_len={ctx_len} 将被截断"
-            f"(p95={summary.p95_tokens:.0f});截头部保尾部 stop(S3),但 target 前段会丢。"
+            f"Warning: {summary.truncated} samples exceed ctx_len={ctx_len} and will be truncated "
+            f"(p95={summary.p95_tokens:.0f}); the start is trimmed and the stop token is kept (S3), but the target prefix is lost."
         )
 
 
@@ -137,14 +137,14 @@ def run_training(
     if use_metal:
         from .core import patch_rwkv7_for_train_fast
         notify(
-            f"加载模型 {request.model} | WKV7: Metal checkpoint kernel "
+            f"Loading model {request.model} | WKV7: Metal checkpoint kernel "
             f"(chunk={cfg.wkv_chunk}, template={request.template})"
         )
         patch_rwkv7_for_train_fast(chunk=cfg.wkv_chunk)
         model, tokenizer = load_model(str(request.model), patch=False)
     else:
         notify(
-            f"加载模型 {request.model} | WKV7: ops 循环 [慢速基线] "
+            f"Loading model {request.model} | WKV7: ops loop [slow baseline] "
             f"(template={request.template})"
         )
         model, tokenizer = load_model(str(request.model), patch=True)
@@ -162,14 +162,14 @@ def run_training(
         # drop_truncated 时这些会被丢弃,无需警告。
         if data_summary.target_fully_truncated and not request.drop_truncated:
             notify(
-                f"⚠ {data_summary.target_fully_truncated} 条样本 target 被 ctx_len 完全截断"
-                f"(target 前段丢失,建议增大 ctx_len 或勾选丢弃超长样本)"
+                f"Warning: {data_summary.target_fully_truncated} sample targets are fully truncated by ctx_len "
+                f"(target prefixes are lost; increase ctx_len or enable dropping overlength samples)"
             )
         samples = load_standard_jsonl(
             request.data, tokenizer, template=request.template,
             max_len=cfg.ctx_len, drop_truncated=request.drop_truncated,
         )
-        notify(f"训练样本: {len(samples)} 条 (importer 产物, template={request.template})")
+        notify(f"Training samples: {len(samples)} (importer output, template={request.template})")
     else:
         data_summary = inspect_data(request.data, tokenizer, ctx_len=cfg.ctx_len)
         _check_data_warnings(data_summary, cfg.ctx_len, notify)
@@ -177,21 +177,21 @@ def run_training(
         # drop_truncated 时这些会被丢弃,无需警告。
         if data_summary.target_fully_truncated and not request.drop_truncated:
             notify(
-                f"⚠ {data_summary.target_fully_truncated} 条样本 target 被 ctx_len 完全截断"
-                f"(target 前段丢失,建议增大 ctx_len 或勾选丢弃超长样本)"
+                f"Warning: {data_summary.target_fully_truncated} sample targets are fully truncated by ctx_len "
+                f"(target prefixes are lost; increase ctx_len or enable dropping overlength samples)"
             )
         samples = load_qa_dataset(
             request.data, tokenizer, max_len=cfg.ctx_len,
             drop_truncated=request.drop_truncated,
         )
-        notify(f"训练样本: {len(samples)} 条 (template=qa)")
+        notify(f"Training samples: {len(samples)} (template=qa)")
 
     # 有效样本为 0 直接拦下:否则关早停时训练循环一步不跑,静默产出未训练的 state。
     # 常见成因:数据全空 response、导入 0 记录、或 drop_truncated 把样本全丢光。
     if not samples:
-        hint = "（勾选了丢弃超长样本，可能已全部丢弃；可增大 ctx_len 或取消丢弃）" \
-            if request.drop_truncated else "（请检查数据是否为空或 response 全空）"
-        raise ValueError(f"没有有效训练样本{hint}")
+        hint = " (dropping overlength samples may have removed all data; increase ctx_len or disable dropping)" \
+            if request.drop_truncated else " (check whether the data is empty or all responses are empty)"
+        raise ValueError(f"No valid training samples{hint}")
 
     held_out = None
     if cfg.early_stop:
@@ -200,21 +200,21 @@ def run_training(
             # 只警告不阻断:held-out 截断只影响早停判据精度,不破坏训练本身。
             if test_summary.target_fully_truncated:
                 notify(
-                    f"⚠ held-out 有 {test_summary.target_fully_truncated} 条 target 被完全截断"
-                    f"(早停判据可能略失真,建议增大 ctx_len)"
+                    f"Warning: held-out data has {test_summary.target_fully_truncated} fully truncated targets "
+                    f"(early-stopping metrics may be distorted; increase ctx_len)"
                 )
             held_out = load_qa_dataset(request.test_data, tokenizer, max_len=cfg.ctx_len)
-            notify(f"held-out: {len(held_out)} 条 (来自 {request.test_data})")
+            notify(f"Held-out: {len(held_out)} samples (from {request.test_data})")
         else:
             if len(samples) < 2:
-                raise ValueError("自动 held-out 至少需要 2 条有效样本")
+                raise ValueError("Automatic held-out splitting requires at least 2 valid samples")
             samples, held_out = train_test_split(
                 samples, test_ratio=request.test_ratio, seed=cfg.seed
             )
             if not samples:
-                raise ValueError("held-out 划分后训练集为空，请降低 test_ratio")
+                raise ValueError("Training set is empty after held-out splitting; reduce test_ratio")
             notify(
-                f"held-out: {len(held_out)} 条 (从 train 划分 {request.test_ratio:.0%})"
+                f"Held-out: {len(held_out)} samples (split {request.test_ratio:.0%} from training data)"
             )
 
     result = Trainer(model, cfg, emitter).train(samples, held_out)
@@ -235,7 +235,7 @@ def run_training(
         )
         notify(f"pth → {pth_path} ({'OK' if ok else 'FAIL'}: {message})")
         if not ok:
-            raise RuntimeError(f"pth round-trip 验证失败: {message}")
+            raise RuntimeError(f"PTH round-trip validation failed: {message}")
 
     metadata_path = write_state_metadata(
         request.out,
@@ -276,9 +276,9 @@ def run_training(
 # 注：模板渲染交给 run_evaluation 按传入 template + reasoning + think 统一处理，
 # 这里只存原始问题。
 DEFAULT_EVAL_QUESTIONS: tuple[tuple[str, str], ...] = (
-    ("你好呀，宝宝！今天想做什么？", ""),
-    ("主人要出门了，你会怎么做？", ""),
-    ("能教我用尾巴写字吗？", ""),
+    ("Hello! What would you like to do today?", ""),
+    ("Your owner is heading out. What would you do?", ""),
+    ("Can you teach me to write with a tail?", ""),
 )
 
 
@@ -330,18 +330,18 @@ def validate_evaluation_request(request: EvaluationRequest) -> None:
     """应用层校验；sidecar/其他客户端不依赖 CLI 也能得到同样保护。"""
     if request.template not in ("qa", "instruction", "raw"):
         raise ValueError(
-            f"评估模板只支持 qa / instruction / raw，收到 {request.template!r}"
+            f"Evaluation templates support only qa / instruction / raw; received {request.template!r}"
         )
     if request.think not in ("off", "fast", "on"):
-        raise ValueError(f"think 档位只支持 off / fast / on，收到 {request.think!r}")
+        raise ValueError(f"think supports only off / fast / on; received {request.think!r}")
     if request.think != "off" and not request.reasoning:
-        raise ValueError("think 仅在 reasoning 模型上生效(reasoning=False 时必须 off)")
+        raise ValueError("think applies only to reasoning models and must be off when reasoning=False")
     if request.data is not None and not request.data.is_file():
-        raise ValueError(f"评估数据不存在: {request.data}")
+        raise ValueError(f"Evaluation data does not exist: {request.data}")
     if request.limit <= 0:
-        raise ValueError("limit 必须 > 0")
+        raise ValueError("limit must be > 0")
     if request.state is None:
-        raise ValueError("评估必须提供 state")
+        raise ValueError("Evaluation requires a state")
 
 
 def run_evaluation(request: EvaluationRequest) -> EvaluationResult:

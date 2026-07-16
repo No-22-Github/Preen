@@ -91,11 +91,11 @@ struct TrainingHistoryView: View {
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "sidebar.trailing")
-                        Text(isInspectorPresented ? "隐藏参数" : "参数")
+                        Text(L10n.string(isInspectorPresented ? "隐藏参数" : "参数"))
                     }
                 }
-                .help(isInspectorPresented ? "隐藏参数与结果" : "显示参数与结果")
-                .accessibilityValue(isInspectorPresented ? "已显示" : "已隐藏")
+                .help(L10n.string(isInspectorPresented ? "隐藏参数与结果" : "显示参数与结果"))
+                .accessibilityValue(L10n.string(isInspectorPresented ? "已显示" : "已隐藏"))
                 .disabled(selectedRun == nil)
             }
         }
@@ -159,7 +159,7 @@ struct TrainingHistoryView: View {
                             Text(runDisplayName(run))
                                 .lineLimit(1)
                             HStack {
-                                Text(run.kind == .imported ? "外部导入" : run.status.label)
+                                Text(run.kind == .imported ? L10n.string("外部导入") : run.status.label)
                                 Text(run.createdAt, format: .dateTime.month().day().hour().minute())
                             }
                             .font(.caption2)
@@ -237,7 +237,7 @@ struct TrainingHistoryView: View {
         panel.canChooseDirectories = false
         panel.allowedContentTypes = [.data]
         panel.allowsMultipleSelection = false
-        panel.prompt = "登记 State"
+        panel.prompt = L10n.string("登记 State")
         guard panel.runModal() == .OK, let stateURL = panel.url else { return }
         let metadataURL = stateURL.deletingPathExtension().appendingPathExtension("meta.json")
         Task {

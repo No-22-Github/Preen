@@ -180,7 +180,7 @@ def test_preview_stream_rejects_json_before_model_load(tmp_path):
         ],
     )
     assert result.exit_code != 0
-    assert "不能与" in result.output
+    assert "cannot be combined with" in result.output
 
 
 def test_train_rejects_invalid_parameter_before_model_load(tmp_path):
@@ -193,7 +193,7 @@ def test_train_rejects_invalid_parameter_before_model_load(tmp_path):
         ["train", "--model", str(model), "--data", str(data), "--lr", "0"],
     )
     assert result.exit_code == 2
-    assert "--lr 必须 > 0" in result.output
+    assert "--lr must be > 0" in result.output
 
 
 def test_train_runtime_failure_exits_1(tmp_path, monkeypatch):
@@ -291,7 +291,7 @@ def test_export_deep_rejects_missing_model_dir(tmp_path):
         ],
     )
     assert result.exit_code == 2
-    assert "模型目录不存在" in result.output
+    assert "Model directory does not exist" in result.output
 
 
 def _make_train_doubles(monkeypatch, received):
@@ -431,4 +431,4 @@ def test_state_info_rejects_unknown_format(tmp_path):
     path.write_text("bad", encoding="utf-8")
     result = runner.invoke(app, ["state-info", "--state", str(path)])
     assert result.exit_code == 2
-    assert "只支持 .npz / .pth" in result.output
+    assert "supports only .npz / .pth" in result.output

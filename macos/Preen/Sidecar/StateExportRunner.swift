@@ -38,7 +38,11 @@ final class StateExportRunner {
                 .filter { !$0.isEmpty }
                 .joined(separator: "\n")
             guard process.terminationStatus == 0 else {
-                throw StateExportError.failed(log.isEmpty ? "导出 .pth 失败" : log)
+                throw StateExportError.failed(
+                    log.isEmpty
+                        ? L10n.string("导出 .pth 失败")
+                        : L10n.backendMessage(log, fallback: "导出 .pth 失败")
+                )
             }
             return StateExportResult(output: output, log: log)
         }.value

@@ -89,15 +89,14 @@ QA = TaskTemplate(
     inference_stop_sequences=("\nUser:",),
     continuation_prefix_template="\n\nUser: {q}\n\nAssistant:",
 )
-"""QA 问答格式(角色扮演 / QA 任务)。
+"""QA format for role-play and question-answering tasks.
 
-prefix 以 "Assistant:" 结尾(无尾随空白),target 以一个前导空格开始,
-拼接后是 "Assistant: {回答}"。stop_token = 0(World tokenizer eos)。
+The prefix ends at "Assistant:" with no trailing whitespace, while the target begins
+with one leading space. Together they form "Assistant: {answer}". stop_token is the
+World tokenizer EOS token (0).
 
-continuation_prefix_template = "\\n\\nUser: {q}\\n\\nAssistant:" ——
-多轮续传时(Phase 3 §2 InferenceEngine 多轮改造),上一轮回答之后、本轮 User:
-之前喂入的胶水。首轮用 prefix_template,后续轮用 continuation_prefix_template。
-本期(InferenceEngine §2 之前)该字段只作为数据契约存在,尚无消费方。
+continuation_prefix_template is the glue fed between the previous assistant answer and
+the next user turn. The first turn uses prefix_template; later turns use this template.
 """
 
 
@@ -109,11 +108,9 @@ INSTRUCTION = TaskTemplate(
     continuation_prefix_template=None,
     drop_input_when_empty=True,
 )
-"""指令问答格式(对齐官方 Instruction/Input/Response 模式)。
+"""Instruction format aligned with the official Instruction/Input/Response pattern.
 
-语义上是单任务,continuation_prefix_template=None(多轮禁用)。
-
-drop_input_when_empty=True: input 为空时 format_prefix 自动降级为
-"Instruction: {instruction}\\n\\nResponse:"(去掉 Input 段及其前后空行),
-避免出现 "\\n\\n\\n" 残留空行(验收 d)。导入器与推理共用同一降级规则。
+This is a single-task format, so continuation_prefix_template is None and multi-turn
+continuation is disabled. With drop_input_when_empty, format_prefix omits the complete
+Input section when input is empty. Import and inference share the same fallback rule.
 """

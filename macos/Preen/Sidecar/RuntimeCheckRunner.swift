@@ -7,10 +7,10 @@ struct RuntimeCheckResult: Equatable {
 
     var errorMessage: String? {
         if let report, report.isUsable { return nil }
-        if let report, !report.mlx.ok { return report.mlx.error ?? "MLX 不可用" }
-        if let report, !report.mlxLM.ok { return report.mlxLM.error ?? "mlx-lm 不可用" }
-        if let report, !report.metalAvailable { return report.metalError ?? "Metal 不可用" }
-        return log.isEmpty ? "Python 运行时检查失败" : log
+        if let report, !report.mlx.ok { return report.mlx.error ?? L10n.string("MLX 不可用") }
+        if let report, !report.mlxLM.ok { return report.mlxLM.error ?? L10n.string("mlx-lm 不可用") }
+        if let report, !report.metalAvailable { return report.metalError ?? L10n.string("Metal 不可用") }
+        return log.isEmpty ? L10n.string("Python 运行时检查失败") : log
     }
 
     static func decode(output: Data, stderr: Data, exit: ProcessExitInfo?) -> RuntimeCheckResult {

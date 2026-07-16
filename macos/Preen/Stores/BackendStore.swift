@@ -35,14 +35,17 @@ final class BackendStore {
             runtime = RuntimeStatus(
                 phase: .ready,
                 report: report,
-                message: "Python \(report.python) · MLX \(report.mlx.version ?? "就绪")",
+                message: L10n.format("Python %@ · MLX %@", report.python, report.mlx.version ?? L10n.string("就绪")),
                 checkedAt: Date()
             )
         } else {
+            let message = result.errorMessage.map {
+                L10n.backendMessage($0, fallback: "运行时不可用")
+            } ?? L10n.string("运行时不可用")
             runtime = RuntimeStatus(
                 phase: .unavailable,
                 report: result.report,
-                message: result.errorMessage ?? "运行时不可用",
+                message: message,
                 checkedAt: Date()
             )
         }

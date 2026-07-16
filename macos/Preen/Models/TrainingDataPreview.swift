@@ -69,11 +69,11 @@ struct TrainingDataPreview {
                 return try loadCSV(url: url, limit: limit)
             default:
                 return TrainingDataPreview(samples: [], hasMore: false,
-                                           error: "不支持预览 .\(ext) 格式")
+                                           error: L10n.format("不支持预览 .%@ 格式", ext))
             }
         } catch {
             return TrainingDataPreview(samples: [], hasMore: false,
-                                       error: "读取失败：\(error.localizedDescription)")
+                                       error: L10n.format("读取失败：%@", error.localizedDescription))
         }
     }
 

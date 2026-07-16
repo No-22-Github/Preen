@@ -71,7 +71,7 @@ def export_pth(
     sd = OrderedDict()
     for i in range(n):
         if i not in states_np:
-            raise KeyError(f"缺少 layer {i} 的 state(要求 {n} 层)")
+            raise KeyError(f"Missing state for layer {i} ({n} layers required)")
         arr = states_np[i].astype(np.float32)
         if not x070:
             # v5/v6: Runner 会 transpose(1,2), 预先转置让它转回来
@@ -141,18 +141,18 @@ def verify_roundtrip(
         loaded = load_pth_as_numpy(pth_path, reverse_transpose=True)
 
     if set(loaded) != set(states_np):
-        return False, f"层数不匹配: pth 有 {sorted(loaded)}, 原始 {sorted(states_np)}"
+        return False, f"Layer mismatch: pth has {sorted(loaded)}, source has {sorted(states_np)}"
 
     max_diff = 0.0
     for i in states_np:
         if loaded[i].shape != states_np[i].shape:
-            return False, f"layer {i} shape 不符: pth {loaded[i].shape} vs 原始 {states_np[i].shape}"
+            return False, f"Layer {i} shape mismatch: pth {loaded[i].shape} vs source {states_np[i].shape}"
         diff = float(np.abs(loaded[i] - states_np[i]).max())
         max_diff = max(max_diff, diff)
 
     if max_diff > atol:
-        return False, f"数值偏差 {max_diff:.2e} > atol {atol:.2e}"
-    return True, f"round-trip 通过, max diff {max_diff:.2e}"
+        return False, f"Numeric difference {max_diff:.2e} > atol {atol:.2e}"
+    return True, f"Round-trip passed, max diff {max_diff:.2e}"
 
 
 def verify_mount_equivalence(
@@ -182,11 +182,11 @@ def verify_mount_equivalence(
     out_pth = generate(model, tokenizer, prompt, state=str(pth_path), max_tokens=max_tokens)
 
     if out_direct == out_pth:
-        return True, f"挂载等价: pth 注入输出与原始 state 完全一致 ({len(out_direct)} chars)"
+        return True, f"Mount equivalent: pth output exactly matches direct state injection ({len(out_direct)} chars)"
     # 贪心解码对 ULP 敏感,允许极小差异但仍应高度一致
     match = sum(1 for a, b in zip(out_direct, out_pth) if a == b)
     total = max(len(out_direct), len(out_pth))
     ratio = match / total if total else 0
     if ratio > 0.95:
-        return True, f"挂载基本等价: 前 {match}/{total} 字符一致 (ratio {ratio:.2f}, ULP 级差异)"
-    return False, f"挂载不等价: 仅 {match}/{total} 一致\n  direct: {out_direct!r}\n  pth:    {out_pth!r}"
+        return True, f"Mount effectively equivalent: first {match}/{total} characters match (ratio {ratio:.2f}, ULP-scale differences)"
+    return False, f"Mount mismatch: only {match}/{total} match\n  direct: {out_direct!r}\n  pth:    {out_pth!r}"

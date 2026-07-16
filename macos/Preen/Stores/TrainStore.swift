@@ -120,7 +120,7 @@ final class TrainStore {
         state = .preparing
         let run = TrainingRun(config: config.persisted)
         currentRun = run
-        backendStore.updateTraining(phase: .starting, message: "正在准备训练记录")
+        backendStore.updateTraining(phase: .starting, message: L10n.string("正在准备训练记录"))
 
         preparationTask = Task { [weak self] in
             guard let self else { return }
@@ -137,11 +137,11 @@ final class TrainStore {
                 let stderrURL = directory.appendingPathComponent(RunRepository.stderrFilename)
                 launch(config: resolvedConfig, stderrURL: stderrURL)
             } catch {
-                let message = "无法创建训练记录：\(error.localizedDescription)"
+                let message = L10n.format("无法创建训练记录：%@", error.localizedDescription)
                 errorMessage = message
                 state = .failed
                 backendStore.updateTraining(phase: .failed, message: message)
-                finishBackgroundFeedback(title: "训练启动失败", body: message)
+                finishBackgroundFeedback(title: L10n.string("训练启动失败"), body: message)
             }
         }
     }
@@ -166,7 +166,7 @@ final class TrainStore {
         backendStore.updateTraining(
             phase: .stopping,
             pid: runner.pid,
-            message: "正在停止训练以启动推理"
+            message: L10n.string("正在停止训练以启动推理")
         )
         runner.cancel()
         await runner.waitUntilExit()
@@ -297,10 +297,10 @@ final class TrainStore {
             estimatedRemainingSeconds = 0
             state = .completed
         case .failed(let message, _, _):
-            self.errorMessage = message
+            self.errorMessage = L10n.backendMessage(message, fallback: "训练失败，请查看训练日志")
             state = .failed
         case .cancelled(let message, _):
-            self.cancelledMessage = message
+            self.cancelledMessage = L10n.backendMessage(message, fallback: "训练已取消")
             state = .cancelled
         case .unknown:
             // 演进兜底:Python 加新事件类型不让旧 app 崩。
@@ -323,21 +323,27 @@ final class TrainStore {
         case .completed(let path, _, _, _):
             // ✅ 唯一可信完成信号。
             let shouldNotify = previousState == .running || previousState == .finishing
-            backendStore.updateTraining(phase: .idle, message: "训练已完成")
+            backendStore.updateTraining(phase: .idle, message: L10n.string("训练已完成"))
             if shouldNotify {
                 finishBackgroundFeedback(
-                    title: "训练已完成",
-                    body: "State 已写入 \(URL(fileURLWithPath: path).lastPathComponent)"
+                    title: L10n.string("训练已完成"),
+                    body: L10n.format("State 已写入 %@", URL(fileURLWithPath: path).lastPathComponent)
                 )
             }
         case .failed(let message, _, _):
             let shouldNotify = previousState == .running || previousState == .finishing
-            backendStore.updateTraining(phase: .failed, message: message)
-            if shouldNotify { finishBackgroundFeedback(title: "训练失败", body: message) }
+            let displayMessage = L10n.backendMessage(message, fallback: "训练失败，请查看训练日志")
+            backendStore.updateTraining(phase: .failed, message: displayMessage)
+            if shouldNotify { finishBackgroundFeedback(title: L10n.string("训练失败"), body: displayMessage) }
         case .cancelled(let message, _):
             let shouldNotify = previousState == .running || previousState == .finishing
-            backendStore.updateTraining(phase: .idle, message: "训练已取消")
-            if shouldNotify { finishBackgroundFeedback(title: "训练已取消", body: message) }
+            backendStore.updateTraining(phase: .idle, message: L10n.string("训练已取消"))
+            if shouldNotify {
+                finishBackgroundFeedback(
+                    title: L10n.string("训练已取消"),
+                    body: L10n.backendMessage(message, fallback: "训练已取消")
+                )
+            }
         case .start, .resume, .epochStart, .epochEnd, .stdWarning,
              .checkpoint, .earlyStop, .final, .unknown:
             break
@@ -388,16 +394,16 @@ final class TrainStore {
         case .running, .finishing:
             // 没等到终结事件 → 标失败(让 UI 能恢复,不卡死在 running/finishing)。
             if errorMessage == nil {
-                errorMessage = "训练进程异常退出（未发出 completed/failed/cancelled 事件）"
+                errorMessage = L10n.string("训练进程异常退出（未发出 completed/failed/cancelled 事件）")
             }
             state = .failed
             updatePersistedRun(with: .failed(
-                message: errorMessage ?? "训练进程异常退出",
+                message: errorMessage ?? L10n.string("训练进程异常退出"),
                 path: outputPath,
                 timestamp: Date().timeIntervalSince1970
             ))
-            backendStore.updateTraining(phase: .failed, message: errorMessage ?? "训练进程异常退出")
-            finishBackgroundFeedback(title: "训练异常退出", body: errorMessage ?? "训练进程异常退出")
+            backendStore.updateTraining(phase: .failed, message: errorMessage ?? L10n.string("训练进程异常退出"))
+            finishBackgroundFeedback(title: L10n.string("训练异常退出"), body: errorMessage ?? L10n.string("训练进程异常退出"))
         case .idle, .preparing, .completed, .failed, .cancelled:
             break
         }
@@ -415,7 +421,7 @@ final class TrainStore {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 if info.status == 0, self.state == .completed {
-                    self.backendStore.updateTraining(phase: .idle, message: "训练已完成")
+                    self.backendStore.updateTraining(phase: .idle, message: L10n.string("训练已完成"))
                 }
             }
         }
@@ -424,7 +430,7 @@ final class TrainStore {
             currentDirectory: PythonResolver.repoRoot,
             stderrFile: stderrURL
         )
-        backendStore.updateTraining(phase: .running, pid: runner.pid, message: "训练中")
+        backendStore.updateTraining(phase: .running, pid: runner.pid, message: L10n.string("训练中"))
         Task { [weak self] in
             for await event in stream {
                 self?.consume(event: event)
@@ -435,7 +441,7 @@ final class TrainStore {
 
     private func markPreparingRunCancelled() {
         guard state == .preparing else { return }
-        cancelledMessage = "训练在启动前已取消"
+        cancelledMessage = L10n.string("训练在启动前已取消")
         state = .cancelled
         if var run = currentRun {
             let now = Date()
@@ -446,8 +452,8 @@ final class TrainStore {
             currentRun = run
             Task { try? await repository.save(run) }
         }
-        backendStore.updateTraining(phase: .idle, message: "训练已取消")
-        finishBackgroundFeedback(title: "训练已取消", body: cancelledMessage ?? "训练在启动前已取消")
+        backendStore.updateTraining(phase: .idle, message: L10n.string("训练已取消"))
+        finishBackgroundFeedback(title: L10n.string("训练已取消"), body: cancelledMessage ?? L10n.string("训练在启动前已取消"))
     }
 
     private func finishBackgroundFeedback(title: String, body: String) {

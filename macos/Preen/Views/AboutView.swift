@@ -41,7 +41,7 @@ struct AboutView: View {
     private var versionText: String {
         let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
         let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
-        return "版本 \(v) (\(build))"
+        return L10n.format("版本 %@ (%@)", v, build)
     }
 
     /// 双列网格列定义。
@@ -394,7 +394,7 @@ private struct CreditCard: View {
                         .opacity(hovering ? 1 : 0)
                 }
 
-                Text(credit.blurb)
+                Text(L10n.string(credit.blurb))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)

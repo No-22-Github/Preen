@@ -55,11 +55,11 @@ def test_config_groups_three_sections_with_expected_fields():
     s = _make_session()
     groups = s.config_groups()
     group_names = [name for name, _ in groups]
-    assert group_names == ["模板", "采样", "重复惩罚"]
+    assert group_names == ["Template", "Sampling", "Repetition penalties"]
     # 重复惩罚组应标注 ChatRWKV 官方默认值
     penalty_fields = dict(groups[2][1])
-    assert "ChatRWKV 默认 0.4" in penalty_fields["presence"]
-    assert "ChatRWKV 默认 0.996" in penalty_fields["decay"]
+    assert "ChatRWKV default 0.4" in penalty_fields["presence"]
+    assert "ChatRWKV default 0.996" in penalty_fields["decay"]
 
 
 def test_config_groups_brief_strips_default_annotations():
@@ -92,7 +92,7 @@ def test_config_table_renders_all_field_names():
 def test_config_groups_reflect_reasoning_state():
     s = _make_session(reasoning=True, think="fast")
     groups = dict((name, dict(fields)) for name, fields in s.config_groups())
-    assert groups["模板"]["reasoning"] == "on (think=fast)"
+    assert groups["Template"]["reasoning"] == "on (think=fast)"
 
 
 # ── help_lines / render_help_table ────────────────────────────

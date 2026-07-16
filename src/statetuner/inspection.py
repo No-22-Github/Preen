@@ -68,7 +68,7 @@ class StateInspection:
 
 def _read_items(path: Path) -> list[Any]:
     if not path.exists():
-        raise ValueError(f"数据文件不存在: {path}")
+        raise ValueError(f"Data file does not exist: {path}")
     try:
         if path.suffix.lower() == ".json":
             loaded = json.loads(path.read_text(encoding="utf-8"))
@@ -80,10 +80,10 @@ def _read_items(path: Path) -> list[Any]:
             try:
                 items.append(json.loads(line))
             except json.JSONDecodeError as exc:
-                raise ValueError(f"JSONL 第 {lineno} 行解析失败: {exc.msg}") from exc
+                raise ValueError(f"Failed to parse JSONL line {lineno}: {exc.msg}") from exc
         return items
     except json.JSONDecodeError as exc:
-        raise ValueError(f"JSON 解析失败: {exc.msg}") from exc
+        raise ValueError(f"Failed to parse JSON: {exc.msg}") from exc
 
 
 def load_qa_pairs(path: Path, *, require_answer: bool = False) -> list[tuple[str, str]]:
@@ -91,19 +91,19 @@ def load_qa_pairs(path: Path, *, require_answer: bool = False) -> list[tuple[str
     pairs: list[tuple[str, str]] = []
     for index, item in enumerate(_read_items(path)):
         if not isinstance(item, dict):
-            raise ValueError(f"第 {index + 1} 条必须是 JSON 对象")
+            raise ValueError(f"Record {index + 1} must be a JSON object")
         q_raw = item.get("instruction")
         a_raw = item.get("output")
         if not isinstance(q_raw, str) or not q_raw.strip():
-            raise ValueError(f"第 {index + 1} 条 instruction 必须是非空字符串")
+            raise ValueError(f"Record {index + 1} instruction must be a non-empty string")
         if a_raw is not None and not isinstance(a_raw, str):
-            raise ValueError(f"第 {index + 1} 条 output 必须是字符串或 null")
+            raise ValueError(f"Record {index + 1} output must be a string or null")
         answer = (a_raw or "").strip()
         if require_answer and not answer:
-            raise ValueError(f"第 {index + 1} 条 output 不能为空")
+            raise ValueError(f"Record {index + 1} output cannot be empty")
         pairs.append((q_raw.strip(), answer))
     if not pairs:
-        raise ValueError("数据中没有可评估样本")
+        raise ValueError("The data contains no evaluable samples")
     return pairs
 
 
@@ -112,20 +112,20 @@ def inspect_data(path: Path, tokenizer, *, ctx_len: int = 512) -> DataInspection
     from .templates import QA
 
     if ctx_len <= 0:
-        raise ValueError("ctx_len 必须 > 0")
+        raise ValueError("ctx_len must be > 0")
     items = _read_items(path)
     lengths: list[int] = []
     empty_q = empty_a = truncated = target_lost = 0
 
     for index, item in enumerate(items):
         if not isinstance(item, dict):
-            raise ValueError(f"第 {index + 1} 条必须是 JSON 对象")
+            raise ValueError(f"Record {index + 1} must be a JSON object")
         q_raw = item.get("instruction")
         a_raw = item.get("output")
         if q_raw is not None and not isinstance(q_raw, str):
-            raise ValueError(f"第 {index + 1} 条 instruction 必须是字符串")
+            raise ValueError(f"Record {index + 1} instruction must be a string")
         if a_raw is not None and not isinstance(a_raw, str):
-            raise ValueError(f"第 {index + 1} 条 output 必须是字符串")
+            raise ValueError(f"Record {index + 1} output must be a string")
         q = (q_raw or "").strip()
         a = (a_raw or "").strip()
         if not q:
@@ -146,7 +146,7 @@ def inspect_data(path: Path, tokenizer, *, ctx_len: int = 512) -> DataInspection
             target_lost += 1
 
     if not lengths:
-        raise ValueError("没有有效训练样本")
+        raise ValueError("No valid training samples")
     arr = np.asarray(lengths, dtype=np.float64)
     return DataInspection(
         path=str(path),
@@ -194,9 +194,9 @@ def inspect_standard_records(
     from .templates import INSTRUCTION, QA
 
     if ctx_len <= 0:
-        raise ValueError("ctx_len 必须 > 0")
+        raise ValueError("ctx_len must be > 0")
     if template not in ("qa", "instruction"):
-        raise ValueError(f"标准 jsonl 检查只支持 qa / instruction, 收到 {template!r}")
+        raise ValueError(f"Standard JSONL inspection supports only qa / instruction; received {template!r}")
     tmpl = QA if template == "qa" else INSTRUCTION
 
     lengths: list[int] = []
@@ -209,14 +209,14 @@ def inspect_standard_records(
 
     for index, item in enumerate(items):
         if not isinstance(item, dict):
-            raise ValueError(f"第 {index + 1} 条必须是 JSON 对象")
+            raise ValueError(f"Record {index + 1} must be a JSON object")
         if template == "qa":
             q_raw = item.get("prompt")
             a_raw = item.get("response")
             if q_raw is not None and not isinstance(q_raw, str):
-                raise ValueError(f"第 {index + 1} 条 prompt 必须是字符串")
+                raise ValueError(f"Record {index + 1} prompt must be a string")
             if a_raw is not None and not isinstance(a_raw, str):
-                raise ValueError(f"第 {index + 1} 条 response 必须是字符串")
+                raise ValueError(f"Record {index + 1} response must be a string")
             q = (q_raw or "").strip()
             a = (a_raw or "").strip()
             if not q:
@@ -233,9 +233,9 @@ def inspect_standard_records(
             input_raw = item.get("input")
             a_raw = item.get("response")
             if instruction_raw is not None and not isinstance(instruction_raw, str):
-                raise ValueError(f"第 {index + 1} 条 instruction 必须是字符串")
+                raise ValueError(f"Record {index + 1} instruction must be a string")
             if a_raw is not None and not isinstance(a_raw, str):
-                raise ValueError(f"第 {index + 1} 条 response 必须是字符串")
+                raise ValueError(f"Record {index + 1} response must be a string")
             q = (instruction_raw or "").strip()
             inp = input_raw or ""
             a = (a_raw or "").strip()
@@ -271,7 +271,7 @@ def inspect_standard_records(
         report_progress(index + 1)
 
     if not lengths:
-        raise ValueError("没有有效训练样本")
+        raise ValueError("No valid training samples")
     arr = np.asarray(lengths, dtype=np.float64)
     return DataInspection(
         path=path,
@@ -295,7 +295,7 @@ def inspect_state(path: Path) -> StateInspection:
     from .export import load_npz_as_numpy, load_pth_as_numpy
 
     if not path.exists():
-        raise ValueError(f"state 文件不存在: {path}")
+        raise ValueError(f"State file does not exist: {path}")
     suffix = path.suffix.lower()
     if suffix == ".npz":
         states = load_npz_as_numpy(path)
@@ -304,9 +304,9 @@ def inspect_state(path: Path) -> StateInspection:
         states = load_pth_as_numpy(path)
         fmt = "pth-x070"
     else:
-        raise ValueError("state 只支持 .npz / .pth")
+        raise ValueError("State supports only .npz / .pth")
     if not states:
-        raise ValueError("state 文件不包含任何层")
+        raise ValueError("State file contains no layers")
 
     indices = sorted(states)
     arrays = [np.asarray(states[i]) for i in indices]
@@ -353,14 +353,14 @@ def validate_state_for_model(state_path: Path, model) -> dict:
         model.args.head_dim,
     ]
     if not info.rwkv7_compatible:
-        raise ValueError("state 不是连续层号的 RWKV-7 (H,64,64) 格式")
+        raise ValueError("State is not in contiguous-layer RWKV-7 (H,64,64) format")
     if info.layers != expected_layers:
         raise ValueError(
-            f"state 层数 {info.layers} 与模型层数 {expected_layers} 不匹配"
+            f"State has {info.layers} layers, but the model has {expected_layers}"
         )
     if any(shape != expected_shape for shape in info.shapes):
         raise ValueError(
-            f"state shape 与模型不匹配，期望每层 {expected_shape}"
+            f"State shape does not match the model; expected {expected_shape} per layer"
         )
     return _load_state_dict(state_path)
 

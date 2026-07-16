@@ -56,13 +56,13 @@ final class ToolboxStoreTests: XCTestCase {
         try Data().write(to: wrongType)
 
         XCTAssertFalse(store.selectModelSource(path: wrongType.path))
-        XCTAssertEqual(store.errorMessage, "源模型必须是 .pth 文件")
+        XCTAssertEqual(store.errorMessage, L10n.string("源模型必须是 .pth 文件"))
         XCTAssertTrue(store.modelSourcePath.isEmpty)
         XCTAssertFalse(store.canConvertModel)
 
         let missingModel = root.appendingPathComponent("missing.pth")
         XCTAssertFalse(store.selectModelSource(path: missingModel.path))
-        XCTAssertEqual(store.errorMessage, "找不到所选的 .pth 模型文件")
+        XCTAssertEqual(store.errorMessage, L10n.string("找不到所选的 .pth 模型文件"))
 
         let validModel = root.appendingPathComponent("RWKV.PTH")
         try Data().write(to: validModel)

@@ -265,16 +265,16 @@ class ChatSession:
     def _handle_ab(self, user_text: str, on_text: Optional[TextCallback]) -> ChatReply:
         """A/B 对比(不参与多轮 cache,A/B 推迟 v1.5,沿用单轮语义)。"""
         if self.state is None:
-            return ChatReply(["A/B 已开启，但当前没有 state；请先使用 /state PATH。"])
+            return ChatReply(["A/B is enabled, but no state is loaded. Use /state PATH first."])
         wrapped = render_prompt(
             user_text, self.template, reasoning=self.reasoning, think=self.think
         )
         result = self.engine.compare(wrapped, state=self.state, config=self.config)
         lines = [
-            "=== 有 state ===",
+            "=== With state ===",
             self._display_text(result.with_state.text),
             self._summary(result.with_state),
-            "=== 无 state（基线）===",
+            "=== Without state (baseline) ===",
             self._display_text(result.baseline.text),
             self._summary(result.baseline),
         ]
@@ -405,7 +405,7 @@ class ChatSession:
             self.cache_clean = True
             return StateChange(
                 ok=True, state_label=None, history_cleared=True,
-                message="state 已关闭,已重置会话;后续轮次使用零 state 基线。",
+                message="State disabled and session reset; subsequent turns use the zero-state baseline.",
             )
         resolved = Path(path).expanduser()
         try:
@@ -413,7 +413,7 @@ class ChatSession:
         except Exception as exc:
             return StateChange(
                 ok=False, state_label=self.state_label, history_cleared=False,
-                message=f"state 加载失败: {exc}",
+                message=f"Failed to load state: {exc}",
             )
         self.state = loaded
         self.state_label = str(resolved)
@@ -422,7 +422,7 @@ class ChatSession:
         self.cache_clean = True
         return StateChange(
             ok=True, state_label=str(resolved), history_cleared=True,
-            message=f"state 已加载: {resolved}(已重置会话)",
+            message=f"State loaded: {resolved} (session reset)",
         )
 
     def rewind(self, n: int = 1) -> RewindChange:
@@ -439,7 +439,7 @@ class ChatSession:
         if clamp == 0:
             return RewindChange(
                 rounds_removed=0, history_len=total_turns,
-                message="无历史可撤销。",
+                message="There is no history to rewind.",
             )
         rounds_removed = clamp // turns_per_round
         self.history = self.history[: total_turns - clamp]
@@ -447,8 +447,8 @@ class ChatSession:
         self.cache_clean = False
         return RewindChange(
             rounds_removed=rounds_removed, history_len=len(self.history),
-            message=f"已撤销 {rounds_removed} 轮;下一轮将重放剩余历史"
-                    f"({len(self.history)} 条记录)。",
+            message=f"Rewound {rounds_removed} turn(s); the next turn will replay the remaining "
+                    f"history ({len(self.history)} records).",
         )
 
     def reset(self) -> None:
@@ -464,12 +464,12 @@ class ChatSession:
         try:
             parts = shlex.split(text)
         except ValueError as exc:
-            return ChatReply([f"命令解析失败: {exc}"])
+            return ChatReply([f"Failed to parse command: {exc}"])
         command = parts[0].lower()
         args = parts[1:]
 
         if command in ("/quit", "/exit"):
-            return ChatReply(["会话结束。"], exit=True)
+            return ChatReply(["Session ended."], exit=True)
         if command == "/help":
             return ChatReply(self.help_lines())
         if command == "/clear":
@@ -500,7 +500,7 @@ class ChatSession:
             )
         if command == "/config":
             return ChatReply([self.config_line()])
-        return ChatReply([f"未知命令: {command}；输入 /help 查看帮助。"])
+        return ChatReply([f"Unknown command: {command}. Enter /help for help."])
 
     def _clear_command(self) -> ChatReply:
         """/clear 真实语义(§2.4):清空 history、丢弃 cache、回到 S₀。
@@ -508,7 +508,7 @@ class ChatSession:
         T3:薄包装,核心逻辑在 reset() public API。
         """
         self.reset()
-        return ChatReply(["已清空会话:历史与 cache 已重置,下一轮从 S₀ 重新开始。"])
+        return ChatReply(["Session cleared: history and cache were reset; the next turn starts from S₀."])
 
     def _rewind_command(self, args: list[str]) -> ChatReply:
         """/rewind [n] parser(T3):解析 n → rewind(n) public API。"""
@@ -517,14 +517,14 @@ class ChatSession:
             try:
                 n = int(args[0])
             except ValueError:
-                return ChatReply([f"/rewind 参数必须是正整数,收到: {args[0]}"])
+                return ChatReply([f"/rewind requires a positive integer; received: {args[0]}"])
         result = self.rewind(n)
         return ChatReply([result.message])
 
     def _state_command(self, args: list[str]) -> ChatReply:
         """/state parser(T3):解析 path/off → set_state(path|None) public API。"""
         if not args:
-            return ChatReply([f"当前 state: {self.state_label or 'off'}"])
+            return ChatReply([f"Current state: {self.state_label or 'off'}"])
         value = args[0]
         if value.lower() in ("off", "none", "zero"):
             result = self.set_state(None)
@@ -536,7 +536,7 @@ class ChatSession:
         if args:
             value = args[0].lower()
             if value not in ("on", "off"):
-                return ChatReply(["用法: /ab [on|off]"])
+                return ChatReply(["Usage: /ab [on|off]"])
             self.ab = value == "on"
         else:
             self.ab = not self.ab
@@ -552,15 +552,15 @@ class ChatSession:
         strict_min: bool = False,
     ) -> ChatReply:
         if len(args) != 1:
-            return ChatReply([f"用法: /{field.replace('_', '-')} VALUE"])
+            return ChatReply([f"Usage: /{field.replace('_', '-')} VALUE"])
         try:
             value = float(args[0])
         except ValueError:
-            return ChatReply([f"{field} 必须是数字"])
+            return ChatReply([f"{field} must be a number"])
         if value < minimum or (strict_min and value == minimum):
-            return ChatReply([f"{field} 超出范围"])
+            return ChatReply([f"{field} is out of range"])
         if maximum is not None and value > maximum:
-            return ChatReply([f"{field} 超出范围"])
+            return ChatReply([f"{field} is out of range"])
         self.config = replace(self.config, **{field: value})
         return ChatReply([self.config_line()])
 
@@ -568,13 +568,13 @@ class ChatSession:
         self, field: str, args: list[str], *, minimum: Optional[int] = None
     ) -> ChatReply:
         if len(args) != 1:
-            return ChatReply([f"用法: /{field.replace('_', '-')} VALUE"])
+            return ChatReply([f"Usage: /{field.replace('_', '-')} VALUE"])
         try:
             value = int(args[0])
         except ValueError:
-            return ChatReply([f"{field} 必须是整数"])
+            return ChatReply([f"{field} must be an integer"])
         if minimum is not None and value < minimum:
-            return ChatReply([f"{field} 必须 >= {minimum}"])
+            return ChatReply([f"{field} must be >= {minimum}"])
         self.config = replace(self.config, **{field: value})
         return ChatReply([self.config_line()])
 
@@ -589,21 +589,21 @@ class ChatSession:
             f"on (think={self.think})" if self.reasoning else "off"
         )
         def _penalty(value, default):
-            return f"{value}" if brief else f"{value}  (ChatRWKV 默认 {default})"
+            return f"{value}" if brief else f"{value}  (ChatRWKV default {default})"
         return [
-            ("模板", [
+            ("Template", [
                 ("template", self.template),
                 ("reasoning", reasoning_note),
                 ("state", self.state_label or "off"),
                 ("ab", "on" if self.ab else "off"),
             ]),
-            ("采样", [
+            ("Sampling", [
                 ("temperature", f"{self.config.temperature}"),
                 ("top_p", f"{self.config.top_p}"),
                 ("max_tokens", f"{self.config.max_tokens}"),
                 ("seed", f"{self.config.seed}"),
             ]),
-            ("重复惩罚", [
+            ("Repetition penalties", [
                 ("presence", _penalty(self.config.presence_penalty, "0.4")),
                 ("frequency", _penalty(self.config.frequency_penalty, "0.4")),
                 ("decay", _penalty(self.config.penalty_decay, "0.996")),
@@ -621,9 +621,9 @@ class ChatSession:
         return (
             f"template={self.template}{reasoning_part} "
             f"state={self.state_label or 'off'} ab={'on' if self.ab else 'off'} | "
-            f"采样: temp={self.config.temperature} top_p={self.config.top_p} "
+            f"sampling: temp={self.config.temperature} top_p={self.config.top_p} "
             f"max_tokens={self.config.max_tokens} seed={self.config.seed} | "
-            f"重复惩罚: presence={self.config.presence_penalty} "
+            f"repetition penalties: presence={self.config.presence_penalty} "
             f"frequency={self.config.frequency_penalty} "
             f"decay={self.config.penalty_decay}"
         )
@@ -636,24 +636,24 @@ class ChatSession:
         重复惩罚组标注官方默认值,降低调参认知门槛。
         """
         return [
-            "会话控制",
-            "/state PATH       动态加载 npz/pth(重置会话,换 S₀=换人设)",
-            "/state off        关闭 state(重置会话)",
-            "/state            查看当前 state",
-            "/ab [on|off]      切换 A/B 输出",
-            "/rewind [n]       撤销最后 n 轮(默认 1),触发重放",
-            "/clear            清空历史与 cache,回到 S₀",
-            "/config           查看当前配置",
-            "/quit             退出",
+            "Session control",
+            "/state PATH       Load an npz/pth dynamically (resets session; new S₀ means new persona)",
+            "/state off        Disable state (resets session)",
+            "/state            Show current state",
+            "/ab [on|off]      Toggle A/B output",
+            "/rewind [n]       Rewind the last n turns (default 1) and trigger replay",
+            "/clear            Clear history and cache, returning to S₀",
+            "/config           Show current configuration",
+            "/quit             Quit",
             "",
-            "采样参数",
-            "/temperature N    调整温度(0=贪心;越高越随机)",
-            "/top-p N          调整 top-p(0-1;越小越聚焦)",
-            "/max-tokens N     调整单轮生成上限",
-            "/seed N           调整采样 seed(同 seed 可复现)",
+            "Sampling parameters",
+            "/temperature N    Set temperature (0=greedy; higher is more random)",
+            "/top-p N          Set top-p (0-1; lower is more focused)",
+            "/max-tokens N     Set the per-turn generation limit",
+            "/seed N           Set sampling seed (same seed is reproducible)",
             "",
-            "重复惩罚(ChatRWKV 官方默认 0.4/0.4/0.996)",
-            "/presence N       presence 惩罚:对已出现 token 固定惩罚(0=关)",
-            "/frequency N      frequency 惩罚:按出现次数累加(0=关)",
-            "/penalty-decay N  历史计数衰减率(接近 1=记忆长,默认 0.996)",
+            "Repetition penalties (ChatRWKV defaults: 0.4/0.4/0.996)",
+            "/presence N       Presence penalty for previously seen tokens (0=off)",
+            "/frequency N      Frequency penalty accumulated by occurrence count (0=off)",
+            "/penalty-decay N  History-count decay (closer to 1 means longer memory; default 0.996)",
         ]

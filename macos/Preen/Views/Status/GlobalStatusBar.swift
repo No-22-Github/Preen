@@ -25,7 +25,7 @@ struct GlobalStatusBar: View {
                     Text(pressure.displayLabel)
                         .foregroundStyle(pressure.chartColor)
                     if let seconds = metric.secondsPerStep {
-                        Text(String(format: "%.2f s/步", seconds))
+                        Text(L10n.format("%.2f s/步", seconds))
                     }
                 } else {
                     Text("正在读取内存…").foregroundStyle(.secondary)
@@ -104,12 +104,12 @@ struct GlobalStatusBar: View {
     }
 
     private var healthLabel: String {
-        if backend.training.phase == .failed { return "训练异常" }
-        if backend.inference.phase == .failed { return "推理异常" }
+        if backend.training.phase == .failed { return L10n.string("训练异常") }
+        if backend.inference.phase == .failed { return L10n.string("推理异常") }
         switch backend.runtime.phase {
-        case .checking: return "正在检查"
-        case .unavailable: return "运行时异常"
-        case .ready: return backend.training.phase == .running ? "训练中" : "后端正常"
+        case .checking: return L10n.string("正在检查")
+        case .unavailable: return L10n.string("运行时异常")
+        case .ready: return L10n.string(backend.training.phase == .running ? "训练中" : "后端正常")
         }
     }
 

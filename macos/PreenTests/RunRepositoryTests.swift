@@ -83,7 +83,10 @@ final class RunRepositoryTests: XCTestCase {
             try await repository.delete(id: run.id)
             XCTFail("应拒绝删除运行中的记录")
         } catch let error as RunRepositoryError {
-            XCTAssertEqual(error.errorDescription, "训练仍在运行，请先取消训练再删除记录")
+            XCTAssertEqual(
+                error.errorDescription,
+                L10n.string("训练仍在运行，请先取消训练再删除记录")
+            )
         }
         let activeDirectory = await repository.directoryURL(for: run.id)
         XCTAssertTrue(FileManager.default.fileExists(atPath: activeDirectory.path))

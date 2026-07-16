@@ -99,7 +99,7 @@ struct DoctorReport: Codable, Equatable {
 struct RuntimeStatus: Equatable {
     var phase: RuntimePhase = .checking
     var report: DoctorReport?
-    var message = "正在检查 Python 与 MLX"
+    var message = L10n.string("正在检查 Python 与 MLX")
     var checkedAt: Date?
 }
 
@@ -108,8 +108,8 @@ struct WorkerStatus: Equatable {
     var pid: Int32?
     var message: String
 
-    static let inferenceIdle = WorkerStatus(phase: .idle, message: "推理未启动")
-    static let trainingIdle = WorkerStatus(phase: .idle, message: "没有训练任务")
+    static let inferenceIdle = WorkerStatus(phase: .idle, message: L10n.string("推理未启动"))
+    static let trainingIdle = WorkerStatus(phase: .idle, message: L10n.string("没有训练任务"))
 }
 
 struct ProcessExitInfo: Equatable {
@@ -125,9 +125,9 @@ struct ProcessExitInfo: Equatable {
 extension RuntimePhase {
     var diagnosticLabel: String {
         switch self {
-        case .checking: return "检查中"
-        case .ready: return "可用"
-        case .unavailable: return "不可用"
+        case .checking: return L10n.string("检查中")
+        case .ready: return L10n.string("可用")
+        case .unavailable: return L10n.string("不可用")
         }
     }
 }
@@ -135,12 +135,12 @@ extension RuntimePhase {
 extension WorkerPhase {
     var diagnosticLabel: String {
         switch self {
-        case .idle: return "空闲"
-        case .starting: return "启动中"
-        case .ready: return "就绪"
-        case .running: return "运行中"
-        case .stopping: return "停止中"
-        case .failed: return "失败"
+        case .idle: return L10n.string("空闲")
+        case .starting: return L10n.string("启动中")
+        case .ready: return L10n.string("就绪")
+        case .running: return L10n.string("运行中")
+        case .stopping: return L10n.string("停止中")
+        case .failed: return L10n.string("失败")
         }
     }
 }
@@ -158,25 +158,25 @@ enum BackendDiagnostics {
     ) -> String {
         let report = runtime.report
         var lines = [
-            "### Preen 环境信息",
+            L10n.string("### Preen 环境信息"),
             "",
             "- Preen: \(appVersion) (\(appBuild))",
-            "- 系统: \(report?.operatingSystemLabel ?? systemVersionFallback)",
+            L10n.format("- 系统: %@", report?.operatingSystemLabel ?? systemVersionFallback),
         ]
         if let chipName = report?.chipName {
-            lines.append("- 芯片: \(chipName)")
+            lines.append(L10n.format("- 芯片: %@", chipName))
         }
         if let hardwareModel = report?.hardwareModel {
-            lines.append("- 硬件标识: \(hardwareModel)")
+            lines.append(L10n.format("- 硬件标识: %@", hardwareModel))
         }
         if let machine = report?.machine {
-            lines.append("- 架构: \(machine)")
+            lines.append(L10n.format("- 架构: %@", machine))
         }
         if let memory = report?.memorySizeLabel {
-            lines.append("- 统一内存: \(memory)")
+            lines.append(L10n.format("- 统一内存: %@", memory))
         }
         if let workingSet = report?.workingSetLabel {
-            lines.append("- MLX 建议工作集上限: \(workingSet)")
+            lines.append(L10n.format("- MLX 建议工作集上限: %@", workingSet))
         }
         if let report {
             lines.append(contentsOf: [
@@ -185,21 +185,21 @@ enum BackendDiagnostics {
                 "- MLX-LM: \(moduleSummary(report.mlxLM))",
                 "- NumPy: \(moduleSummary(report.numpy))",
                 "- ml-dtypes: \(moduleSummary(report.mlDtypes))",
-                "- Metal: \(report.metalAvailable ? "可用" : "不可用")",
+                L10n.format("- Metal: %@", L10n.string(report.metalAvailable ? "可用" : "不可用")),
             ])
         }
         lines.append(contentsOf: [
-            "- 运行时检查: \(runtime.phase.diagnosticLabel)",
-            "- 推理服务: \(inference.phase.diagnosticLabel)",
-            "- 训练任务: \(training.phase.diagnosticLabel)",
-            "- 生成时间: \(timestamp(generatedAt))",
+            L10n.format("- 运行时检查: %@", runtime.phase.diagnosticLabel),
+            L10n.format("- 推理服务: %@", inference.phase.diagnosticLabel),
+            L10n.format("- 训练任务: %@", training.phase.diagnosticLabel),
+            L10n.format("- 生成时间: %@", timestamp(generatedAt)),
         ])
         return lines.joined(separator: "\n")
     }
 
     private static func moduleSummary(_ module: DoctorModule) -> String {
-        guard module.ok else { return "不可用" }
-        return module.version ?? "可用"
+        guard module.ok else { return L10n.string("不可用") }
+        return module.version ?? L10n.string("可用")
     }
 
     private static func timestamp(_ date: Date) -> String {

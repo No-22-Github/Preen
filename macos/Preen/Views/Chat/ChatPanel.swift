@@ -183,7 +183,7 @@ struct ChatPanel: View {
         @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title)
+            Text(L10n.string(title))
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 4)
@@ -275,7 +275,7 @@ struct ChatPanel: View {
             Image(systemName: "bubble.left.and.bubble.right")
                 .font(.system(size: 40))
                 .foregroundStyle(.secondary)
-            Text(store.isConnected ? "开始对话" : "连接本地模型")
+            Text(L10n.string(store.isConnected ? "开始对话" : "连接本地模型"))
                 .font(.title3)
                 .foregroundStyle(.secondary)
             if !store.isConnected {
@@ -351,7 +351,7 @@ private struct GenerationDoubleField: View {
 
     var body: some View {
         GenerationParameterRow(title: title, detail: detail) {
-            TextField(title, value: $value, format: .number)
+            TextField(L10n.string(title), value: $value, format: .number)
                 .labelsHidden()
                 .multilineTextAlignment(.trailing)
                 .textFieldStyle(.roundedBorder)
@@ -371,7 +371,7 @@ private struct GenerationDoubleField: View {
         .buttonStyle(.borderless)
         .disabled(value == defaultValue)
         .opacity(value == defaultValue ? 0 : 1)
-        .help("恢复默认值 \(defaultValue)")
+        .help(L10n.format("恢复默认值 %g", defaultValue))
         .frame(width: 24)
     }
 }
@@ -385,7 +385,7 @@ private struct GenerationIntField: View {
 
     var body: some View {
         GenerationParameterRow(title: title, detail: detail) {
-            TextField(title, value: $value, format: .number.grouping(.never))
+            TextField(L10n.string(title), value: $value, format: .number.grouping(.never))
                 .labelsHidden()
                 .multilineTextAlignment(.trailing)
                 .textFieldStyle(.roundedBorder)
@@ -405,7 +405,7 @@ private struct GenerationIntField: View {
         .buttonStyle(.borderless)
         .disabled(value == defaultValue)
         .opacity(value == defaultValue ? 0 : 1)
-        .help("恢复默认值 \(defaultValue)")
+        .help(L10n.format("恢复默认值 %lld", defaultValue))
         .frame(width: 24)
     }
 }
@@ -418,9 +418,9 @@ private struct GenerationParameterRow<Controls: View>: View {
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(title)
+                Text(L10n.string(title))
                     .font(.body)
-                Text(detail)
+                Text(L10n.string(detail))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)

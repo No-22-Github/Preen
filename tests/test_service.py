@@ -51,7 +51,7 @@ def test_validate_rejects_instruction_with_legacy_data(tmp_path):
     "template":"instruction" 但实际按 QA 训练 → 静默走错。现在 validate 拦下。
     """
     request = _request(tmp_path, template="instruction")
-    with pytest.raises(ValueError, match="不支持 instruction 模板"):
+    with pytest.raises(ValueError, match="does not support the instruction template"):
         validate_training_request(request)
 
 
@@ -80,7 +80,7 @@ def test_validate_rejects_quantized_model(tmp_path):
         json.dumps({"quantization": {"bits": 8, "group_size": 64}}),
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="量化模型"):
+    with pytest.raises(ValueError, match="quantized model"):
         validate_training_request(request)
 
 
@@ -93,7 +93,7 @@ def test_validate_rejects_quantized_model_via_config_alias(tmp_path):
         json.dumps({"quantization_config": {"bits": 8}}),
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="量化模型"):
+    with pytest.raises(ValueError, match="quantized model"):
         validate_training_request(request)
 
 

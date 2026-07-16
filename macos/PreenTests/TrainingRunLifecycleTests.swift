@@ -42,7 +42,7 @@ final class TrainingRunLifecycleTests: XCTestCase {
         _ = try await repository.markUnfinishedRunsInterrupted(at: Date(timeIntervalSince1970: 9))
         let restored = try await repository.load(id: run.id)
         XCTAssertEqual(restored.status, .interrupted)
-        XCTAssertEqual(restored.failureMessage, "App 上次退出时训练尚未结束")
+        XCTAssertEqual(restored.failureMessage, L10n.string("App 上次退出时训练尚未结束"))
     }
 
     private var snapshot: TrainConfigSnapshot {

@@ -36,7 +36,7 @@ struct TrainingRunDetailView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 Image(systemName: run.status.systemImage).foregroundStyle(run.status.color)
-                Text(run.kind == .imported ? "外部 State" : "训练记录").font(.title2)
+                Text(L10n.string(run.kind == .imported ? "外部 State" : "训练记录")).font(.title2)
                 Text(run.status.label).foregroundStyle(.secondary)
                 Spacer()
                 Menu("操作") {
@@ -86,7 +86,7 @@ struct TrainingRunDetailView: View {
 
     private func artifactRow(_ label: String, _ path: String?) -> some View {
         HStack {
-            Text(label).foregroundStyle(.secondary).frame(width: 110, alignment: .leading)
+            Text(L10n.string(label)).foregroundStyle(.secondary).frame(width: 110, alignment: .leading)
             if let path {
                 Text(path).font(.caption.monospaced()).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
                 Spacer()
@@ -154,7 +154,7 @@ struct TrainingRunDetailView: View {
         panel.nameFieldStringValue = URL(fileURLWithPath: statePath)
             .deletingPathExtension().lastPathComponent + ".pth"
         guard panel.runModal() == .OK, let destination = panel.url else { return }
-        exportMessage = "正在导出…"
+        exportMessage = L10n.string("正在导出…")
         Task {
             do {
                 let result = try await StateExportRunner().export(
@@ -162,7 +162,7 @@ struct TrainingRunDetailView: View {
                 )
                 _ = try await appState.runRepository.setPthArtifact(runID: run.id, path: result.output.path)
                 await appState.refreshRuns()
-                exportMessage = "已导出 \(result.output.lastPathComponent)"
+                exportMessage = L10n.format("已导出 %@", result.output.lastPathComponent)
             } catch {
                 exportMessage = nil
                 exportError = error.localizedDescription
@@ -241,7 +241,7 @@ struct TrainingRunInspectorView: View {
         @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(title)
+            Text(L10n.string(title))
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.secondary)
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
@@ -263,7 +263,7 @@ struct TrainingRunInspectorView: View {
     @ViewBuilder
     private func inspectorRow(_ label: String, _ value: String, help: String? = nil) -> some View {
         GridRow {
-            Text(label)
+            Text(L10n.string(label))
                 .foregroundStyle(.secondary)
                 .frame(width: 86, alignment: .trailing)
             if let help {

@@ -70,8 +70,14 @@ struct TrainingConfigView: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("训练参数")
-                    .accessibilityValue(expanded ? "已展开，\(config.summaryLine)" : "已折叠，\(config.summaryLine)")
-                    .accessibilityHint(expanded ? "折叠详细训练参数" : "展开详细训练参数")
+                    .accessibilityValue(
+                        expanded
+                            ? L10n.format("已展开，%@", config.summaryLine)
+                            : L10n.format("已折叠，%@", config.summaryLine)
+                    )
+                    .accessibilityHint(
+                        L10n.string(expanded ? "折叠详细训练参数" : "展开详细训练参数")
+                    )
 
                     if expanded {
                         hyperparamsForm
@@ -162,10 +168,12 @@ struct TrainingConfigView: View {
     /// 不能开始训练的原因(按优先级取第一个)。nil 表示可以开始。
     /// 直接展示在按钮左侧,省得用户从上往下扫找缺哪项。
     private var blockingReason: String? {
-        if config.modelPath.isEmpty { return "请在窗口顶部选择模型" }
-        if !isModelTrainable { return "当前模型为 INT8，仅支持推理，请另选 BF16 模型" }
-        if config.dataPath.isEmpty { return "请选择训练数据" }
-        if config.outPath.isEmpty { return "请选择输出 state 路径（.npz）" }
+        if config.modelPath.isEmpty { return L10n.string("请在窗口顶部选择模型") }
+        if !isModelTrainable {
+            return L10n.string("当前模型为 INT8，仅支持推理，请另选 BF16 模型")
+        }
+        if config.dataPath.isEmpty { return L10n.string("请选择训练数据") }
+        if config.outPath.isEmpty { return L10n.string("请选择输出 state 路径（.npz）") }
         // 截断(含完全截断)只警告不阻断,见 dataSummary。这里不再拦截。
         return nil
     }
@@ -181,7 +189,7 @@ struct TrainingConfigView: View {
             .preenGlassButton(prominent: true)
             .controlSize(.large)
             .disabled(blockingReason != nil)
-            .help(blockingReason ?? "开始训练")
+            .help(blockingReason ?? L10n.string("开始训练"))
             .keyboardShortcut(.return, modifiers: .command)
         }
         .padding(.horizontal, 24)
@@ -264,12 +272,20 @@ struct TrainingConfigView: View {
 
     private func summaryTooltip(_ insp: DataInspectionResult) -> String {
         var lines = [
-            "总记录 \(insp.total) · 有效 \(insp.valid)",
-            "token: 均值 \(Int(insp.meanTokens)) · p95 \(Int(insp.p95Tokens)) · max \(insp.maxTokens)",
+            L10n.format("总记录 %lld · 有效 %lld", insp.total, insp.valid),
+            L10n.format(
+                "token: 均值 %lld · p95 %lld · max %lld",
+                Int(insp.meanTokens), Int(insp.p95Tokens), insp.maxTokens
+            ),
             "ctx_len \(insp.ctxLen)",
         ]
         if insp.truncated > 0 {
-            lines.append("\(insp.truncated) 条超长,截头部保尾部 stop(target 保留,可训练)")
+            lines.append(
+                L10n.format(
+                    "%lld 条超长,截头部保尾部 stop(target 保留,可训练)",
+                    insp.truncated
+                )
+            )
         }
         return lines.joined(separator: "\n")
     }
@@ -300,7 +316,11 @@ struct TrainingConfigView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(width: 200, alignment: .leading)
-                Text(config.modelPath.isEmpty ? "请在窗口顶部选择模型" : config.modelPath)
+                Text(
+                    config.modelPath.isEmpty
+                        ? L10n.string("请在窗口顶部选择模型")
+                        : config.modelPath
+                )
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer()
@@ -346,7 +366,9 @@ struct TrainingConfigView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("训练数据预览")
-        .accessibilityHint(dataExpanded ? "折叠训练数据预览" : "展开训练数据预览")
+        .accessibilityHint(
+            L10n.string(dataExpanded ? "折叠训练数据预览" : "展开训练数据预览")
+        )
 
         if dataExpanded {
             dataPreviewBody
@@ -358,9 +380,11 @@ struct TrainingConfigView: View {
     /// 折叠行的一句话摘要:错误 / 前 N 条 / 空。
     private var dataPreviewSummary: String {
         if let error = dataPreview.error { return error }
-        if dataPreview.samples.isEmpty { return "无可预览记录" }
-        let base = "前 \(dataPreview.samples.count) 条原始记录"
-        return dataPreview.hasMore ? base + "（还有更多）" : base
+        if dataPreview.samples.isEmpty { return L10n.string("无可预览记录") }
+        if dataPreview.hasMore {
+            return L10n.format("前 %lld 条原始记录（还有更多）", dataPreview.samples.count)
+        }
+        return L10n.format("前 %lld 条原始记录", dataPreview.samples.count)
     }
 
     @ViewBuilder
@@ -385,7 +409,7 @@ struct TrainingConfigView: View {
                                 Text(field.key)
                                     .font(.caption2.weight(.medium))
                                     .foregroundStyle(.secondary)
-                                Text(field.value.isEmpty ? "（空）" : field.value)
+                                Text(field.value.isEmpty ? L10n.string("（空）") : field.value)
                                     .font(.callout)
                                     .foregroundStyle(field.value.isEmpty ? .tertiary : .primary)
                                     .textSelection(.enabled)
@@ -589,8 +613,8 @@ private struct TrainingParameterLabel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(title)
-            Text("\(key) · \(detail)")
+            Text(L10n.string(title))
+            Text("\(key) · \(L10n.string(detail))")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -607,11 +631,11 @@ private struct TrainingDoubleParameterRow: View {
     var body: some View {
         LabeledContent {
             HStack(spacing: RowLayout.spacing) {
-                TextField(title, value: $value, format: .number)
+                TextField(L10n.string(title), value: $value, format: .number)
                     .labelsHidden()
                     .textFieldStyle(.roundedBorder)
                     .frame(width: RowLayout.controlWidth)
-                ResetSlot(show: value != `default`, help: "恢复默认 \(`default`)") {
+                ResetSlot(show: value != `default`, help: L10n.format("恢复默认 %g", `default`)) {
                     value = `default`
                 }
             }
@@ -631,11 +655,11 @@ private struct TrainingIntParameterRow: View {
     var body: some View {
         LabeledContent {
             HStack(spacing: RowLayout.spacing) {
-                TextField(title, value: $value, format: .number)
+                TextField(L10n.string(title), value: $value, format: .number)
                     .labelsHidden()
                     .textFieldStyle(.roundedBorder)
                     .frame(width: RowLayout.controlWidth)
-                ResetSlot(show: value != `default`, help: "恢复默认 \(`default`)") {
+                ResetSlot(show: value != `default`, help: L10n.format("恢复默认 %lld", `default`)) {
                     value = `default`
                 }
             }
@@ -654,7 +678,7 @@ private struct TrainingToggleParameterRow: View {
     var body: some View {
         LabeledContent {
             HStack(spacing: RowLayout.spacing) {
-                Toggle(title, isOn: $value)
+                Toggle(L10n.string(title), isOn: $value)
                     .labelsHidden()
                     .frame(width: RowLayout.controlWidth, alignment: .leading)
                 // 开关行无复位,留等宽透明槽保持右边缘对齐。
@@ -677,7 +701,7 @@ private struct TrainingTextParameterRow: View {
     var body: some View {
         LabeledContent {
             HStack(spacing: RowLayout.spacing) {
-                TextField(prompt, text: $text)
+                TextField(L10n.string(prompt), text: $text)
                     .labelsHidden()  // 否则 prompt 会作为标签渲染到框外(macOS)
                     .font(monospaced ? .body.monospaced() : .body)
                     .textFieldStyle(.roundedBorder)
@@ -703,17 +727,17 @@ struct PathRow: View {
 
     var body: some View {
         HStack {
-            Text(label)
+            Text(L10n.string(label))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(width: 200, alignment: .leading)
-            Text(path.isEmpty ? "（未选）" : path)
+            Text(path.isEmpty ? L10n.string("（未选）") : path)
                 .font(.body)
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .foregroundStyle(path.isEmpty ? .secondary : .primary)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .help(path.isEmpty ? "尚未选择路径" : path)
+                .help(path.isEmpty ? L10n.string("尚未选择路径") : path)
             Button("选择…") { pick() }
         }
     }
@@ -755,7 +779,7 @@ struct LabeledDoubleField: View {
 
     var body: some View {
         HStack {
-            Text(label).font(.caption).foregroundStyle(.secondary)
+            Text(L10n.string(label)).font(.caption).foregroundStyle(.secondary)
             TextField("", value: $value, format: .number)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 100)
@@ -767,7 +791,7 @@ struct LabeledDoubleField: View {
                         .font(.caption)
                 }
                 .buttonStyle(.borderless)
-                .help("恢复默认 \(`default`)")
+                .help(L10n.format("恢复默认 %g", `default`))
             }
         }
     }
@@ -781,7 +805,7 @@ struct LabeledIntField: View {
 
     var body: some View {
         HStack {
-            Text(label).font(.caption).foregroundStyle(.secondary)
+            Text(L10n.string(label)).font(.caption).foregroundStyle(.secondary)
             TextField("", value: $value, format: .number)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 100)
@@ -793,7 +817,7 @@ struct LabeledIntField: View {
                         .font(.caption)
                 }
                 .buttonStyle(.borderless)
-                .help("恢复默认 \(`default`)")
+                .help(L10n.format("恢复默认 %lld", `default`))
             }
         }
     }

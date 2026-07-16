@@ -25,7 +25,7 @@ class PreviewCacheWriter:
 
     def __init__(self, path: Path, *, page_size: int):
         if page_size <= 0:
-            raise ValueError("page_size 必须 > 0")
+            raise ValueError("page_size must be > 0")
         self.path = Path(path)
         self.page_size = page_size
         self.first_page: list[dict[str, Any]] = []
@@ -42,7 +42,7 @@ class PreviewCacheWriter:
 
     def append(self, sample: dict[str, Any]) -> None:
         if self._file is None:
-            raise RuntimeError("PreviewCacheWriter 尚未打开")
+            raise RuntimeError("PreviewCacheWriter is not open")
         self._file.write(json.dumps(sample, ensure_ascii=False) + "\n")
         if len(self.first_page) < self.page_size:
             self.first_page.append(sample)
@@ -50,7 +50,7 @@ class PreviewCacheWriter:
 
     def commit(self, *, template: str, ctx_len: int) -> dict[str, Any]:
         if self._file is None:
-            raise RuntimeError("PreviewCacheWriter 尚未打开")
+            raise RuntimeError("PreviewCacheWriter is not open")
         self._file.close()
         self._file = None
         self._tmp_path.replace(self.path)
@@ -86,23 +86,23 @@ def read_preview_cache_page(
     """读取一页缓存；不加载 tokenizer，也不把其他页留在内存。"""
     cache_path = Path(cache_path)
     if page <= 0:
-        raise ValueError("page 必须 >= 1")
+        raise ValueError("page must be >= 1")
     if not cache_path.is_file():
-        raise ValueError("预览缓存已失效，请重新检查数据集")
+        raise ValueError("Preview cache is no longer available; check the dataset again")
     meta_path = metadata_path(cache_path)
     if not meta_path.is_file():
-        raise ValueError("预览缓存元数据缺失，请重新检查数据集")
+        raise ValueError("Preview cache metadata is missing; check the dataset again")
 
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     if meta.get("format_version") != FORMAT_VERSION:
-        raise ValueError("预览缓存版本不兼容，请重新检查数据集")
+        raise ValueError("Preview cache version is incompatible; check the dataset again")
     effective_size = int(page_size or meta["page_size"])
     if effective_size <= 0 or effective_size > 200:
-        raise ValueError("page_size 必须在 1...200 之间")
+        raise ValueError("page_size must be between 1 and 200")
     total = int(meta["total"])
     page_count = math.ceil(total / effective_size)
     if page_count and page > page_count:
-        raise ValueError(f"页码超出范围: {page}/{page_count}")
+        raise ValueError(f"Page is out of range: {page}/{page_count}")
 
     start = (page - 1) * effective_size
     with cache_path.open("r", encoding="utf-8") as handle:

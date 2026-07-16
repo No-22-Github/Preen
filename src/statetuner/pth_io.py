@@ -90,7 +90,7 @@ def read_pth(path: PathLike) -> Dict[str, np.ndarray]:
             # 返回同名惰性 stub 即可,与其自称的 module 无关(故不校验 module)。
             if name in _STORAGE_TO_NP:
                 return type(name, (), {})
-            raise pickle.UnpicklingError(f"pth_io 拒绝反序列化 {module}.{name}(不在白名单)")
+            raise pickle.UnpicklingError(f"pth_io refused to deserialize {module}.{name} (not allowlisted)")
 
     obj = _Unpickler(io.BytesIO(zf.read(pkl_name))).load()
 

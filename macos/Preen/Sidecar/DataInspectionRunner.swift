@@ -39,7 +39,7 @@ final class DataInspectionRunner {
     /// 跑一次 tokenizer 检查。model/data 为空或进程失败时返回 .failure。
     func inspect(modelPath: String, dataPath: String, ctxLen: Int) async -> DataInspectionOutcome {
         guard !modelPath.isEmpty, !dataPath.isEmpty else {
-            return .failure("需要同时指定模型与数据")
+            return .failure(L10n.string("需要同时指定模型与数据"))
         }
         return await Task.detached(priority: .userInitiated) {
             let process = Process()
@@ -74,7 +74,9 @@ final class DataInspectionRunner {
             // 失败:优先用 stderr 末行(data-info 的 _bad_input 走 stderr)。
             let errText = String(data: errData, encoding: .utf8) ?? ""
             let lastLine = errText.split(separator: "\n").last.map(String.init) ?? ""
-            return .failure(lastLine.isEmpty ? "数据检查失败(退出码 \(process.terminationStatus))" : lastLine)
+            return .failure(lastLine.isEmpty
+                ? L10n.format("数据检查失败(退出码 %d)", process.terminationStatus)
+                : L10n.backendMessage(lastLine, fallback: "数据检查失败"))
         }.value
     }
 }

@@ -81,7 +81,7 @@ final class TrainJobRunner {
             stateLock.unlock()
         } catch {
             // 启动失败:推一个合成 failed 事件,让 UI 能感知。
-            let message = "无法启动训练进程：\(error.localizedDescription)"
+            let message = L10n.format("无法启动训练进程：%@", error.localizedDescription)
             appendStderr(message + "\n")
             continuation.yield(.failed(message: message, path: nil, timestamp: Date().timeIntervalSince1970))
             continuation.finish()
@@ -150,7 +150,7 @@ final class TrainJobRunner {
                     // 解码失败:发一个合成 unknown 事件,UI 不会因一行坏数据卡死。
                     // (events.py 不变量:任何输入行不让进程崩;我们镜像此精神到客户端。)
                     #if DEBUG
-                    print("[TrainJobRunner] 解码失败 line=\(line.prefix(200)) error=\(error)")
+                    print("[TrainJobRunner] decode failed line=\(line.prefix(200)) error=\(error)")
                     #endif
                     continuation.yield(.unknown(type: "(decode-error)", timestamp: Date().timeIntervalSince1970,
                                                 payload: ["raw": String(line.prefix(2000))]))
@@ -159,7 +159,7 @@ final class TrainJobRunner {
         } catch {
             // IO 错误(极少);进程多半已死,让 stream finish。
             #if DEBUG
-            print("[TrainJobRunner] stdout 读异常:\(error)")
+            print("[TrainJobRunner] stdout read failed: \(error)")
             #endif
         }
 

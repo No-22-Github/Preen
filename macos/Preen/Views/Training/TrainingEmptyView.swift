@@ -50,8 +50,8 @@ struct TrainingEmptyView: View {
                             Label("最近训练", systemImage: "sidebar.trailing")
                         }
                         .labelStyle(.iconOnly)
-                        .help(isInspectorPresented ? "隐藏最近训练" : "显示最近训练")
-                        .accessibilityValue(isInspectorPresented ? "已显示" : "已隐藏")
+                        .help(L10n.string(isInspectorPresented ? "隐藏最近训练" : "显示最近训练"))
+                        .accessibilityValue(L10n.string(isInspectorPresented ? "已显示" : "已隐藏"))
                     }
                 }
                 .inspector(isPresented: inspectorBinding) {
@@ -131,7 +131,7 @@ struct TrainingEmptyView: View {
                 .controlSize(.large)
                 .disabled(!ModelConfigProbe.isTrainable(modelPath: config.modelPath))
                 .help(ModelConfigProbe.isTrainable(modelPath: config.modelPath)
-                      ? "" : "该模型为 INT8 量化，仅支持推理，不能用于训练")
+                      ? "" : L10n.string("该模型为 INT8 量化，仅支持推理，不能用于训练"))
                 .transition(.opacity)
             }
         }

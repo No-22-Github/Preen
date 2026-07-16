@@ -34,13 +34,13 @@ struct BackendStatusView: View {
                         )
                         detailRow(
                             "统一内存",
-                            value: report.memorySizeLabel ?? "未知",
-                            note: "设备物理容量"
+                            value: report.memorySizeLabel ?? L10n.string("未知"),
+                            note: L10n.string("设备物理容量")
                         )
                         detailRow(
                             "MLX 工作集上限",
-                            value: report.workingSetLabel ?? "未知",
-                            note: "建议上限，非当前占用"
+                            value: report.workingSetLabel ?? L10n.string("未知"),
+                            note: L10n.string("建议上限，非当前占用")
                         )
                     }
 
@@ -67,7 +67,7 @@ struct BackendStatusView: View {
                                 available: report.mlDtypes.ok
                             )
                             componentRow(
-                                "Metal", value: report.metalAvailable ? "可用" : "不可用",
+                                "Metal", value: L10n.string(report.metalAvailable ? "可用" : "不可用"),
                                 available: report.metalAvailable
                             )
                         }
@@ -139,7 +139,7 @@ struct BackendStatusView: View {
     }
 
     private func statusRow(_ label: String, status: String, phase: WorkerPhase) -> some View {
-        LabeledContent(label) {
+        LabeledContent(L10n.string(label)) {
             HStack(spacing: 7) {
                 Image(systemName: phase.statusSymbol)
                     .foregroundStyle(phase.statusColor)
@@ -159,7 +159,7 @@ struct BackendStatusView: View {
                 .textSelection(.enabled)
         } label: {
             VStack(alignment: .leading, spacing: 2) {
-                Text(label)
+                Text(L10n.string(label))
                 Text(note)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -188,11 +188,11 @@ struct BackendStatusView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("组件版本")
-        .accessibilityValue(showComponents ? "已展开" : "已折叠")
+        .accessibilityValue(L10n.string(showComponents ? "已展开" : "已折叠"))
     }
 
     private func componentRow(_ label: String, value: String, available: Bool) -> some View {
-        LabeledContent(label) {
+        LabeledContent(L10n.string(label)) {
             HStack(spacing: 7) {
                 if !available {
                     Image(systemName: "xmark.circle.fill")
@@ -210,7 +210,7 @@ struct BackendStatusView: View {
 
     private var footer: some View {
         HStack(spacing: 10) {
-            Button(didCopy ? "已复制" : "复制诊断信息", action: copyDiagnostics)
+            Button(L10n.string(didCopy ? "已复制" : "复制诊断信息"), action: copyDiagnostics)
             .help("复制适合粘贴到 Issue 的 Markdown，不包含序列号、日志和本地路径")
 
             Button("诊断日志…") { showLogs = true }
@@ -232,15 +232,15 @@ struct BackendStatusView: View {
 
     private var runtimeSummary: String {
         switch store.runtime.phase {
-        case .checking: return "检查中…"
-        case .ready: return "后端正常"
-        case .unavailable: return "运行时异常"
+        case .checking: return L10n.string("检查中…")
+        case .ready: return L10n.string("后端正常")
+        case .unavailable: return L10n.string("运行时异常")
         }
     }
 
     private func moduleValue(_ module: DoctorModule) -> String {
-        guard module.ok else { return "不可用" }
-        return module.version ?? "可用"
+        guard module.ok else { return L10n.string("不可用") }
+        return module.version ?? L10n.string("可用")
     }
 
     @MainActor
@@ -250,8 +250,8 @@ struct BackendStatusView: View {
             runtime: store.runtime,
             inference: store.inference,
             training: store.training,
-            appVersion: info?["CFBundleShortVersionString"] as? String ?? "未知",
-            appBuild: info?["CFBundleVersion"] as? String ?? "未知",
+            appVersion: info?["CFBundleShortVersionString"] as? String ?? L10n.string("未知"),
+            appBuild: info?["CFBundleVersion"] as? String ?? L10n.string("未知"),
             systemVersionFallback: ProcessInfo.processInfo.operatingSystemVersionString
         )
         NSPasteboard.general.clearContents()

@@ -184,7 +184,7 @@ def std_warning(epoch: int, state_std: float, threshold: float) -> Event:
         type="std_warning",
         epoch=epoch,
         state_std=state_std,
-        message=f"state std {state_std:.3f} > {threshold} (已记录;健康区间尚未标定, 不中断)",
+        message=f"state std {state_std:.3f} > {threshold} (recorded only; healthy range is not calibrated)",
     )
 
 
@@ -198,7 +198,7 @@ def early_stop(epoch: int, best: float, held_out_loss: float) -> Event:
         epoch=epoch,
         best=best,
         held_out_loss=held_out_loss,
-        message="held-out loss 连续未改善, 提前停止",
+        message="Held-out loss did not improve for the configured patience; stopping early",
     )
 
 
@@ -215,5 +215,5 @@ def failed(message: str, path: Optional[str] = None) -> Event:
     return Event(type="failed", path=path, message=message)
 
 
-def cancelled(message: str = "用户取消") -> Event:
+def cancelled(message: str = "Cancelled by user") -> Event:
     return Event(type="cancelled", message=message)

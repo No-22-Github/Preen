@@ -67,7 +67,7 @@ def warning(tool: str, message: str) -> ToolEvent:
 
 def completed(tool: str, result: dict[str, Any], *, path: Optional[str] = None) -> ToolEvent:
     return ToolEvent(
-        type="completed", tool=tool, message="完成", progress=1.0,
+        type="completed", tool=tool, message="Completed", progress=1.0,
         path=path, result=result,
     )
 
@@ -76,5 +76,5 @@ def failed(tool: str, message: str) -> ToolEvent:
     return ToolEvent(type="failed", tool=tool, message=message)
 
 
-def cancelled(tool: str, message: str = "用户取消") -> ToolEvent:
+def cancelled(tool: str, message: str = "Cancelled by user") -> ToolEvent:
     return ToolEvent(type="cancelled", tool=tool, message=message)

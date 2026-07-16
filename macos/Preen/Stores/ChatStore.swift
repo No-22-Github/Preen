@@ -102,7 +102,7 @@ final class ChatStore {
         // 重置启动日志(新一轮连接)。
         startupLog = ""
         startupError = nil
-        backendStore.updateInference(phase: .starting, message: "正在加载模型")
+        backendStore.updateInference(phase: .starting, message: L10n.string("正在加载模型"))
         let client = ServeClient()
         self.client = client
         // 后端 stderr → 主线程追加到 startupLog(@Observable 自动刷新 UI)。
@@ -126,7 +126,7 @@ final class ChatStore {
             }
         }
         let stream = client.start(model: model)
-        backendStore.updateInference(phase: .starting, pid: client.pid, message: "正在加载模型")
+        backendStore.updateInference(phase: .starting, pid: client.pid, message: L10n.string("正在加载模型"))
         consumeTask = Task { [weak self] in
             for await event in stream {
                 self?.consume(event: event)
@@ -147,7 +147,7 @@ final class ChatStore {
         sessionId = nil
         isGenerating = false
         connectedModelPath = nil
-        backendStore.updateInference(phase: .idle, message: "推理未启动")
+        backendStore.updateInference(phase: .idle, message: L10n.string("推理未启动"))
         // 清理启动日志状态(下次连接重新累积)。
         startupError = nil
     }
@@ -272,12 +272,12 @@ final class ChatStore {
 
     /// 推理状态摘要:「模型 X · state Y」或「模型 X · 基线」。供全局状态栏展示。
     var inferenceSummary: String {
-        let modelPart = connectedModelPath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "模型"
+        let modelPart = connectedModelPath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? L10n.string("模型")
         let statePart: String
         if let p = statePath {
             statePart = "state \(URL(fileURLWithPath: p).lastPathComponent)"
         } else {
-            statePart = "基线"
+            statePart = L10n.string("基线")
         }
         return "\(modelPart) · \(statePart)"
     }
@@ -294,7 +294,7 @@ final class ChatStore {
                 self.messages.removeAll()
                 self.activationRevision &+= 1
             } catch {
-                self.lastError = "建会话失败：\(error.localizedDescription)"
+                self.lastError = L10n.format("建会话失败：%@", error.localizedDescription)
             }
         }
     }
@@ -321,7 +321,7 @@ final class ChatStore {
         case .error(let id, let code, let message):
             // 启动期(未 connected)的 error = 后端启动失败,记录给启动日志弹窗。
             if !isConnected {
-                startupError = message
+                startupError = L10n.backendMessage(message, fallback: "推理启动失败")
             }
             handleError(id: id, code: code, message: message)
         }
@@ -336,11 +336,11 @@ final class ChatStore {
         isConnected = false
         backendStore.updateInference(
             phase: wasConnected ? .idle : .failed,
-            message: wasConnected ? "推理进程已退出" : "推理启动失败"
+            message: L10n.string(wasConnected ? "推理进程已退出" : "推理启动失败")
         )
         guard !wasConnected else { return }
         if startupError == nil {
-            startupError = "serve 进程已退出，未发出 ready 事件（请查看日志排查）"
+            startupError = L10n.string("serve 进程已退出，未发出 ready 事件（请查看日志排查）")
         }
     }
 
@@ -400,18 +400,19 @@ final class ChatStore {
             }
         case .busy:
             // busy = 已有 in-flight(理论上 UI 已禁用,这是兜底)。
-            lastError = "服务器忙：\(message)"
+            lastError = L10n.string("推理服务繁忙，请稍后再试")
             // 移除空占位(没生成的 assistant 消息)。
             if let idx = messages.indices.last, messages[idx].role == .assistant,
                messages[idx].segments.allSatisfy({ $0.text.isEmpty }) {
                 messages.remove(at: idx)
             }
         default:
-            lastError = message
+            let displayMessage = L10n.backendMessage(message, fallback: "推理请求失败，请查看后端日志")
+            lastError = displayMessage
             // 标记最后一条 assistant 消息的错误。
             if let idx = messages.indices.last, messages[idx].role == .assistant {
                 if messages[idx].fullText.isEmpty {
-                    messages[idx].errorText = message
+                    messages[idx].errorText = displayMessage
                 }
             }
         }
@@ -426,9 +427,9 @@ final class ChatStore {
                 messages[idx].isAborted = true
             }
         case .busy:
-            lastError = "已有生成进行中"
+            lastError = L10n.string("已有生成进行中")
         default:
-            lastError = err.localizedDescription
+            lastError = L10n.backendMessage(err.localizedDescription, fallback: "推理请求失败，请查看后端日志")
         }
     }
 

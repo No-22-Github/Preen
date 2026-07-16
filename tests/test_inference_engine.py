@@ -389,7 +389,7 @@ def test_text_stop_detection_ignores_contextual_tokenization_difference():
 
 def test_ab_requires_state():
     engine = InferenceEngine(SequenceModel([0]), DummyTokenizer())
-    with pytest.raises(ValueError, match="必须提供 state"):
+    with pytest.raises(ValueError, match="requires a state"):
         engine.compare("x", state=None)
 
 

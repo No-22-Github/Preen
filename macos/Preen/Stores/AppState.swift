@@ -18,10 +18,10 @@ enum SidebarItem: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .training: return "训练"
-        case .chat: return "对话"
-        case .history: return "训练记录"
-        case .toolbox: return "工具箱"
+        case .training: return L10n.string("训练")
+        case .chat: return L10n.string("对话")
+        case .history: return L10n.string("训练记录")
+        case .toolbox: return L10n.string("工具箱")
         }
     }
     var systemImage: String {
@@ -115,7 +115,7 @@ final class AppState {
                 backendStore.updateInference(
                     phase: .stopping,
                     pid: chatStore.processID,
-                    message: "正在释放推理模型"
+                    message: L10n.string("正在释放推理模型")
                 )
                 await chatStore.disconnectAndWait()
             }

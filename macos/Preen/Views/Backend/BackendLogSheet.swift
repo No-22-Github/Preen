@@ -59,17 +59,17 @@ struct BackendLogSheet: View {
 
     private var emptyTitle: String {
         switch source {
-        case 0: return "暂无运行时日志"
-        case 1: return "暂无推理日志"
-        default: return "暂无训练日志"
+        case 0: return L10n.string("暂无运行时日志")
+        case 1: return L10n.string("暂无推理日志")
+        default: return L10n.string("暂无训练日志")
         }
     }
 
     private var emptyDescription: String {
         switch source {
-        case 0: return "环境检查正常时不会产生运行时日志。"
-        case 1: return "启动推理服务后，进程输出会显示在这里。"
-        default: return "开始训练后，进程输出会显示在这里。"
+        case 0: return L10n.string("环境检查正常时不会产生运行时日志。")
+        case 1: return L10n.string("启动推理服务后，进程输出会显示在这里。")
+        default: return L10n.string("开始训练后，进程输出会显示在这里。")
         }
     }
 }

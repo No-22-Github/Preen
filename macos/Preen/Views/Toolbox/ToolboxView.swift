@@ -15,19 +15,19 @@ struct ToolboxView: View {
 
         var title: String {
             switch self {
-            case .modelConversion: return "模型转换"
-            case .modelQuantization: return "模型量化"
-            case .datasetPreview: return "数据集预览"
-            case .datasetConversion: return "数据集转换"
+            case .modelConversion: return L10n.string("模型转换")
+            case .modelQuantization: return L10n.string("模型量化")
+            case .datasetPreview: return L10n.string("数据集预览")
+            case .datasetConversion: return L10n.string("数据集转换")
             }
         }
 
         var subtitle: String {
             switch self {
-            case .modelConversion: return "把 BlinkDL 原生 RWKV-7 权重转换为 Preen 可用模型"
-            case .modelQuantization: return "把 BF16 模型量化为 int8，推理更快、内存更省近一半"
-            case .datasetPreview: return "查看真实模板文本、token 长度与截断风险"
-            case .datasetConversion: return "把外部数据集转换为训练可直接读取的标准 JSONL"
+            case .modelConversion: return L10n.string("把 BlinkDL 原生 RWKV-7 权重转换为 Preen 可用模型")
+            case .modelQuantization: return L10n.string("把 BF16 模型量化为 int8，推理更快、内存更省近一半")
+            case .datasetPreview: return L10n.string("查看真实模板文本、token 长度与截断风险")
+            case .datasetConversion: return L10n.string("把外部数据集转换为训练可直接读取的标准 JSONL")
             }
         }
     }
@@ -45,7 +45,7 @@ struct ToolboxView: View {
         NavigationStack(path: $path) {
             toolboxHome
                 .navigationTitle("工具箱")
-                .navigationSubtitle("选择一个工具开始，不会启动常驻推理进程")
+                .navigationSubtitle(L10n.string("选择一个工具开始，不会启动常驻推理进程"))
                 .navigationDestination(for: Destination.self) { destination in
                     detail(for: destination)
                         .navigationTitle(destination.title)
@@ -80,7 +80,7 @@ struct ToolboxView: View {
         )) {
             Button("关闭") { store.clearError() }
         } message: {
-            Text(store.errorMessage ?? "未知错误")
+            Text(store.errorMessage ?? L10n.string("未知错误"))
         }
         .confirmationDialog(
             "输出目录已有内容",
@@ -192,8 +192,8 @@ struct ToolboxView: View {
                     .frame(width: 28, height: 28)
                     .background(.quaternary, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                    Text(description)
+                    Text(L10n.string(title))
+                    Text(L10n.string(description))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -278,9 +278,20 @@ struct ToolboxView: View {
                 if let result = store.modelResult {
                     successSurface(title: "转换完成") {
                         LabeledContent("模型目录", value: result.outputPath)
-                        LabeledContent("权重", value: "\(result.tensorCount) 个张量 · \(result.precision.uppercased())")
+                        LabeledContent(
+                            "权重",
+                            value: L10n.format(
+                                "%lld 个张量 · %@",
+                                result.tensorCount, result.precision.uppercased()
+                            )
+                        )
                         if let layers = result.numHiddenLayers {
-                            LabeledContent("结构", value: "\(layers) 层 · hidden \(result.hiddenSize ?? 0)")
+                            LabeledContent(
+                                "结构",
+                                value: L10n.format(
+                                    "%lld 层 · hidden %lld", layers, result.hiddenSize ?? 0
+                                )
+                            )
                         }
                         HStack {
                             Button("设为当前模型") { onSelectModel(result.outputPath) }
@@ -378,9 +389,14 @@ struct ToolboxView: View {
             if let result = store.quantizeResult {
                 successSurface(title: "量化完成") {
                     LabeledContent("模型目录", value: result.out)
-                    LabeledContent("量化", value: "int\(result.bits) · \(result.quantizedLayers) 个量化层")
+                    LabeledContent(
+                        "量化",
+                        value: L10n.format(
+                            "int%lld · %lld 个量化层", result.bits, result.quantizedLayers
+                        )
+                    )
                     if let elapsed = result.elapsed {
-                        LabeledContent("耗时", value: String(format: "%.1f 秒", elapsed))
+                        LabeledContent("耗时", value: L10n.format("%.1f 秒", elapsed))
                     }
                     HStack {
                         Button("设为当前模型") { onSelectModel(result.out) }
@@ -405,7 +421,7 @@ struct ToolboxView: View {
                 HStack {
                     Label(
                         modelPath.isEmpty
-                            ? "请先在窗口顶部选择模型"
+                            ? L10n.string("请先在窗口顶部选择模型")
                             : URL(fileURLWithPath: modelPath).lastPathComponent,
                         systemImage: "textformat.abc"
                     )
@@ -517,7 +533,7 @@ struct ToolboxView: View {
                     .foregroundStyle(.secondary)
                 if let result = analysis.result {
                     Text("·") .foregroundStyle(.tertiary)
-                    Text("\(result.recordCount) 条 · \(result.template)")
+                    Text(L10n.format("%lld 条 · %@", result.recordCount, result.template))
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -619,8 +635,9 @@ struct ToolboxView: View {
     }
 
     private func datasetPreviewTextSection(title: String, text: String) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(title)
+        let localizedTitle = L10n.string(title)
+        return VStack(alignment: .leading, spacing: 5) {
+            Text(localizedTitle)
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
 
@@ -630,7 +647,7 @@ struct ToolboxView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(title)
+        .accessibilityLabel(localizedTitle)
         .accessibilityValue(text)
     }
 
@@ -652,7 +669,7 @@ struct ToolboxView: View {
             .help("上一页")
             .disabled(store.isRunning || store.datasetPreviewPage <= 1)
 
-            Text("第 \(store.datasetPreviewPage) / \(store.datasetPreviewPageCount) 页")
+            Text(L10n.format("第 %lld / %lld 页", store.datasetPreviewPage, store.datasetPreviewPageCount))
                 .font(.caption.monospacedDigit())
                 .frame(minWidth: 92)
 
@@ -673,7 +690,7 @@ struct ToolboxView: View {
             .disabled(store.isRunning || store.datasetPreviewPage >= store.datasetPreviewPageCount)
 
             Spacer()
-            Text("每页 \(store.datasetPreviewPageSize) 条")
+            Text(L10n.format("每页 %lld 条", store.datasetPreviewPageSize))
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -681,13 +698,13 @@ struct ToolboxView: View {
     }
 
     private var datasetPreviewRangeText: String {
-        guard store.datasetPreviewTotal > 0 else { return "没有可预览样本" }
+        guard store.datasetPreviewTotal > 0 else { return L10n.string("没有可预览样本") }
         let first = (store.datasetPreviewPage - 1) * store.datasetPreviewPageSize + 1
         let last = min(
             first + store.datasetPreviewSamples.count - 1,
             store.datasetPreviewTotal
         )
-        return "显示 \(first)–\(last)，共 \(store.datasetPreviewTotal) 条"
+        return L10n.format("显示 %lld–%lld，共 %lld 条", first, last, store.datasetPreviewTotal)
     }
 
     private func datasetPreviewGlobalIndex(_ localIndex: Int) -> Int {
@@ -796,7 +813,7 @@ struct ToolboxView: View {
         @ViewBuilder content: () -> Content
     ) -> some View {
         surface {
-            Label(title, systemImage: "checkmark.circle.fill")
+            Label(L10n.string(title), systemImage: "checkmark.circle.fill")
                 .font(.headline)
                 .foregroundStyle(.green)
             content()
@@ -813,15 +830,15 @@ struct ToolboxView: View {
     ) -> some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 1) {
-                Text(title)
+                Text(L10n.string(title))
                 if let detail {
-                    Text(detail)
+                    Text(L10n.string(detail))
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
             }
             .frame(width: 130, alignment: .leading)
-            Text(path.isEmpty ? "未选择" : path)
+            Text(path.isEmpty ? L10n.string("未选择") : path)
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .foregroundStyle(path.isEmpty ? .secondary : .primary)
@@ -897,7 +914,7 @@ struct ToolboxView: View {
 
     private func metric(_ title: String, _ value: String, warning: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(title)
+            Text(L10n.string(title))
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Text(value)

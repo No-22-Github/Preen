@@ -41,12 +41,18 @@ final class RuntimeCheckTests: XCTestCase {
             generatedAt: Date(timeIntervalSince1970: 0)
         )
 
-        XCTAssertTrue(markdown.contains("- 芯片: Apple M5"))
-        XCTAssertTrue(markdown.contains("- 系统: macOS 26.5.2 (25F84)"))
+        XCTAssertTrue(markdown.contains(L10n.format("- 芯片: %@", "Apple M5")))
+        XCTAssertTrue(
+            markdown.contains(L10n.format("- 系统: %@", "macOS 26.5.2 (25F84)"))
+        )
         XCTAssertFalse(markdown.contains("- macOS: macOS"))
-        XCTAssertTrue(markdown.contains("- 统一内存: 16 GB"))
-        XCTAssertTrue(markdown.contains("- MLX 建议工作集上限: 11.84 GB"))
-        XCTAssertTrue(markdown.contains("- 推理服务: 失败"))
+        XCTAssertTrue(markdown.contains(L10n.format("- 统一内存: %@", "16 GB")))
+        XCTAssertTrue(
+            markdown.contains(L10n.format("- MLX 建议工作集上限: %@", "11.84 GB"))
+        )
+        XCTAssertTrue(
+            markdown.contains(L10n.format("- 推理服务: %@", L10n.string("失败")))
+        )
         XCTAssertFalse(markdown.contains("/Users/alice"))
         XCTAssertFalse(markdown.contains("123"))
     }

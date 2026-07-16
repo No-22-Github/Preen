@@ -602,7 +602,7 @@ def test_import_unknown_schema_returns_bad_request(tmp_path):
     })
     assert term["type"] == "error"
     assert term["code"] == "bad_request"
-    assert "导入失败" in term["message"]
+    assert "Import failed" in term["message"]
 
 
 def test_detect_import_then_import_workflow(tmp_path):

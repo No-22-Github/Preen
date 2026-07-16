@@ -217,7 +217,7 @@ class Trainer:
                 events.Event(
                     type="resume",
                     epoch=start_epoch,
-                    message=f"从 epoch {start_epoch} 恢复",
+                    message=f"Resumed from epoch {start_epoch}",
                 )
             )
 

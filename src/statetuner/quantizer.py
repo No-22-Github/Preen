@@ -64,19 +64,19 @@ def quantize(
 
     # ── 1. 校验 ──
     if not src.is_dir():
-        raise ValueError(f"源模型目录不存在: {src}")
+        raise ValueError(f"Source model directory does not exist: {src}")
     _src_config = src / "config.json"
     if not _src_config.is_file():
-        raise ValueError(f"源目录缺少 config.json,不是有效的 HF 模型目录: {src}")
+        raise ValueError(f"Source directory has no config.json and is not a valid HF model directory: {src}")
     # 输出目录约束:mlx_lm.save 要求不存在或空(它内部会 makedirs)。
     if out.exists() and out.is_dir() and any(out.iterdir()):
-        raise ValueError(f"输出目录非空: {out};请清空或换路径")
+        raise ValueError(f"Output directory is not empty: {out}; clear it or choose another path")
     if out.exists() and not out.is_dir():
-        raise ValueError(f"输出路径已存在且不是目录: {out}")
+        raise ValueError(f"Output path exists and is not a directory: {out}")
 
     # ── 2. 加载源模型(lazy,避免权重实例化浪费)──
-    say(f"加载模型 {src}")
-    notify("load", "加载 bf16 模型", None, None)
+    say(f"Loading model {src}")
+    notify("load", "Loading BF16 model", None, None)
     import mlx_lm
 
     model, tokenizer, config = mlx_lm.load(
@@ -86,8 +86,8 @@ def quantize(
     )
 
     # ── 3. 量化(mlx_lm 自动调用 RWKV7 的 quant_predicate)──
-    say(f"量化:bits={bits} group_size={group_size}")
-    notify("quantize", f"量化模型(bits={bits})", None, None)
+    say(f"Quantizing: bits={bits} group_size={group_size}")
+    notify("quantize", f"Quantizing model (bits={bits})", None, None)
     from mlx_lm.utils import quantize_model
 
     model, config = quantize_model(
@@ -101,11 +101,11 @@ def quantize(
         for _, mod in inner.named_modules()
         if type(mod).__name__ == "QuantizedLinear"
     )
-    say(f"量化完成: {quantized_layers} 个 QuantizedLinear")
+    say(f"Quantization complete: {quantized_layers} QuantizedLinear layers")
 
     # ── 4. 写盘(mlx_lm.save 自动处理 config/safetensors/remote .py)──
-    say(f"保存量化模型 → {out}")
-    notify("save", "写盘量化模型目录", None, None)
+    say(f"Saving quantized model -> {out}")
+    notify("save", "Writing quantized model directory", None, None)
     from mlx_lm.utils import save as mlx_save
 
     mlx_save(str(out), str(src), model, tokenizer, config)
@@ -118,7 +118,7 @@ def quantize(
     # 解法:权重/config 是量化产物(保留),tokenizer 相关文件从源目录原样覆盖。
     _sync_tokenizer_files(src, out, say)
 
-    notify("save", "完成", None, None)
+    notify("save", "Completed", None, None)
     return {
         "bits": bits,
         "group_size": group_size,
@@ -162,4 +162,4 @@ def _sync_tokenizer_files(src: Path, out: Path, say: Callable[[str], None]) -> N
             shutil.copy2(src_file, out / name)
             copied.append(name)
     if copied:
-        say(f"同步 tokenizer 文件: {', '.join(copied)}")
+        say(f"Synchronized tokenizer files: {', '.join(copied)}")

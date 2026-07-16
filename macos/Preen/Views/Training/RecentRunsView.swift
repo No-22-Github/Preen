@@ -22,7 +22,7 @@ struct RecentRunsView: View {
                             Image(systemName: run.status.systemImage)
                                 .foregroundStyle(run.status.color)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(run.config.map { URL(fileURLWithPath: $0.dataPath).lastPathComponent } ?? "外部 State")
+                                Text(run.config.map { URL(fileURLWithPath: $0.dataPath).lastPathComponent } ?? L10n.string("外部 State"))
                                     .lineLimit(1)
                                 Text(run.createdAt, format: .dateTime.month().day().hour().minute())
                                     .font(.caption)
@@ -54,13 +54,13 @@ struct RecentRunsView: View {
 extension TrainingRunStatus {
     var label: String {
         switch self {
-        case .preparing: return "准备中"
-        case .running: return "训练中"
-        case .finishing: return "收尾中"
-        case .completed: return "已完成"
-        case .failed: return "失败"
-        case .cancelled: return "已取消"
-        case .interrupted: return "已中断"
+        case .preparing: return L10n.string("准备中")
+        case .running: return L10n.string("训练中")
+        case .finishing: return L10n.string("收尾中")
+        case .completed: return L10n.string("已完成")
+        case .failed: return L10n.string("失败")
+        case .cancelled: return L10n.string("已取消")
+        case .interrupted: return L10n.string("已中断")
         }
     }
 

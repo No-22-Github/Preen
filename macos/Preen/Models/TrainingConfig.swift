@@ -23,8 +23,8 @@ enum TrainingTemplate: String, CaseIterable, Identifiable {
     /// 中文标签(UI 用)。
     var label: String {
         switch self {
-        case .qa: return "QA（问答）"
-        case .instruction: return "Instruction（指令）"
+        case .qa: return L10n.string("QA（问答）")
+        case .instruction: return L10n.string("Instruction（指令）")
         }
     }
 }
@@ -143,10 +143,10 @@ struct TrainingConfig: Equatable {
         var parts: [String] = [
             "lr \(lr)",
             "ctx_len \(ctxLen)",
-            "\(epochs) 轮",
+            L10n.format("%lld 轮", epochs),
         ]
         if earlyStop {
-            parts.append("早停 patience \(earlyStopPatience)")
+            parts.append(L10n.format("早停 patience %lld", earlyStopPatience))
         }
         parts.append("seed \(seed)")
         return parts.joined(separator: " · ")

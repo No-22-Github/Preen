@@ -54,7 +54,7 @@ def test_chat_dynamic_state_switch():
     assert session.handle("你好").payload["text"] == "baseline"
 
     loaded = session.handle('/state "states/neko state.npz"')
-    assert "已加载" in loaded.lines[0]
+    assert "State loaded" in loaded.lines[0]
     assert session.state_label == "states/neko state.npz"
     assert session.handle("你好").payload["text"] == "tuned"
 
@@ -69,7 +69,7 @@ def test_chat_ab_toggle_and_output():
     reply = session.handle("测试")
     assert reply.payload["with_state"]["text"] == "tuned"
     assert reply.payload["baseline"]["text"] == "baseline"
-    assert "=== 有 state ===" in reply.lines
+    assert "=== With state ===" in reply.lines
 
 
 def test_chat_runtime_sampling_configuration():
@@ -103,8 +103,8 @@ def test_chat_runtime_penalty_configuration():
 def test_penalty_decay_rejects_out_of_range():
     """/penalty-decay 范围 (0, 1](strict_min + maximum=1)。"""
     session = ChatSession(FakeEngine())
-    assert "超出范围" in session.handle("/penalty-decay 0").lines[0]
-    assert "超出范围" in session.handle("/penalty-decay 1.5").lines[0]
+    assert "out of range" in session.handle("/penalty-decay 0").lines[0]
+    assert "out of range" in session.handle("/penalty-decay 1.5").lines[0]
 
 
 def test_chat_failed_state_load_preserves_current_state():
@@ -116,7 +116,7 @@ def test_chat_failed_state_load_preserves_current_state():
         FakeEngine(), state=original, state_label="old.npz", state_loader=fail
     )
     reply = session.handle("/state bad.npz")
-    assert "加载失败" in reply.lines[0]
+    assert "Failed to load state" in reply.lines[0]
     assert session.state is original
     assert session.state_label == "old.npz"
 
@@ -229,7 +229,7 @@ def test_rewind_beyond_history_clamps():
     session.handle("Q1")  # 1 轮 = 2 turn
     reply = session.handle("/rewind 5")  # 超过轮数
     assert len(session.history) == 0
-    assert "已撤销" in reply.lines[0] or "无历史" in reply.lines[0]
+    assert "Rewound" in reply.lines[0] or "No history" in reply.lines[0]
 
 
 def test_clear_resets_history_and_cache():
@@ -264,7 +264,7 @@ def test_state_switch_midway_resets_session():
     # 切换 state 应清空会话
     assert len(session.history) == 0
     assert session.cache is None
-    assert "重置" in reply.lines[0] or "已加载" in reply.lines[0]
+    assert "reset" in reply.lines[0] or "State loaded" in reply.lines[0]
     assert session.state_label == "new.npz"
 
 
