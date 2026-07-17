@@ -1,8 +1,9 @@
 """
 RWKV-7 原生 .pth → fla HF(safetensors)正式转换模块。
 
-不依赖 fla/triton/torch —— 用纯 Python 读 pth 权重(statetuner.pth_io.read_pth,
-与 torch.load 逐字节等价),按官方 convert_from_rwkv7.py 的键名映射规则搬运,
+不依赖 fla/triton/torch —— 用纯 Python mmap 流式读 pth 权重
+(statetuner.pth_io.iter_pth,与 torch.load 逐字节等价),按官方
+convert_from_rwkv7.py 的键名映射规则搬运,
 用仓库内置 fixture(从同架构 0.1B fla 模型生成的 ndim 模板)做 ground truth 维度校验,
 最后存 safetensors + config.json。tokenizer 文件也已 vendor 进 assets/,转换时无需任何外部下载。
 
@@ -30,18 +31,20 @@ RWKV-7 原生 .pth → fla HF(safetensors)正式转换模块。
 """
 import argparse
 import json
+import math
 import os
 import re
 import shutil
 import sys
+import tempfile
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Iterable, Optional, Sequence
 
 import numpy as np
 import ml_dtypes
-from safetensors.numpy import save_file
 
-from .pth_io import read_pth
+from .pth_io import PthTensorInfo, iter_pth, peek_pth_tensors
 
 
 ProgressCallback = Callable[[str, str, Optional[int], Optional[int]], None]
@@ -186,6 +189,158 @@ def translate(src_name, num_layers):
     return ".".join(parts), transposed
 
 
+# safetensors numpy dtype → 格式字符串(与 safetensors 官方映射一致)
+_NP_TO_ST_DTYPE = {
+    "float64": "F64", "float32": "F32", "float16": "F16",
+    "bfloat16": "BF16",  # ml_dtypes.bfloat16 的 .name
+    "int64": "I64", "int32": "I32", "int16": "I16", "int8": "I8",
+    "uint8": "U8", "bool": "BOOL",
+}
+
+
+@dataclass(frozen=True)
+class _ConvertedTensorSpec:
+    source_name: str
+    target_name: str
+    source_shape: tuple[int, ...]
+    target_shape: tuple[int, ...]
+    transposed: bool
+    dtype: np.dtype
+
+    @property
+    def nbytes(self) -> int:
+        return math.prod(self.target_shape) * self.dtype.itemsize
+
+
+def _safetensors_header(specs: Sequence[_ConvertedTensorSpec]) -> bytes:
+    """由预检 manifest 构造官方兼容、按目标键排序的 safetensors header。"""
+    import struct
+
+    names = [spec.target_name for spec in specs]
+    seen = set()
+    for name in names:
+        if name in seen:
+            raise ValueError(f"Duplicate target tensor name: {name}")
+        seen.add(name)
+    if names != sorted(names):
+        raise ValueError("safetensors manifest must be sorted by target name")
+
+    meta = {"__metadata__": {"format": "pt"}}
+    offset = 0
+    for spec in specs:
+        meta[spec.target_name] = {
+            "dtype": _NP_TO_ST_DTYPE[spec.dtype.name],
+            "shape": list(spec.target_shape),
+            "data_offsets": [offset, offset + spec.nbytes],
+        }
+        offset += spec.nbytes
+    header = json.dumps(meta, separators=(",", ":")).encode("utf-8")
+    header += b" " * (-(8 + len(header)) % 8)
+    return struct.pack("<Q", len(header)) + header
+
+
+def _stream_save_safetensors(
+    tensors_iter: Iterable[tuple[str, np.ndarray]],
+    path: str,
+    specs: Sequence[_ConvertedTensorSpec],
+) -> int:
+    """根据预检 manifest 直接写单个 safetensors，不落第二份权重中转文件。
+
+    manifest 已包含全部名称、dtype、shape 和 offset，因此可以先写 header，再把
+    mmap tensor 按目标键顺序直接追加到目标文件。文件位于转换 staging 目录，失败时
+    整个 staging 会被清理。数据写入使用 memoryview，避免 `arr.tobytes()` 整块复制。
+    """
+    tensor_iter = iter(tensors_iter)
+    with open(path, "xb") as out:
+        out.write(_safetensors_header(specs))
+        for spec in specs:
+            try:
+                name, arr = next(tensor_iter)
+            except StopIteration as exc:
+                raise ValueError(
+                    f"Missing converted tensor for {spec.target_name}"
+                ) from exc
+            arr = np.ascontiguousarray(arr)
+            if name != spec.target_name:
+                raise ValueError(
+                    f"Tensor order mismatch: expected {spec.target_name}, got {name}"
+                )
+            if arr.dtype != spec.dtype or tuple(arr.shape) != spec.target_shape:
+                raise ValueError(
+                    f"Tensor metadata mismatch for {name}: "
+                    f"expected {spec.dtype.name}{spec.target_shape}, "
+                    f"got {arr.dtype.name}{tuple(arr.shape)}"
+                )
+            # ml_dtypes.bfloat16 的 PEP 3118 format='E' 不能直接建 memoryview；
+            # 先做零拷贝 uint8 view，其他 dtype 也走同一路径。
+            raw = memoryview(arr.view(np.uint8)).cast("B")
+            for start in range(0, len(raw), 64 * 1024 * 1024):
+                out.write(raw[start:start + 64 * 1024 * 1024])
+        try:
+            extra_name, _ = next(tensor_iter)
+        except StopIteration:
+            pass
+        else:
+            raise ValueError(f"Unexpected converted tensor: {extra_name}")
+        out.flush()
+        os.fsync(out.fileno())
+    return len(specs)
+
+
+def _build_config(samples: dict[str, tuple[int, ...]], num_hidden_layers: int) -> dict:
+    """从收集到的关键张量样本(emb/blocks.0.*/blocks.1.att.v1)推断 RWKV7Config 字段。
+
+    与 `infer_config` 等价,但接受「部分样本 dict」而非全量 weights,供流式转换
+    在读完 storage/0 的前几个 tensor 后即调用,无需等全量载入。
+    """
+    cfg = {}
+    ffn_key_shape = samples["blocks.0.ffn.key.weight"]  # tuple
+    cfg["vocab_size"] = samples["emb.weight"][0]
+    cfg["hidden_size"] = ffn_key_shape[1]
+    cfg["intermediate_size"] = ffn_key_shape[0]
+    cfg["hidden_ratio"] = ffn_key_shape[0] / ffn_key_shape[1]
+    cfg["num_hidden_layers"] = num_hidden_layers
+    cfg["decay_low_rank_dim"] = samples["blocks.0.att.w1"][1]
+    cfg["gate_low_rank_dim"] = samples["blocks.0.att.g1"][1]
+    cfg["a_low_rank_dim"] = samples["blocks.0.att.a1"][1]
+    if "blocks.1.att.v1" in samples:
+        cfg["v_low_rank_dim"] = samples["blocks.1.att.v1"][1]
+    else:
+        cfg["v_low_rank_dim"] = 32
+    cfg["head_dim"] = 64
+    cfg["num_heads"] = cfg["hidden_size"] // 64
+    cfg["value_dim"] = [cfg["hidden_size"]] * num_hidden_layers
+    return cfg
+
+
+def _commit_output_directory(stage: Path, output: Path) -> None:
+    """提交完整 staging；overwrite 时先保留旧目录，提交失败则立即回滚。"""
+    if not output.exists():
+        os.replace(stage, output)
+        return
+
+    backup = Path(tempfile.mkdtemp(
+        prefix=f".{output.name}.preen-backup-",
+        dir=output.parent,
+    ))
+    backup.rmdir()  # os.replace 的目标必须不存在
+    try:
+        os.replace(output, backup)
+        os.replace(stage, output)
+    except BaseException:
+        if backup.exists():
+            # rename 已完成但 Python 尚未返回时也可能收到 SIGINT；先把新目录移回
+            # staging，再恢复旧目录，外层 finally 会清理 staging。
+            if output.exists() and not stage.exists():
+                os.replace(output, stage)
+            if not output.exists():
+                os.replace(backup, output)
+        raise
+    else:
+        # 新目录已经完整提交；旧目录清理失败不应把成功任务降级成失败。
+        shutil.rmtree(backup, ignore_errors=True)
+
+
 def convert(
     rwkv7_path,
     output,
@@ -193,29 +348,67 @@ def convert(
     tokenizer_src=None,
     precision="bf16",
     *,
+    overwrite: bool = False,
     progress_callback: Optional[ProgressCallback] = None,
     log: Optional[Callable[[str], None]] = print,
 ):
-    """转换并返回产物摘要；progress_callback 供 CLI/App 工具协议消费。"""
+    """转换并返回产物摘要；progress_callback 供 CLI/App 工具协议消费。
+
+    先只读 data.pkl 建立完整 manifest 并完成配置、映射、shape、tokenizer 与磁盘预检；
+    再从 mmap 按目标键顺序逐 tensor 转换，直接写入同级 staging 目录中的单文件
+    safetensors。所有文件验证成功后才提交整个目录，失败或取消不会污染旧产物。
+    """
     notify = progress_callback or (lambda phase, message, current, total: None)
     say = log or (lambda message: None)
-    rwkv7_path = str(rwkv7_path)
-    output = str(output)
+    rwkv7_path = Path(rwkv7_path)
+    output = Path(output)
+
+    # ── 阶段 0：仅扫描元数据并完成所有可预检项 ──
     notify("read", "Reading native .pth weights", None, None)
     say(f"Loading source weights: {rwkv7_path}")
-    weights = read_pth(rwkv7_path)  # {name: np.ndarray}, 纯 Python 读取
-    config = infer_config(weights)
+    source_infos = peek_pth_tensors(rwkv7_path, require_stored=True)
+    source_shapes = {item.name: item.shape for item in source_infos}
+    all_keys = set(source_shapes)
+    num_hidden_layers = 0
+    while f"blocks.{num_hidden_layers}.ffn.key.weight" in all_keys:
+        num_hidden_layers += 1
+    if num_hidden_layers == 0:
+        raise ValueError("Failed to infer config: source .pth has no RWKV-7 blocks")
+
+    precision = {
+        "bfloat16": "bf16", "float16": "fp16", "float32": "fp32",
+    }.get(precision, precision)
+    dtype_aliases = {
+        "bf16": ml_dtypes.bfloat16,
+        "fp16": np.float16,
+        "fp32": np.float32,
+    }
+    try:
+        dtype = np.dtype(dtype_aliases[precision])
+    except KeyError as exc:
+        raise ValueError(f"Unsupported precision: {precision}") from exc
+
+    required_config_keys = {
+        "emb.weight",
+        "blocks.0.ffn.key.weight",
+        "blocks.0.att.w1", "blocks.0.att.g1", "blocks.0.att.a1",
+    }
+    missing_config = sorted(required_config_keys - all_keys)
+    if missing_config:
+        raise ValueError(
+            "Failed to infer config: source .pth missing required keys: "
+            + ", ".join(missing_config)
+        )
+    config_samples = {
+        key: source_shapes[key]
+        for key in required_config_keys | {"blocks.1.att.v1"}
+        if key in source_shapes
+    }
+    config = _build_config(config_samples, num_hidden_layers)
     say(f"Inferred configuration: layers={config['num_hidden_layers']} "
         f"hidden={config['hidden_size']} vocab={config['vocab_size']} "
         f"ffn={config['intermediate_size']}")
 
-    # dtype
-    dtype = {"bf16": ml_dtypes.bfloat16, "bfloat16": ml_dtypes.bfloat16,
-             "fp16": np.float16, "float16": np.float16,
-             "fp32": np.float32, "float32": np.float32}[precision]
-
-    # ground truth 模板: ref_path 显式提供则走活模型(上游 schema 漂移时的逃生通道),
-    # 否则用仓库内置 fixture(从 fla-hub 0.1B 生成,只存 ndim)。
     if ref_path is not None:
         template, top_template = load_reference_template(ref_path)
         say(f"Reference template (live model {ref_path}): "
@@ -225,80 +418,99 @@ def convert(
         say(f"Reference template (bundled fixture): "
             f"{len(template)} per-layer keys + {len(top_template)} top-level keys")
 
-    # tokenizer 来源:显式提供则用之,否则用仓库 vendored 目录。
     if tokenizer_src is None:
         tokenizer_src = _DEFAULT_TOKENIZER_SRC
+    tokenizer_src = Path(tokenizer_src)
+    tokenizer_files = [
+        "hf_rwkv_tokenizer.py", "tokenizer_config.json",
+        "rwkv_vocab_v20230424.txt", "special_tokens_map.json",
+        "added_tokens.json",
+    ]
+    missing_tokenizer = [
+        str(tokenizer_src / name)
+        for name in tokenizer_files
+        if not (tokenizer_src / name).is_file()
+    ]
+    if missing_tokenizer:
+        raise FileNotFoundError(
+            "Tokenizer files are missing: " + ", ".join(missing_tokenizer)
+        )
 
-    new_weights = {}
+    # 由 shape 元数据建立完整目标 manifest；translate/rank/重复键错误均在写盘前暴露。
+    specs = []
     reported_layer0 = set()
-    total_weights = len(weights)
-    for index, src_name in enumerate(weights, 1):
-        if index == 1 or index == total_weights or index % max(1, total_weights // 100) == 0:
-            notify("convert", f"Converting tensor {index}/{total_weights}", index, total_weights)
-        rel_name, transposed = translate(src_name, config["num_hidden_layers"])
+    target_names = set()
+    for item in source_infos:
+        rel_name, transposed = translate(item.name, num_hidden_layers)
         if not rel_name:
-            say(f"  [skip] {src_name} (unused)")
+            say(f"  [skip] {item.name} (unused)")
             continue
         if "{N}" in rel_name:
-            li = int(src_name.split(".")[1])
-            fla_name = rel_name.replace("{N}", str(li))
+            li = int(item.name.split(".")[1])
+            target_name = rel_name.replace("{N}", str(li))
         else:
             li = -1
-            fla_name = rel_name
-        weight = np.array(weights[src_name])  # copy
+            target_name = rel_name
+        if target_name in target_names:
+            raise ValueError(f"Duplicate target tensor name: {target_name}")
+        target_names.add(target_name)
 
-        if transposed:
-            weight = weight.T
+        target_shape = tuple(reversed(item.shape)) if transposed else item.shape
+        is_x = "attn.x_" in target_name
+        if (not is_x
+                and target_shape == (1, 1, config["hidden_size"])):
+            target_shape = tuple(dim for dim in target_shape if dim != 1)
 
-        shape_before = list(weight.shape)
-        is_x = "attn.x_" in fla_name
-        if shape_before == [1, 1, config["hidden_size"]]:
-            # 非 x_ 键 squeeze; x_ 键保留 (与官方 copy_ 广播语义一致)
-            if not is_x:
-                weight = weight.squeeze()
-
-        # ground truth 校验: 同架构不同 hidden_size,只校验维度数一致
-        # (0.1B hidden=768, 本模型 hidden=1024,绝对值不同但结构同)
-        rel_check = rel_name  # 含 {N}
-        if li == 0 and rel_check in template:
-            ref_shape = template[rel_check]
-            if is_x:
-                # x_ 键: 参考是 (1,1,H), 实际也应是 (1,1,H) → 比维度数
-                ok = len(ref_shape) == weight.ndim
-            else:
-                ok = len(ref_shape) == weight.ndim
-            if not ok:
+        if li == 0 and rel_name in template:
+            ref_shape = template[rel_name]
+            if len(ref_shape) != len(target_shape):
                 raise ValueError(
-                    f"Rank validation failed for {fla_name}: reference={ref_shape}(ndim={len(ref_shape)}) "
-                    f"actual={tuple(weight.shape)}(ndim={weight.ndim})"
+                    f"Rank validation failed for {target_name}: "
+                    f"reference={ref_shape}(ndim={len(ref_shape)}) "
+                    f"actual={target_shape}(ndim={len(target_shape)})"
                 )
-            reported_layer0.add(rel_check)
-        if li == 0 and fla_name in top_template:
-            ref_shape = top_template[fla_name]
-            if len(ref_shape) != weight.ndim:
+            reported_layer0.add(rel_name)
+        if target_name in top_template:
+            ref_shape = top_template[target_name]
+            if len(ref_shape) != len(target_shape):
                 raise ValueError(
-                    f"Top-level rank validation failed for {fla_name}: reference={ref_shape} actual={tuple(weight.shape)}"
+                    f"Top-level rank validation failed for {target_name}: "
+                    f"reference={ref_shape} actual={target_shape}"
                 )
+        specs.append(_ConvertedTensorSpec(
+            source_name=item.name,
+            target_name=target_name,
+            source_shape=item.shape,
+            target_shape=target_shape,
+            transposed=transposed,
+            dtype=dtype,
+        ))
+    specs.sort(key=lambda item: item.target_name)
 
-        new_weights[fla_name] = np.ascontiguousarray(weight.astype(dtype))
+    uncovered = set(template) - reported_layer0
+    for key in sorted(uncovered):
+        if "pre_norm" in key:
+            say(f"  [note] layer0 is missing {key} (ln0; allowed)")
+        else:
+            say(f"  [warning] layer0 template key was not covered: {key}")
 
-    # 报告: layer 0 模板里有没有没被源权重覆盖的键 (对应 possible_absent_weights)
-    uncovered = set(template.keys()) - reported_layer0
-    if uncovered:
-        # pre_norm (ln0) 可能缺失,允许
-        for u in uncovered:
-            if "pre_norm" in u:
-                say(f"  [note] layer0 is missing {u} (ln0; allowed)")
-            else:
-                say(f"  [warning] layer0 template key was not covered: {u}")
+    output_parent = output.parent
+    output_parent.mkdir(parents=True, exist_ok=True)
+    if output.exists() and not output.is_dir():
+        raise ValueError(f"Output path exists and is not a directory: {output}")
+    if output.is_dir() and any(output.iterdir()) and not overwrite:
+        raise ValueError(f"Output directory is not empty: {output}")
 
-    os.makedirs(output, exist_ok=True)
-    out_st = os.path.join(output, "model.safetensors")
-    notify("write", "Writing model.safetensors", None, None)
-    say(f"Saving weights: {out_st} ({len(new_weights)} tensors, {precision})")
-    out_st_tmp = out_st + ".tmp"
-    save_file(new_weights, out_st_tmp, metadata={"format": "pt"})
-    os.replace(out_st_tmp, out_st)
+    output_bytes = sum(spec.nbytes for spec in specs)
+    output_bytes += sum((tokenizer_src / name).stat().st_size for name in tokenizer_files)
+    reserve = max(64 * 1024 * 1024, output_bytes // 20)
+    free_bytes = shutil.disk_usage(output_parent).free
+    if free_bytes < output_bytes + reserve:
+        raise OSError(
+            "Insufficient disk space for model conversion: "
+            f"need about {(output_bytes + reserve) / 1e9:.2f} GB, "
+            f"available {free_bytes / 1e9:.2f} GB"
+        )
 
     # config.json
     config_json = {
@@ -337,30 +549,78 @@ def convert(
         "eos_token_id": 0,
         "pad_token_id": 0,
     }
-    config_path = os.path.join(output, "config.json")
-    config_tmp = config_path + ".tmp"
-    with open(config_tmp, "w") as f:
-        json.dump(config_json, f, indent=2, ensure_ascii=False)
-    os.replace(config_tmp, config_path)
-    say("Saving config.json")
 
-    # tokenizer (官方脚本不输出 tokenizer,需从 fla-hub 拷贝)
-    for fn in ["hf_rwkv_tokenizer.py", "tokenizer_config.json",
-               "rwkv_vocab_v20230424.txt", "special_tokens_map.json",
-               "added_tokens.json"]:
-        src = os.path.join(tokenizer_src, fn)
-        if os.path.exists(src):
-            shutil.copy2(src, os.path.join(output, fn))
-            say(f"Copying tokenizer file: {fn}")
-        else:
-            raise FileNotFoundError(f"Tokenizer file is missing: {src}")
+    # ── 阶段 1：单文件直写 staging；失败/取消只删除 staging ──
+    stage = Path(tempfile.mkdtemp(
+        prefix=f".{output.name}.preen-convert-",
+        dir=output_parent,
+    ))
+    committed = False
+    try:
+        total = len(specs)
+
+        def _convert_iter():
+            source_order = [spec.source_name for spec in specs]
+            for index, ((source_name, source_arr), spec) in enumerate(
+                zip(iter_pth(rwkv7_path, source_order), specs), 1
+            ):
+                if source_name != spec.source_name:
+                    raise ValueError(
+                        f"Source tensor order mismatch: expected {spec.source_name}, "
+                        f"got {source_name}"
+                    )
+                if index == 1 or index == total or index % max(1, total // 100) == 0:
+                    notify(
+                        "convert", f"Converting tensor {index}/{total}",
+                        index, total,
+                    )
+                weight = source_arr.T if spec.transposed else source_arr
+                if tuple(weight.shape) != spec.target_shape:
+                    if (len(weight.shape) == 3 and weight.shape[0] == 1
+                            and weight.shape[1] == 1):
+                        weight = weight.squeeze()
+                converted = np.ascontiguousarray(weight.astype(dtype, copy=False))
+                yield spec.target_name, converted
+
+        staged_weights = stage / "model.safetensors"
+        tensor_count = _stream_save_safetensors(
+            _convert_iter(), str(staged_weights), specs,
+        )
+        notify("write", "Finalizing model files", None, None)
+        say(f"Saving weights: {output / 'model.safetensors'} "
+            f"({tensor_count} tensors, {precision})")
+
+        with open(stage / "config.json", "x", encoding="utf-8") as fh:
+            json.dump(config_json, fh, indent=2, ensure_ascii=False)
+        say("Saving config.json")
+        for name in tokenizer_files:
+            shutil.copy2(tokenizer_src / name, stage / name)
+            say(f"Copying tokenizer file: {name}")
+
+        # safe_open 会完整验证 header、offset 连续性与文件长度；提交前至少读一项 shape。
+        from safetensors import safe_open
+        with safe_open(staged_weights, framework="np") as handle:
+            keys = list(handle.keys())
+            if len(keys) != tensor_count:
+                raise ValueError(
+                    f"Safetensors validation failed: expected {tensor_count} tensors, "
+                    f"found {len(keys)}"
+                )
+            if keys:
+                handle.get_slice(keys[0]).get_shape()
+
+        _commit_output_directory(stage, output)
+        committed = True
+    finally:
+        if not committed and stage.exists():
+            shutil.rmtree(stage)
 
     say(f"\nConversion complete -> {output}")
     say("Next: validate by loading with mlx_lm.load or transformers")
     return {
-        "output_path": output,
-        "weights_path": out_st,
-        "tensor_count": len(new_weights),
+        "output_path": str(output),
+        "weights_path": str(output / "model.safetensors"),
+        "tensor_count": tensor_count,
         "precision": precision,
         "num_hidden_layers": config["num_hidden_layers"],
         "hidden_size": config["hidden_size"],
@@ -379,8 +639,12 @@ def main() -> None:
                    help="Optional tokenizer source directory (defaults to assets/rwkv_world_tokenizer/)")
     p.add_argument("--precision", default="bf16",
                    choices=["bf16", "fp16", "fp32"])
+    p.add_argument("--overwrite", action="store_true")
     args = p.parse_args()
-    convert(args.rwkv7, args.output, args.reference, args.tokenizer_src, args.precision)
+    convert(
+        args.rwkv7, args.output, args.reference, args.tokenizer_src, args.precision,
+        overwrite=args.overwrite,
+    )
 
 
 if __name__ == "__main__":

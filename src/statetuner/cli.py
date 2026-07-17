@@ -893,7 +893,7 @@ def convert_model(
     try:
         result = convert(
             rwkv7, out, ref_path=reference, tokenizer_src=tokenizer_src,
-            precision=precision, progress_callback=_progress,
+            precision=precision, overwrite=overwrite, progress_callback=_progress,
             log=lambda message: typer.echo(f"# {message}", err=True),
         )
     except KeyboardInterrupt:

@@ -9,6 +9,14 @@
 
 ## [未发布]
 
+### 变更
+
+- **模型转换改为 mmap 流式读写,并以完整目录为单位安全提交**:`model_converter.convert` 此前通过 `read_pth` 全量加载源 storage,再构建完整目标权重 dict,转换 1.5B 模型峰值约 6GB。现改为:
+  - 新增 `pth_io.peek_pth_tensors` 与 `iter_pth`:前者只读 `data.pkl` 和 ZIP 元数据,预先校验 storage 大小、tensor offset/stride、配置键、映射与 shape;后者把未压缩 storage 只读 `mmap` 为 numpy 视图,按目标键顺序逐 tensor 访问。1.5B 完整转换实测物理内存峰值降至约 0.65GB;`read_pth` / `write_pth` 既有 API 不变。
+  - safetensors writer 由预检 manifest 先生成 header,再用零拷贝 byte view 直接写入单个 `model.safetensors`,不再生成第二份权重中转文件。单一精度产物与官方 `save_file` 逐字节一致;转换临时磁盘需求从旧流式草案的约两份输出权重降为约一份,启动前会检查可用空间。
+  - 权重、配置与 tokenizer 先写入输出目录同级 staging 并通过 safetensors 校验,全部成功后才整体提交。失败或取消会清理 staging 且不改动旧模型;`--overwrite` 会完整替换旧目录,不再残留历史分片或 index。
+  - mmap 路径仅支持 RWKV 官方采用的 `ZIP_STORED` 未压缩 `.pth`;压缩 storage 会在创建 staging 前明确拒绝,避免静默回退到高内存全量加载。
+
 ## [1.0.0] - 2026-07-16
 
 首个正式版。以下为 [v0.1.0-beta.1](https://github.com/No-22-Github/Preen/releases/tag/v0.1.0-beta.1) 之后的全部变更。
