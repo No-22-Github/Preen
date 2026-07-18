@@ -14,7 +14,7 @@
 | 模型权重 | BlinkDL G1x 系列原生 .pth + 自研转换器 `tools/convert_rwkv7_to_hf.py` | fla-hub 现成 HF 仓库落后数代,不用;tokenizer 从 fla-hub 拷贝 |
 | 格式参考 | `JL-er/RWKV-PEFT` | state 导出 `.pth` 键名格式。⚠️ 其老教程 lr=1.0 配方已废弃,现行官方建议 1e-3~1e-2 + cos_decay |
 | 数据管线参考 | `BlinkDL/RWKV-LM(-V7)` → `make_data.py` | 终止符约定锚点(make_data.py:89,每样本尾 token 0);binidx 逻辑 |
-| 推荐测试数据集 | HF `liumindmind/NekoQA-10K`(Apache 2.0) | 官方演示案例;不打包进 app,链接+致谢+引用 |
+| 推荐测试数据集 | HF `liumindmind/NekoQA-10K`(Apache 2.0) | 官方演示案例；v1.1 经内容与归属复核后内嵌固定 200 条子集，带 manifest / LICENSE / NOTICE，不内嵌完整 10K |
 | 下游验证 | RWKV Runner(Windows CUDA 真机)/ Ai00 | Runner x070 路径加载 state 不 transpose(rwkv.py:843) |
 
 **关键技术事实(已确认):**

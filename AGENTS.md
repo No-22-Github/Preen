@@ -153,7 +153,7 @@ reasoning 方言(bos 前缀 + think 标签)由正交开关 `--reasoning` + `--th
   - 两个独立维度:**形态** ← 只由高度(`.controlSize`)决定;**是否跟随主题色** ← 只由 prominent vs bordered 决定(prominent = 主操作才强调色,bordered = 次操作中性灰)。两者正交。
   - **想要「跟随主题色的圆角矩形主操作按钮」= `.borderedProminent` 不加 `.controlSize(.large)`**,系统原生即给,不要自定义 ButtonStyle。
 - **想要圆角矩形主操作:别自定义 ButtonStyle 钉死 RoundedRectangle** —— 那会丢 Liquid Glass 玻璃质感且与系统风格割裂。正确做法是去掉 `.controlSize(.large)`,用系统原生 `.borderedProminent`/`.bordered`,让按钮回标准高度。系统设置里几乎所有按钮都是标准高度,观感一致。
-- **⚠️ 当前 app 按钮形态不统一(待评估是否整改)**:全 app 仍有约 6 处主操作带 `.controlSize(.large)`(ChatPanel「连接」、ToolboxView 转换/量化/保存四处)呈胶囊,其余为圆角矩形。训练完成页已从 `.large` 改为标准高度 → 圆角矩形。是否全 app 统一为圆角矩形(去掉所有 `.large`)待用户评估,目前仅完成页一例,未动其他。
+- **✅ v1.1 按钮形态已裁决(2026-07-18)**:全 app 主操作统一使用标准高度的 `.borderedProminent`，移除 ChatPanel「连接」、ToolboxView 转换/量化/保存等主操作的 `.controlSize(.large)`，让系统渲染为 Liquid Glass 圆角矩形。不自定义 ButtonStyle，实施与验收见 `docs/PRD_2026-07-18/P2-11-macOS交互一致性与键盘可达.md`。
 - **`Menu` 的 label 会被系统样式化覆盖**:塞在 label 内的 `.foregroundStyle` / `.background` 不生效(顶部模型选择器的就绪反馈曾踩此坑)。把需要自定义的视觉效果做成 `.overlay` 叠在 Menu 外,HStack 层级不受 Menu 样式化管束。
 
 ---
