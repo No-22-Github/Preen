@@ -18,6 +18,8 @@ struct ContentView: View {
     /// 「去对话」的一键加载真正完成后,顶部模型 chip 短暂变绿。
     @State private var isModelChipAcknowledged = false
     @State private var modelChipPulseID = UUID()
+    /// 会话替换确认弹窗内的「本次运行内不再提醒」草稿,每次弹窗出现时重置为 false。
+    @State private var suppressFutureReplacement = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -99,6 +101,17 @@ struct ContentView: View {
                                     HStack(spacing: 6) {
                                         Image(systemName: "slider.horizontal.3")
                                         Text(appState.chatStore.sessionConfig.formatSummary)
+                                        // 配置来源(仅非 App 默认时显示):
+                                        // 用户能看到"建议来自训练记录"/"用户已调整"等,
+                                        // 解释为什么从 RAW 训练记录进来后没自动切 QA ——
+                                        // 这是 PRD P0-02 §六的设计行为(用户已调整的格式不被自动改写)。
+                                        if appState.chatStore.sessionConfigSource != .appDefault {
+                                            Text("·")
+                                                .foregroundStyle(.secondary)
+                                            Text(appState.chatStore.sessionConfigSource.label)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
                                     }
                                 }
                                 .help("会话格式、Reasoning、思考与生成参数")
@@ -114,21 +127,33 @@ struct ContentView: View {
             GlobalStatusBar(appState: appState)
         }
         .frame(minWidth: 1000, minHeight: 680)
-        .confirmationDialog(
-            sessionReplacementTitle,
-            isPresented: Binding(
-                get: { appState.pendingSessionReplacement != nil },
-                set: { if !$0 { appState.cancelSessionReplacement() } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button(sessionReplacementButtonTitle, role: .destructive) {
-                appState.confirmSessionReplacement()
+        .sheet(isPresented: Binding(
+            get: { appState.pendingSessionReplacement != nil },
+            set: { shown in
+                if !shown {
+                    appState.cancelSessionReplacement()
+                    suppressFutureReplacement = false
+                }
             }
-            Button("取消", role: .cancel) { appState.cancelSessionReplacement() }
-                .keyboardShortcut(.cancelAction)
-        } message: {
-            Text(sessionReplacementMessage)
+        )) {
+            if appState.pendingSessionReplacement != nil {
+                // 弹窗出现时把复选框重置为 false(每次都默认不抑制)。
+                SessionReplacementConfirmationSheet(
+                    title: sessionReplacementTitle,
+                    message: sessionReplacementMessage,
+                    buttonTitle: sessionReplacementButtonTitle,
+                    suppressFuture: $suppressFutureReplacement,
+                    onConfirm: {
+                        let suppress = suppressFutureReplacement
+                        suppressFutureReplacement = false
+                        appState.confirmSessionReplacement(suppressFuture: suppress)
+                    },
+                    onCancel: {
+                        suppressFutureReplacement = false
+                        appState.cancelSessionReplacement()
+                    }
+                )
+            }
         }
         .alert(
             "无法打开 State",

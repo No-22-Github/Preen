@@ -88,6 +88,11 @@ final class AppState {
     private(set) var isInspectingState = false
     private let stateInspectionRunner = StateInspectionRunner()
 
+    /// 本次运行内抑制会话替换确认弹窗。仅存内存,重启 App 自动重置;
+    /// 在 ContentView 的确认弹窗里勾选「本次运行内不再提醒」时置 true。
+    /// PRD P0-04 §七「不增加永久不再提醒」的边界由"仅本次运行"维持。
+    var suppressSessionReplacementConfirmation = false
+
     init(defaults: UserDefaults = .standard) {
         PythonResolver.ensureApplicationDirectories()
         let repository = RunRepository()
@@ -175,8 +180,19 @@ final class AppState {
     // MARK: - 会话替换事务
 
     /// 所有会清空/替换会话的入口都进入这里。确认前只保存意图，不改变页面、模型、
-    /// State、格式或当前生成；空会话则保持一键执行。
+    /// State、格式或当前生成；空会话或本次运行抑制时直接执行。
     func requestSessionReplacement(_ intent: SessionReplacementIntent) {
+        // 本次运行内用户已勾选抑制:跳过确认,直接执行。
+        if suppressSessionReplacementConfirmation {
+            Task { [weak self] in
+                guard let self else { return }
+                if chatStore.isGenerating {
+                    await chatStore.stopGenerationForSessionReplacement()
+                }
+                await executeSessionReplacement(intent)
+            }
+            return
+        }
         if chatStore.hasReplaceableSessionContent {
             pendingSessionReplacement = PendingSessionReplacement(
                 intent: intent,
@@ -187,9 +203,12 @@ final class AppState {
         }
     }
 
-    func confirmSessionReplacement() {
+    func confirmSessionReplacement(suppressFuture: Bool) {
         guard let pending = pendingSessionReplacement else { return }
         pendingSessionReplacement = nil
+        if suppressFuture {
+            suppressSessionReplacementConfirmation = true
+        }
         Task { [weak self] in
             guard let self else { return }
             if pending.wasGenerating {

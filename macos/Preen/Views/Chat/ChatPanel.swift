@@ -40,36 +40,56 @@ struct ChatPanel: View {
         VStack(spacing: 0) {
             if store.isComparisonMode {
                 comparisonContent
+                Divider()
+                if let error = store.lastError {
+                    chatErrorBanner(error)
+                    Divider()
+                }
+                ChatInputBar(
+                    text: $inputText,
+                    canSend: store.canCompare,
+                    isGenerating: store.isGenerating,
+                    canClear: !store.comparisonPrompt.isEmpty,
+                    onSend: {
+                        isFollowingLatest = true
+                        store.startComparison(prompt: inputText)
+                        inputText = ""
+                    },
+                    onAbort: { store.abort() },
+                    onClearSession: { store.clearComparison() }
+                )
+            } else if isRawContinuationMode {
+                // RAW 模板:整页大输入框 + 续写区,不用 ChatInputBar。
+                if let error = store.lastError {
+                    chatErrorBanner(error)
+                    Divider()
+                }
+                ChatRawContinuationView(
+                    store: store,
+                    inputText: $inputText,
+                    onAbort: { store.abort() }
+                )
             } else {
                 messageList
-            }
-            Divider()
-            if let error = store.lastError {
-                chatErrorBanner(error)
                 Divider()
-            }
-            ChatInputBar(
-                text: $inputText,
-                canSend: store.isComparisonMode ? store.canCompare : store.canSend,
-                isGenerating: store.isGenerating,
-                canClear: store.isComparisonMode
-                    ? !store.comparisonPrompt.isEmpty
-                    : (store.isConnected && !store.messages.isEmpty),
-                onSend: {
-                    isFollowingLatest = true
-                    if store.isComparisonMode {
-                        store.startComparison(prompt: inputText)
-                    } else {
-                        store.send(text: inputText)
-                    }
-                    inputText = ""
-                },
-                onAbort: { store.abort() },
-                onClearSession: {
-                    if store.isComparisonMode { store.clearComparison() }
-                    else { showClearConfirm = true }
+                if let error = store.lastError {
+                    chatErrorBanner(error)
+                    Divider()
                 }
-            )
+                ChatInputBar(
+                    text: $inputText,
+                    canSend: store.canSend,
+                    isGenerating: store.isGenerating,
+                    canClear: store.isConnected && !store.messages.isEmpty,
+                    onSend: {
+                        isFollowingLatest = true
+                        store.send(text: inputText)
+                        inputText = ""
+                    },
+                    onAbort: { store.abort() },
+                    onClearSession: { showClearConfirm = true }
+                )
+            }
         }
         .confirmationDialog(
             "清除当前会话？",
@@ -143,36 +163,43 @@ struct ChatPanel: View {
 
             Divider()
 
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 0) {
-                    comparisonPane(
-                        title: "无 State（基线）",
-                        output: store.baselineComparison,
-                        accented: false
-                    )
-                    Divider()
-                    comparisonPane(
-                        title: stateComparisonTitle,
-                        output: store.stateComparison,
-                        accented: true
-                    )
-                }
-                .frame(minWidth: 640)
-
-                ScrollView {
-                    VStack(spacing: 12) {
+            // 固定横排 / 竖排切换:用容器宽度判定,不用 ViewThatFits。
+            // ViewThatFits 会因 pane 内 ChatMessageView 内容变长而把 ideal 宽度撑大,
+            // 触发内容驱动的降级(基线生成完、State 侧流式填充时尤其明显)。
+            // GeometryReader 只看容器宽度,且每栏强制 frame(maxWidth: .infinity) 防止内容撑宽。
+            GeometryReader { proxy in
+                if proxy.size.width >= comparisonSideBySideThreshold {
+                    HStack(spacing: 0) {
                         comparisonPane(
                             title: "无 State（基线）",
                             output: store.baselineComparison,
                             accented: false
                         )
+                        .frame(maxWidth: .infinity)
+                        Divider()
                         comparisonPane(
                             title: stateComparisonTitle,
                             output: store.stateComparison,
                             accented: true
                         )
+                        .frame(maxWidth: .infinity)
                     }
-                    .padding(10)
+                } else {
+                    ScrollView {
+                        VStack(spacing: 12) {
+                            comparisonPane(
+                                title: "无 State（基线）",
+                                output: store.baselineComparison,
+                                accented: false
+                            )
+                            comparisonPane(
+                                title: stateComparisonTitle,
+                                output: store.stateComparison,
+                                accented: true
+                            )
+                        }
+                        .padding(10)
+                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -256,6 +283,11 @@ struct ChatPanel: View {
         store.baselineComparison.status == .completed
             && store.stateComparison.status == .completed
     }
+
+    /// 横排双栏的容器宽度阈值。13" MacBook Air 默认显示缩放下窗口等效宽度
+    /// 约 1400pt,阈值取 900pt 让多数笔记本窗口默认横排;低于此值(如分屏、
+    /// 半屏窗口)上下堆叠。两栏各自 ~440pt 仍可读。
+    private let comparisonSideBySideThreshold: CGFloat = 900
 
     private var comparisonConfigurationSummary: String {
         let config = store.sessionConfig
@@ -428,6 +460,14 @@ struct ChatPanel: View {
     }
 
     // MARK: - 消息列表
+
+    /// RAW 模板:整页纯续写视图(无 User/Assistant 包装)。
+    /// 仅在已连接 + 非 A/B 对比模式 + 当前会话模板为 raw 时启用。
+    private var isRawContinuationMode: Bool {
+        !store.isComparisonMode
+            && store.isConnected
+            && store.sessionConfig.template == .raw
+    }
 
     private var messageList: some View {
         Group {
