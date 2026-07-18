@@ -30,6 +30,20 @@
   - 权重、配置与 tokenizer 先写入输出目录同级 staging 并通过 safetensors 校验,全部成功后才整体提交。失败或取消会清理 staging 且不改动旧模型;`--overwrite` 会完整替换旧目录,不再残留历史分片或 index。
   - mmap 路径仅支持 RWKV 官方采用的 `ZIP_STORED` 未压缩 `.pth`;压缩 storage 会在创建 staging 前明确拒绝,避免静默回退到高内存全量加载。
 
+### 修复
+
+- **训练前数据预检界面卡死(P0-02/05/07/08 验收阻塞)**:`TrainingDataPreflightRunner` 把 `ToolJobRunner` 作为局部变量创建,函数返回 stream 后 runner 立即被 ARC 释放,触发 `ToolJobRunner.deinit` 调用 `process.terminate()` 杀掉 Python 子进程,且 `readTask` 的 `[weak self]` 提前退出后 `continuation.finish()` 永远不会被调用,调用方 `for await event in stream` 死等。表现是:在训练配置页选择内置 NekoQA 200 或外部数据时,界面一直显示"正在按最终模板检查全部样本…"且永远不进入摘要/预览,导致训练无法启动,P0-05/07/08 无法验收。改为把 runner 提升为 `TrainingDataPreflightRunner` 的实例属性,函数体内 `defer { self.runner = nil }` 保证生命周期覆盖整个 `for await` 循环,完成后立即释放。CLI 命令本身实测 0.7s 完成,问题完全在 Swift 端。
+- **A/B 对比视图从横排变成竖排(P0-03)**:`comparisonContent` 用 `ViewThatFits` 在横排 HStack 与竖排 ScrollView 之间二选一,但 ViewThatFits 的 "fits" 判据是各分支的 ideal size,而 pane 内 `ChatMessageView` 在 State 侧流式文本变长时会撑大 ideal 宽度,触发内容驱动的降级 —— 用户看到的现象(基线生成完后左右分栏消失、变成两条上下堆叠的聊天记录、第二条左侧多出蓝色竖线)正是竖排 fallback 渲染。改为用 `GeometryReader` 按容器宽度(阈值 1100pt)显式选择横排或竖排,且每栏强制 `frame(maxWidth: .infinity)` 防止内容撑宽再次触发切换;窄窗时仍允许上下堆叠,右栏的轻量 accent 边界保留(PRD §四)。
+
+### 变更
+
+- **RAW 模板改为整页纯续写界面(P0-01)**:RAW 模板对应"模型从给定前缀往后直接续写"的纯续写语义,没有 User/Assistant 包装,是 RWKV 这类因果语言模型最基础的用法。新会话模板选 `raw` 时,对话页主体从聊天气泡列表切换为上半部分大 `TextEditor`(前缀文本,占满主体)+ 下半部分只读"模型续写"区(实时流式追加),底部按钮为「续写 / 停止 / 清空续写 / 采纳续写」。续写触发 `store.send(text:)`,store 与后端不变(已支持 RAW template);"采纳续写"会把模型生成结果拼到前缀文本末尾,可继续往后续写。切回 QA/Instruction 自动恢复聊天气泡列表。
+- **会话替换确认弹窗加「本次运行内不再提醒」(P0-04)**:原 `.confirmationDialog` 不支持复选框(macOS 限制),改为自定义 `.sheet` 弹窗,内含标题、后果文案、「本次运行内不再确认会话替换」复选框与取消/确认按钮。勾选后本次 App 运行期间(进程生命周期内)切换模型、加载/卸下 State、更改模板等所有会话替换动作直接执行,不再弹此 sheet;重启 App 自动重置为需要确认。PRD §七「不增加永久不再提醒」的边界由"仅本次运行"维持,不写入持久化偏好。
+- **对话页 toolbar 显示会话配置来源(P0-03 配套)**:当会话配置来源(`sessionConfigSource`)非 App 默认时,在 toolbar 的格式 chip 旁显示「建议来自训练记录」/「用户已调整」/「建议来自 State 元数据」标签。这让用户能直接看到为什么从 RAW 训练记录进入对话后没有自动切回 QA —— 这是 PRD P0-02 §六的设计行为("用户手动修改配置并确认后,训练记录或 metadata 不会再自动改写该选择"),不是 bug。
+- **多处界面回归 macOS 原生风格**:训练前数据检查、训练结果摘要等卡片改用原生 `GroupBox` 与 `LabeledContent` 行,去除自定义 `RoundedRectangle` + `.quaternary.opacity` 背景块、`Color.blue/green/orange/yellow.opacity(0.08)` 等装饰性色块与数值着色;指标改为原生右对齐标签 + secondary 文案 + SF Symbol(不再靠颜色区分截断严重度),预览样本用 `DisclosureGroup` + `Divider` 分段。训练记录详情中间卡片精简为只展示训练结果叙事(结束原因 / loss 变化 / 最佳轮次 / State std / 耗时),数据来源、模板、模型、SHA-256、训练参数等结构化字段统一收敛到右侧 inspector,消除中间与侧栏的内容重复。输出 State 路径旁的「自动」徽标移除(自动模式本就是默认预期,无需视觉标注)。A/B 对比横排/竖排切换阈值从 1100pt 降为 900pt,适配 13" MacBook Air 默认缩放下的窗口宽度。
+- **高步数训练图表性能优化**:`TrainingChartView` 原本每次 `body` 都全量重算 loss EMA、内存 EMA 与两个压力梯度(每次刷新 O(N)),训练每个 step 追加一个点会触发一次刷新,万步训练累计成本约 O(N²)=1 亿次操作,且 hover 期间每帧重算导致明显卡顿。改为按指纹(`lossPoints.count + smoothing + 末尾 step`、`processMetrics.count + totalSteps + capacity`)缓存派生量,`.onChange` 指纹变化时才重算,缓存命中时 `body` 内 O(1) 返回;hover 期间的频繁重绘不再触发任何 O(N) 计算。`chartHoverTracking` 同步去掉每次 `body` 都重建的 `selectableSteps: [Int]` 数组,选中步直接 clamp 到 X 轴 domain(每步都有数据,clamp 与二分等价),避免随数据增长分配数组。
+- **训练图表 hover 卡顿根治**:前一轮 EMA 缓存解决了训练事件时的重算,但 hover 拖动仍掉帧 —— 真热点是 `Chart { }` builder 闭包依赖了 `selectedPoint`,hover 时 `IndependentChartSelection.selection` 变化触发子树重建 → `Chart { ForEach(900+) { LineMark… } }` 重新构造所有 mark(每个 mark 构造有固定开销,900 点 × 3 条线 × 每帧 = 数千次构造/帧)。重构为 Swift Charts 官方推荐的"静态 Chart + chartOverlay 选中可视化"模式:三张 Chart(loss / learning rate / memory)的 builder 闭包完全不引用 `selection`,选中竖线、圆点与 annotation label 改由新的 `ChartHoverOverlay` 用 `ChartProxy.position(forX:forY:)` 转屏幕坐标后在 `.chartOverlay` 里画原生 SwiftUI 视图。hover 时只有轻量 overlay 重建,Chart 本体保持稳定;删除已无人使用的 `chartHoverTracking` ViewModifier。
+
 ## [1.0.0] - 2026-07-16
 
 首个正式版。以下为 [v0.1.0-beta.1](https://github.com/No-22-Github/Preen/releases/tag/v0.1.0-beta.1) 之后的全部变更。

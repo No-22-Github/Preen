@@ -199,6 +199,7 @@ struct TrainingConfigView: View {
     private func cancelInspection() {
         inspectTask?.cancel()
         inspectTask = nil
+        inspector.cancel()
         isInspecting = false
     }
 
@@ -435,20 +436,10 @@ struct TrainingConfigView: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 200, alignment: .leading)
             VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(config.outPath.isEmpty ? L10n.string("正在生成…") : config.outPath)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .help(config.outPath)
-                    if config.outputPathMode == .automatic {
-                        Text("自动")
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(.quaternary, in: Capsule())
-                    }
-                }
+                Text(config.outPath.isEmpty ? L10n.string("正在生成…") : config.outPath)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(config.outPath)
                 Text("State、metadata 与可选 PTH 将保存在同一目录；已有文件绝不会被覆盖。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -523,75 +514,85 @@ struct TrainingConfigView: View {
 
     @ViewBuilder
     private var dataPreviewSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                Text("训练前数据检查")
-                    .font(.headline)
-                if preflightWasCached, preflight != nil {
-                    Label("已复用缓存", systemImage: "bolt.fill")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                if !isInspecting {
-                    Button("重新检查") { runInspection(debounceMs: 0) }
-                        .controlSize(.small)
-                }
-            }
-
-            if isInspecting {
+        // HIG materials §macOS:内容层使用语义目的的 Group Box/Section,
+        // 不靠自定义背景块表达分组;HIG color:不靠颜色区分信息,提供文字与 glyph 替代。
+        GroupBox {
+            VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text("正在按最终模板检查全部样本…")
-                        .foregroundStyle(.secondary)
-                }
-                .font(.callout)
-            } else if let preflight {
-                if preflight.detection.schema == "unknown" {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Label("无法识别为训练可直接读取的数据", systemImage: "questionmark.circle.fill")
-                            .foregroundStyle(.orange)
-                        Text("请在数据导入器中选择字段映射并转换为标准 JSONL；完成后会自动回到这里。")
+                    Text("训练前数据检查")
+                        .font(.headline)
+                    if preflightWasCached, preflight != nil {
+                        Label("已复用缓存", systemImage: "bolt.fill")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Button("在数据导入器中配置") { onConfigureImport(config.dataPath) }
+                    }
+                    Spacer()
+                    if !isInspecting {
+                        Button("重新检查") { runInspection(debounceMs: 0) }
+                            .controlSize(.small)
+                    }
+                }
+                .padding(.bottom, 10)
+
+                if isInspecting {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("正在按最终模板检查全部样本…")
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.callout)
+                } else if let preflight {
+                    if preflight.detection.schema == "unknown" {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label("无法识别为训练可直接读取的数据", systemImage: "questionmark.circle")
+                                .font(.callout)
+                            Text("请在数据导入器中选择字段映射并转换为标准 JSONL；完成后会自动回到这里。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Button("在数据导入器中配置") { onConfigureImport(config.dataPath) }
+                                .buttonStyle(.borderedProminent)
+                        }
+                        .padding(.top, 4)
+                    } else if let inspection = preflight.inspection {
+                        preflightSummary(preflight, inspection: inspection)
+                        renderedPreview(preflight.preview)
+                    }
+                } else if let inspectionError {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("检查失败", systemImage: "exclamationmark.triangle")
+                            .font(.callout)
+                        Text(inspectionError)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("重试") { runInspection(debounceMs: 0) }
+                    }
+                    .padding(.top, 4)
+                } else if let count = recordCount, count > autoCheckCap {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("约 \(count) 条；为避免每次改参数都重新 tokenize，大数据需手动完成一次最终口径检查。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("运行完整检查") { runInspection(debounceMs: 0) }
                             .buttonStyle(.borderedProminent)
                     }
-                } else if let inspection = preflight.inspection {
-                    preflightSummary(preflight, inspection: inspection)
-                    renderedPreview(preflight.preview)
-                }
-            } else if let inspectionError {
-                VStack(alignment: .leading, spacing: 8) {
-                    Label("检查失败", systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                    Text(inspectionError)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                    Button("重试") { runInspection(debounceMs: 0) }
-                }
-            } else if let count = recordCount, count > autoCheckCap {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("约 \(count) 条；为避免每次改参数都重新 tokenize，大数据需手动完成一次最终口径检查。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Button("运行完整检查") { runInspection(debounceMs: 0) }
-                        .buttonStyle(.borderedProminent)
-                }
-            } else {
-                HStack(spacing: 8) {
-                    Text("尚未完成检查。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    if !config.modelPath.isEmpty && !config.dataPath.isEmpty {
-                        Button("运行完整检查") { runInspection(debounceMs: 0) }
+                    .padding(.top, 4)
+                } else {
+                    HStack(spacing: 8) {
+                        Text("尚未完成检查。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        if !config.modelPath.isEmpty && !config.dataPath.isEmpty {
+                            Button("运行完整检查") { runInspection(debounceMs: 0) }
+                        }
                     }
                 }
             }
+            .padding(.vertical, 4)
         }
-        .padding(14)
-        .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 10))
     }
 
     private func preflightSummary(
@@ -600,146 +601,157 @@ struct TrainingConfigView: View {
     ) -> some View {
         let partial = inspection.partialTruncated
         let projection = projectedCounts(inspection)
-        return VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                Label(result.detection.schema, systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                    .font(.headline)
-                Text(result.detection.confidence.formatted(.percent.precision(.fractionLength(0))))
+        return VStack(alignment: .leading, spacing: 8) {
+            // 概览行:格式 + 置信度 + 模板,全 secondary 文案 + SF Symbol,无填充色。
+            HStack(spacing: 6) {
+                Text(result.detection.schema.uppercased())
+                    .font(.subheadline.weight(.semibold))
+                Text("\(result.detection.confidence.formatted(.percent.precision(.fractionLength(0)))) 置信度")
                     .foregroundStyle(.secondary)
-                Text("· \(inspection.template.uppercased())")
+                Text("·")
+                    .foregroundStyle(.secondary)
+                Text(inspection.template.uppercased())
                     .foregroundStyle(.secondary)
                 Spacer()
             }
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 135), alignment: .leading)],
-                alignment: .leading,
-                spacing: 12
-            ) {
-                preflightMetric("有效样本", "\(inspection.valid) / \(inspection.total)")
-                preflightMetric("平均 token", inspection.meanTokens.formatted(.number.precision(.fractionLength(1))))
-                preflightMetric("P95 token", inspection.p95Tokens.formatted(.number.precision(.fractionLength(1))))
-                preflightMetric("最大 token", "\(inspection.maxTokens)")
-                preflightMetric("部分前缀截断", "\(partial)", tint: partial > 0 ? .yellow : nil)
-                preflightMetric(
-                    "Target 完全截断",
-                    "\(inspection.targetFullyTruncated)",
-                    tint: inspection.targetFullyTruncated > 0 ? .orange : nil
+            Divider()
+            // 指标行:用原生 LabeledContent(右对齐),保持 macOS Form 风格。
+            // 截断数 > 0 时在值后追加文字标记,不靠颜色区分(HIG color)。
+            VStack(spacing: 6) {
+                preflightRow("有效样本", "\(inspection.valid) / \(inspection.total)")
+                preflightRow("平均 / P95 / 最大 token",
+                             "\(inspection.meanTokens.formatted(.number.precision(.fractionLength(1)))) · \(inspection.p95Tokens.formatted(.number.precision(.fractionLength(1)))) · \(inspection.maxTokens)")
+                preflightRow(
+                    "部分前缀截断",
+                    partial > 0 ? "\(partial) 条" : "无"
                 )
-                preflightMetric("训练 / 验证", "\(projection.train) / \(projection.heldOut)")
-                preflightMetric("预计步数", "~\(projection.steps)")
+                preflightRow(
+                    "Target 完全截断",
+                    inspection.targetFullyTruncated > 0 ? "\(inspection.targetFullyTruncated) 条" : "无"
+                )
+                preflightRow("训练 / 验证", "\(projection.train) / \(projection.heldOut)")
+                preflightRow("预计步数", "~\(projection.steps)")
             }
+            // 单一状态说明行(无背景填充,只用 SF Symbol + 文字)。
             if config.dropTruncated, inspection.truncated > 0 {
                 Label("将丢弃 \(inspection.truncated) 条截断样本，步数已按剩余样本重算。", systemImage: "trash")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .padding(.top, 4)
             } else if inspection.targetFullyTruncated > 0 {
                 Label(
                     "有 \(inspection.targetFullyTruncated) 条 target 完全截断；建议增加 ctx_len 或启用丢弃超长样本。",
-                    systemImage: "exclamationmark.triangle.fill"
+                    systemImage: "exclamationmark.triangle"
                 )
                 .font(.caption)
-                .foregroundStyle(.orange)
+                .foregroundStyle(.secondary)
+                .padding(.top, 4)
             } else if partial > 0 {
-                Label("有 \(partial) 条只截去前缀头部；训练会保留 target 与 stop token。", systemImage: "info.circle.fill")
+                Label("有 \(partial) 条只截去前缀头部；训练会保留 target 与 stop token。", systemImage: "info.circle")
                     .font(.caption)
-                    .foregroundStyle(.yellow)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 4)
             }
         }
     }
 
-    private func preflightMetric(_ title: String, _ value: String, tint: Color? = nil) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.caption).foregroundStyle(.secondary)
-            Text(value).font(.callout.monospacedDigit().weight(.medium))
-                .foregroundStyle(tint ?? .primary)
+    /// 原生右对齐的「标签 → 值」行,与 macOS Form/LabeledContent 一致。
+    private func preflightRow(_ title: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(L10n.string(title))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 12)
+            Text(value)
+                .font(.callout.monospacedDigit())
+                .lineLimit(1)
+                .truncationMode(.head)
         }
+        .font(.callout)
     }
 
     private func renderedPreview(_ samples: [DatasetRenderedSample]) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.15)) { dataExpanded.toggle() }
+        VStack(alignment: .leading, spacing: 8) {
+            DisclosureGroup(isExpanded: $dataExpanded) {
+                VStack(spacing: 10) {
+                    ForEach(Array(samples.prefix(3).enumerated()), id: \.offset) { index, sample in
+                        renderedSample(sample, index: index + 1)
+                    }
+                }
+                .padding(.top, 8)
             } label: {
-                HStack {
-                    Image(systemName: dataExpanded ? "chevron.down" : "chevron.right")
-                    Text("最终模板预览（\(min(3, samples.count)) 条）")
-                    Spacer()
-                }
-                .contentShape(Rectangle())
+                Text(L10n.format("最终模板预览（%lld 条）", min(3, samples.count)))
+                    .font(.callout)
             }
-            .buttonStyle(.plain)
 
-            if dataExpanded {
-                ForEach(Array(samples.prefix(3).enumerated()), id: \.offset) { index, sample in
-                    renderedSample(sample, index: index + 1)
-                }
+            if !dataExpanded {
+                EmptyView()
             }
         }
     }
 
     private func renderedSample(_ sample: DatasetRenderedSample, index: Int) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("样本 \(index)").font(.caption.bold())
-                Spacer()
-                Text("\(sample.tokenCount) tokens · prefix_len \(sample.prefixLen)")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-            renderedSegment(
-                title: "输入前缀",
-                systemImage: "arrow.right.to.line.compact",
-                text: sample.prefixText,
-                fill: Color.blue.opacity(0.08)
-            )
-            renderedSegment(
-                title: "训练目标",
-                systemImage: "target",
-                text: sample.targetText,
-                fill: Color.green.opacity(0.08)
-            )
-            HStack(spacing: 12) {
-                Label(
-                    sample.stopTokenAppended == false ? "未追加 stop token" : "已追加 stop token",
-                    systemImage: sample.stopTokenAppended == false ? "xmark.circle" : "stop.circle.fill"
-                )
-                if sample.truncated {
-                    let targetRemoved = sample.truncatedTargetTokens ?? 0
-                    Label(
-                        targetRemoved > 0
-                            ? "截断进入 target（\(targetRemoved) tokens）"
-                            : "仅截去前缀头部（\(sample.truncatedPrefixTokens ?? 0) tokens）",
-                        systemImage: "scissors"
-                    )
-                    .foregroundStyle(targetRemoved > 0 ? .orange : .yellow)
-                } else {
-                    Label("未截断", systemImage: "checkmark.circle")
-                        .foregroundStyle(.green)
+        // 单条样本:原生 GroupBox 包裹,内部用 Divider 分段,不用色块背景。
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text(L10n.format("样本 %lld", index))
+                        .font(.callout.weight(.semibold))
+                    Spacer()
+                    Text(L10n.format("%lld tokens · prefix_len %lld", sample.tokenCount, sample.prefixLen))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
                 }
+                renderedSegment(
+                    title: "输入前缀",
+                    systemImage: "arrow.right.to.line.compact",
+                    text: sample.prefixText
+                )
+                Divider()
+                renderedSegment(
+                    title: "训练目标",
+                    systemImage: "target",
+                    text: sample.targetText
+                )
+                Divider()
+                HStack(spacing: 12) {
+                    Label(
+                        sample.stopTokenAppended == false ? "未追加 stop token" : "已追加 stop token",
+                        systemImage: sample.stopTokenAppended == false ? "xmark.circle" : "stop.circle"
+                    )
+                    if sample.truncated {
+                        let targetRemoved = sample.truncatedTargetTokens ?? 0
+                        Label(
+                            targetRemoved > 0
+                                ? "截断进入 target（\(targetRemoved) tokens）"
+                                : "仅截去前缀头部（\(sample.truncatedPrefixTokens ?? 0) tokens）",
+                            systemImage: "scissors"
+                        )
+                    } else {
+                        Label("未截断", systemImage: "checkmark.circle")
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
-            .font(.caption)
+            .padding(.vertical, 4)
         }
-        .padding(12)
-        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
     }
 
     private func renderedSegment(
         title: String,
         systemImage: String,
-        text: String,
-        fill: Color
+        text: String
     ) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Label(title, systemImage: systemImage)
+        VStack(alignment: .leading, spacing: 4) {
+            Label(L10n.string(title), systemImage: systemImage)
                 .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
             Text(text)
                 .font(.callout.monospaced())
                 .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(fill, in: RoundedRectangle(cornerRadius: 7))
     }
 
     // MARK: - 学习率调度器行(只读,写死 cosine)

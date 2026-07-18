@@ -8,6 +8,32 @@ struct TrainingChartView: View {
     @State private var smoothing = 0.6
     private let yAxisLabelWidth: CGFloat = 66
 
+    // === 派生量缓存 ===
+    // body 每次 store.lossPoints / processMetrics 变化都会被触发;
+    // 原实现每次都全量重算 EMA 与内存梯度(O(N) × N 次刷新 = O(N²))。
+    // 这里按指纹缓存:输入未变就复用上次结果。
+    @State private var lossEMACache: [SmoothedLossPoint] = []
+    @State private var lossEMAFingerprint: LossEMAFingerprint?
+
+    @State private var memoryEMACache: [SmoothedMemoryPoint] = []
+    @State private var memoryAreaGradientCache: LinearGradient?
+    @State private var memoryLineGradientCache: LinearGradient?
+    @State private var memoryFingerprint: MemoryDerivedFingerprint?
+
+    private struct LossEMAFingerprint: Equatable {
+        let count: Int
+        let smoothing: Double
+        // TrainingMetric 是值类型,数组身份由 count + 末尾 step 共同决定。
+        // count 没变 = 没新增点;count 变了但末尾 step 相同 = 数据被替换,仍需重算。
+        let lastStep: Int
+    }
+
+    private struct MemoryDerivedFingerprint: Equatable {
+        let metricsCount: Int
+        let totalSteps: Int
+        let capacityGiB: Double
+    }
+
     private var learningRateDomain: ClosedRange<Double> {
         let observedPeak = store.lossPoints.map(\.learningRate).max() ?? 0
         let configuredPeak = store.configSnapshot?.lr ?? 0
@@ -40,21 +66,12 @@ struct TrainingChartView: View {
             let usableHeight = max(geometry.size.height - 37, 1)
             let lossHeight = floor(usableHeight * 0.62)
             let lowerHeight = usableHeight - lossHeight
-            let lossPoints = TrainingMetricMath.ema(store.lossPoints, smoothing: smoothing)
-            let lossYDomain = TrainingMetricMath.lossYAxisDomain(
-                values: store.lossPoints.map(\.loss)
-                    + lossPoints.map(\.smoothedLoss)
-                    + store.heldOutPoints.map(\.loss)
-            )
-            let memoryPoints = MemoryMetricMath.ema(
-            store.processMetrics,
-            physicalMemoryGiB: memoryCapacityGiB
-            )
-            let memoryAreaGradient = memoryPressureGradient(
-                points: memoryPoints,
-                opacity: 0.50
-            )
-            let memoryLineGradient = memoryPressureGradient(points: memoryPoints, opacity: 1)
+            // 缓存复用:指纹命中时跳过 O(N) 重算,直接用上一次的结果。
+            let lossPoints = cachedLossEMA
+            let lossYDomain = self.lossYDomain(ema: lossPoints)
+            let memoryPoints = cachedMemoryEMA
+            let memoryAreaGradient = cachedMemoryAreaGradient
+            let memoryLineGradient = cachedMemoryLineGradient
 
             VStack(alignment: .leading, spacing: 8) {
                 IndependentChartSelection { selection in
@@ -99,6 +116,97 @@ struct TrainingChartView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .frame(minHeight: Self.minimumHeight)
+        // 派生量缓存:只在指纹变化时重算,不在 body 内部写 state。
+        // onChange 是 body 之外触发的合法 state 更新点。
+        .onChange(of: derivedLossFingerprint) { _, newFingerprint in
+            // smoothing 变化也算指纹变化;空数组无需缓存。
+            guard newFingerprint.count > 0 else {
+                lossEMACache = []
+                lossEMAFingerprint = nil
+                return
+            }
+            lossEMACache = TrainingMetricMath.ema(store.lossPoints, smoothing: smoothing)
+            lossEMAFingerprint = newFingerprint
+        }
+        .onChange(of: derivedMemoryFingerprint) { _, newFingerprint in
+            guard newFingerprint.metricsCount > 0 else {
+                memoryEMACache = []
+                memoryAreaGradientCache = nil
+                memoryLineGradientCache = nil
+                memoryFingerprint = nil
+                return
+            }
+            let computed = MemoryMetricMath.ema(
+                store.processMetrics,
+                physicalMemoryGiB: newFingerprint.capacityGiB
+            )
+            memoryEMACache = computed
+            memoryAreaGradientCache = memoryPressureGradient(points: computed, opacity: 0.50)
+            memoryLineGradientCache = memoryPressureGradient(points: computed, opacity: 1)
+            memoryFingerprint = newFingerprint
+        }
+    }
+
+    // MARK: - 派生量缓存
+
+    /// Loss EMA:仅在 `lossPoints` 数量、末尾 step 或 `smoothing` 变化时重算。
+    /// 训练每个 step 追加一个点 → 指纹变化 → 重算一次;后续因 hover/selection 触发的
+    /// body 重绘(指纹不变)直接复用结果,从 O(N²) 降到 O(N)。
+    ///
+    /// 计算属性内部不写 @State(避免 body 期间修改 state 触发额外刷新)。
+    /// 缓存刷新由 `.onChange(of: derivedLossFingerprint)` 在 body 外驱动。
+    private var cachedLossEMA: [SmoothedLossPoint] {
+        if lossEMACache.isEmpty, !store.lossPoints.isEmpty {
+            return TrainingMetricMath.ema(store.lossPoints, smoothing: smoothing)
+        }
+        return lossEMACache
+    }
+
+    private var derivedLossFingerprint: LossEMAFingerprint {
+        LossEMAFingerprint(
+            count: store.lossPoints.count,
+            smoothing: smoothing,
+            lastStep: store.lossPoints.last?.step ?? -1
+        )
+    }
+
+    /// yDomain 依赖 loss 原值、EMA 平滑值与 held-out 三组数据。
+    /// 注意:hover 时 `IndependentChartSelection.selection` 变化只会重建子树,
+    /// 不会触发本 body(TrainingChartView 的输入未变);所以这里只在训练事件时跑,
+    /// 频率低,不额外做缓存,保持简单。
+    private func lossYDomain(ema: [SmoothedLossPoint]) -> ClosedRange<Double> {
+        TrainingMetricMath.lossYAxisDomain(
+            values: store.lossPoints.map(\.loss)
+                + ema.map(\.smoothedLoss)
+                + store.heldOutPoints.map(\.loss)
+        )
+    }
+
+    private var cachedMemoryEMA: [SmoothedMemoryPoint] {
+        if memoryEMACache.isEmpty, !store.processMetrics.isEmpty {
+            return MemoryMetricMath.ema(
+                store.processMetrics,
+                physicalMemoryGiB: memoryCapacityGiB
+            )
+        }
+        return memoryEMACache
+    }
+
+    private var derivedMemoryFingerprint: MemoryDerivedFingerprint {
+        MemoryDerivedFingerprint(
+            metricsCount: store.processMetrics.count,
+            totalSteps: store.totalSteps,
+            capacityGiB: memoryCapacityGiB
+        )
+    }
+
+    /// 内存梯度:onChange 已保证 cache 与 metrics 同步;空数组时退回单色 gradient。
+    private var cachedMemoryAreaGradient: LinearGradient {
+        memoryAreaGradientCache ?? memoryPressureGradient(points: [], opacity: 0.50)
+    }
+
+    private var cachedMemoryLineGradient: LinearGradient {
+        memoryLineGradientCache ?? memoryPressureGradient(points: [], opacity: 1)
     }
 
     private func lossSection(
@@ -143,13 +251,22 @@ struct TrainingChartView: View {
             .lineLimit(1)
             .frame(minHeight: 18)
 
-            lossChart(
-                points: points,
-                yDomain: yDomain,
-                selectedPoint: selectedPoint,
-                selection: selection
-            )
+            lossChart(points: points, yDomain: yDomain)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .chartOverlay { proxy in
+                    ChartHoverOverlay(
+                        proxy: proxy,
+                        selection: selection,
+                        domain: displayedStepDomain,
+                        yValue: selectedPoint?.smoothedLoss,
+                        yDomain: yDomain,
+                        label: selectedPoint.map {
+                            String(format: "Raw %.4f · EMA %.4f", $0.rawLoss, $0.smoothedLoss)
+                        },
+                        labelColor: Color.accentColor,
+                        indicatorColor: Color.accentColor
+                    )
+                }
         }
     }
 
@@ -180,8 +297,20 @@ struct TrainingChartView: View {
             .lineLimit(1)
             .frame(minHeight: 18)
 
-            learningRateChart(selectedPoint: selectedPoint, selection: selection)
+            learningRateChart()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .chartOverlay { proxy in
+                    ChartHoverOverlay(
+                        proxy: proxy,
+                        selection: selection,
+                        domain: displayedStepDomain,
+                        yValue: selectedPoint?.learningRate,
+                        yDomain: learningRateDomain,
+                        label: selectedPoint.map { formatLearningRate($0.learningRate) },
+                        labelColor: .teal,
+                        indicatorColor: .teal
+                    )
+                }
         }
     }
 
@@ -220,19 +349,36 @@ struct TrainingChartView: View {
             memoryChart(
                 points: points,
                 areaGradient: areaGradient,
-                lineGradient: lineGradient,
-                selectedPoint: selectedPoint,
-                selection: selection
+                lineGradient: lineGradient
             )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .chartOverlay { proxy in
+                    ChartHoverOverlay(
+                        proxy: proxy,
+                        selection: selection,
+                        domain: displayedStepDomain,
+                        yValue: selectedPoint?.physicalFootprintGiB,
+                        yDomain: 0...memoryCapacityGiB,
+                        label: selectedPoint.map {
+                            String(format: "%.2f GB", $0.physicalFootprintGiB)
+                        },
+                        labelColor: selectedPoint?.pressure.chartColor ?? .accentColor,
+                        indicatorColor: selectedPoint?.pressure.chartColor ?? .accentColor
+                    )
+                }
         }
     }
 
+    /// Loss Chart。
+    /// 关键性能点:Chart 的 builder 闭包**完全不引用 `selection` / `selectedPoint`**。
+    /// 原实现把选中 RuleMark/PointMark/annotation 放在 Chart 内部,导致 hover 时
+    /// IndependentChartSelection.selection 变化 → 子树重建 → Chart builder 重新求值 →
+    /// ForEach(900+) 重新构造所有 LineMark,每帧数千次构造,明显掉帧。
+    /// 现在选中可视化全部移到 `.chartOverlay`(ChartHoverOverlay),Chart 本体只依赖
+    /// 数据点,SwiftUI 可稳定复用已构造的 mark。
     private func lossChart(
         points: [SmoothedLossPoint],
-        yDomain: ClosedRange<Double>,
-        selectedPoint: SmoothedLossPoint?,
-        selection: Binding<Int?>
+        yDomain: ClosedRange<Double>
     ) -> some View {
         Chart {
                 ForEach(store.lossPoints) { point in
@@ -272,33 +418,6 @@ struct TrainingChartView: View {
                         .foregroundStyle(.quaternary)
                         .lineStyle(StrokeStyle(lineWidth: 0.5, dash: [2, 2]))
                 }
-
-                if let point = selectedPoint {
-                    RuleMark(x: .value(L10n.string("选中步"), point.step + 1))
-                        .foregroundStyle(Color.accentColor.opacity(0.75))
-                        .lineStyle(StrokeStyle(lineWidth: 1))
-                        .annotation(
-                            position: .top,
-                            alignment: .center,
-                            spacing: 5,
-                            overflowResolution: .init(x: .fit(to: .chart), y: .disabled)
-                        ) {
-                            ChartHoverValueLabel(
-                                text: String(
-                                    format: "Raw %.4f · EMA %.4f",
-                                    point.rawLoss,
-                                    point.smoothedLoss
-                                ),
-                                color: Color.accentColor
-                            )
-                        }
-                    PointMark(
-                        x: .value(L10n.string("选中步"), point.step + 1),
-                        y: .value(L10n.string("选中 EMA loss"), point.smoothedLoss)
-                    )
-                    .foregroundStyle(Color.accentColor)
-                    .symbolSize(45)
-                }
             }
             .chartXScale(
                 domain: displayedStepDomain,
@@ -331,18 +450,10 @@ struct TrainingChartView: View {
             .animation(nil, value: store.lossPoints)
             .animation(nil, value: store.epochBoundaries)
             .animation(nil, value: store.heldOutPoints)
-            .chartHoverTracking(
-                value: selection,
-                domain: displayedStepDomain,
-                selectableSteps: points.map { $0.step + 1 }
-            )
             .accessibilityLabel("训练 loss 曲线")
     }
 
-    private func learningRateChart(
-        selectedPoint: TrainingMetric?,
-        selection: Binding<Int?>
-    ) -> some View {
+    private func learningRateChart() -> some View {
         Chart {
             ForEach(store.lossPoints) { point in
                 LineMark(
@@ -365,29 +476,6 @@ struct TrainingChartView: View {
                 RuleMark(x: .value(L10n.string("Warmup 完成"), warmupEndDisplayedStep))
                     .foregroundStyle(.teal.opacity(0.55))
                     .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
-            }
-
-            if let point = selectedPoint {
-                RuleMark(x: .value(L10n.string("选中步"), point.displayedStep))
-                    .foregroundStyle(Color.teal.opacity(0.75))
-                    .lineStyle(StrokeStyle(lineWidth: 1))
-                    .annotation(
-                        position: .top,
-                        alignment: .center,
-                        spacing: 5,
-                        overflowResolution: .init(x: .fit(to: .chart), y: .disabled)
-                    ) {
-                        ChartHoverValueLabel(
-                            text: formatLearningRate(point.learningRate),
-                            color: .teal
-                        )
-                    }
-                PointMark(
-                    x: .value(L10n.string("选中步"), point.displayedStep),
-                    y: .value(L10n.string("选中 LR"), point.learningRate)
-                )
-                .foregroundStyle(.teal)
-                .symbolSize(40)
             }
         }
         .chartXScale(
@@ -420,20 +508,13 @@ struct TrainingChartView: View {
         }
         .animation(nil, value: store.lossPoints)
         .animation(nil, value: store.epochBoundaries)
-        .chartHoverTracking(
-            value: selection,
-            domain: displayedStepDomain,
-            selectableSteps: store.lossPoints.map(\.displayedStep)
-        )
         .accessibilityLabel("训练学习率曲线")
     }
 
     private func memoryChart(
         points: [SmoothedMemoryPoint],
         areaGradient: LinearGradient,
-        lineGradient: LinearGradient,
-        selectedPoint: SmoothedMemoryPoint?,
-        selection: Binding<Int?>
+        lineGradient: LinearGradient
     ) -> some View {
         Chart {
             ForEach(points) { point in
@@ -461,29 +542,6 @@ struct TrainingChartView: View {
             RuleMark(y: .value(L10n.string("严重阈值"), criticalMemoryGiB))
                 .foregroundStyle(MemoryPressureLevel.critical.chartColor.opacity(0.70))
                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
-
-            if let point = selectedPoint {
-                RuleMark(x: .value(L10n.string("选中步"), point.step + 1))
-                    .foregroundStyle(point.pressure.chartColor.opacity(0.80))
-                    .lineStyle(StrokeStyle(lineWidth: 1))
-                    .annotation(
-                        position: .top,
-                        alignment: .center,
-                        spacing: 5,
-                        overflowResolution: .init(x: .fit(to: .chart), y: .disabled)
-                    ) {
-                        ChartHoverValueLabel(
-                            text: String(format: "%.2f GB", point.physicalFootprintGiB),
-                            color: point.pressure.chartColor
-                        )
-                    }
-                PointMark(
-                    x: .value(L10n.string("选中步"), point.step + 1),
-                    y: .value(L10n.string("选中平滑内存"), point.physicalFootprintGiB)
-                )
-                .foregroundStyle(point.pressure.chartColor)
-                .symbolSize(40)
-            }
         }
         .chartXScale(
             domain: displayedStepDomain,
@@ -514,11 +572,6 @@ struct TrainingChartView: View {
             }
         }
         .animation(nil, value: store.processMetrics)
-        .chartHoverTracking(
-            value: selection,
-            domain: displayedStepDomain,
-            selectableSteps: points.map { $0.step + 1 }
-        )
         .accessibilityLabel("训练进程内存压力面积图")
     }
 
@@ -635,79 +688,111 @@ private struct IndependentChartSelection<Content: View>: View {
     }
 }
 
-private extension View {
-    /// macOS 的图表读数跟随指针移动，并在离开当前图表时立即清除。
-    func chartHoverTracking(
-        value: Binding<Int?>,
-        domain: ClosedRange<Int>,
-        selectableSteps: [Int]
-    ) -> some View {
-        modifier(ChartHoverTrackingModifier(
-            selection: value,
-            domain: domain,
-            selectableSteps: selectableSteps
-        ))
-    }
-}
-
-private struct ChartHoverTrackingModifier: ViewModifier {
+/// 静态 Chart 的选中可视化 overlay。
+///
+/// 用法:`Chart { ... }` 内部只画静态线条,不引用 selection;然后 `.chartOverlay { proxy in
+/// ChartHoverOverlay(proxy:selection:domain:yValue:yDomain:...) }`。
+///
+/// 这样 hover 时只有 overlay 重建,Chart 本体保持稳定,避免 ForEach(N) 重新构造所有 mark。
+///
+/// 三个职责合一:
+/// 1. 透明矩形接收 `onContinuousHover` → 更新 `selection`(step,已 clamp 到 domain)
+/// 2. 用 `proxy.plotFrame` + `proxy.position(forX:in:)` 把选中 step 转屏幕 x 坐标
+/// 3. 画竖线(RuleMark 等价)+ 选中点圆 + 顶部 annotation label
+private struct ChartHoverOverlay: View {
+    let proxy: ChartProxy
     @Binding var selection: Int?
     let domain: ClosedRange<Int>
-    let selectableSteps: [Int]
+    /// 选中步对应的 y 值(nil 时不画选中点,例如 LR 图的值类型不同时也可只画竖线)。
+    let yValue: Double?
+    let yDomain: ClosedRange<Double>
+    let label: String?
+    let labelColor: Color
+    let indicatorColor: Color
 
-    func body(content: Content) -> some View {
-        content.chartOverlay { proxy in
-            GeometryReader { geometry in
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onContinuousHover { phase in
-                        switch phase {
-                        case .active(let location):
-                            guard let plotFrameAnchor = proxy.plotFrame else {
-                                selection = nil
-                                return
-                            }
-                            let plotFrame = geometry[plotFrameAnchor]
-                            guard plotFrame.contains(location),
-                                  let step: Int = proxy.value(
-                                    atX: location.x - plotFrame.origin.x
-                                  ) else {
-                                selection = nil
-                                return
-                            }
-                            let rawSelection = min(
-                                max(step, domain.lowerBound),
-                                domain.upperBound
-                            )
-                            let newSelection = nearestSelectableStep(to: rawSelection)
-                            if selection != newSelection {
-                                selection = newSelection
-                            }
-                        case .ended:
-                            if selection != nil { selection = nil }
-                        }
-                    }
+    var body: some View {
+        GeometryReader { geometry in
+            if let plotFrameAnchor = proxy.plotFrame {
+                let plotFrame = geometry[plotFrameAnchor]
+                hoverField(plotFrame: plotFrame)
+                if let selection,
+                   let x = screenX(for: selection, in: plotFrame) {
+                    selectionOverlay(
+                        x: x, plotFrame: plotFrame, geometry: geometry
+                    )
+                }
             }
         }
     }
 
-    private func nearestSelectableStep(to target: Int) -> Int {
-        guard !selectableSteps.isEmpty else { return target }
-        var lower = 0
-        var upper = selectableSteps.count
-        while lower < upper {
-            let middle = (lower + upper) / 2
-            if selectableSteps[middle] < target {
-                lower = middle + 1
-            } else {
-                upper = middle
+    /// 透明命中区 + hover → selection 转换。
+    private func hoverField(plotFrame: CGRect) -> some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .onContinuousHover { phase in
+                switch phase {
+                case .active(let location):
+                    guard plotFrame.contains(location),
+                          let step: Int = proxy.value(
+                            atX: location.x - plotFrame.origin.x
+                          ) else {
+                        if selection != nil { selection = nil }
+                        return
+                    }
+                    let newSelection = min(max(step, domain.lowerBound), domain.upperBound)
+                    if selection != newSelection {
+                        selection = newSelection
+                    }
+                case .ended:
+                    if selection != nil { selection = nil }
+                }
             }
+    }
+
+    /// 选中步 → 屏幕 X(基于 plotFrame 与 proxy)。
+    private func screenX(for step: Int, in plotFrame: CGRect) -> CGFloat? {
+        guard let pos = proxy.position(forX: Double(step)) else { return nil }
+        return plotFrame.origin.x + pos
+    }
+
+    /// 选中步对应 y 值 → 屏幕 Y。
+    private func screenY(for value: Double, in plotFrame: CGRect) -> CGFloat? {
+        guard let pos = proxy.position(forY: value) else { return nil }
+        return plotFrame.origin.y + pos
+    }
+
+    /// 竖线 + 圆点 + annotation。三层叠在 plotFrame 上,都用绝对坐标(GeometryReader 本地系)。
+    @ViewBuilder
+    private func selectionOverlay(
+        x: CGFloat, plotFrame: CGRect, geometry: GeometryProxy
+    ) -> some View {
+        // 竖线(贯穿 plot 区域)。
+        Path { path in
+            path.move(to: CGPoint(x: x, y: plotFrame.minY))
+            path.addLine(to: CGPoint(x: x, y: plotFrame.maxY))
         }
-        if lower == 0 { return selectableSteps[0] }
-        if lower == selectableSteps.count { return selectableSteps[selectableSteps.count - 1] }
-        let before = selectableSteps[lower - 1]
-        let after = selectableSteps[lower]
-        return target - before <= after - target ? before : after
+        .stroke(indicatorColor.opacity(0.75), style: StrokeStyle(lineWidth: 1))
+        .allowsHitTesting(false)
+
+        // 选中圆点(若提供 y 值且能定位)。
+        if let yValue,
+           let y = screenY(for: yValue, in: plotFrame) {
+            Circle()
+                .fill(indicatorColor)
+                .frame(width: 9, height: 9)
+                .position(x: x, y: y)
+                .allowsHitTesting(false)
+        }
+
+        // 顶部 annotation label:用 fixedSize 测量后 .position 居中到 (x, plotFrame.minY)。
+        // plotFrame.minY 是 plot 顶部边界,label 中心放到这里,半高在 plot 上方、半高在内。
+        // 若选中步靠近左右边缘,label 可能溢出 —— 可接受(原 Chart annotation 用 fit-to-chart)。
+        if let label {
+            ChartHoverValueLabel(text: label, color: labelColor)
+                .fixedSize()
+                .allowsHitTesting(false)
+                .position(x: x, y: plotFrame.minY)
+        }
     }
 }
 

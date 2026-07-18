@@ -4,13 +4,14 @@ struct TrainingResultSummaryView: View {
     let facts: TrainingResultExplanation
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        // HIG materials §macOS:内容层使用语义目的的 GroupBox,不自定义背景块。
+        // 仅展示训练结果的叙事性结论(结束原因、loss 变化、最佳轮次、State std、耗时);
+        // 数据来源、训练参数、模板、模型、SHA-256 等结构化字段已在右侧 inspector,
+        // 不在中间重复展示(避免 inspector 与主区重复)。
+        GroupBox {
             outcomeSection
-            Divider()
-            dataSection
+                .padding(.vertical, 4)
         }
-        .padding(16)
-        .background(.quaternary.opacity(0.28), in: RoundedRectangle(cornerRadius: 12))
     }
 
     private var outcomeSection: some View {
@@ -37,37 +38,6 @@ struct TrainingResultSummaryView: View {
                 }
                 if let elapsed = facts.elapsedSeconds {
                     factRow("总耗时", TrainStore.formatDuration(elapsed))
-                }
-            }
-        }
-    }
-
-    private var dataSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("数据与配置").font(.headline)
-            Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 9) {
-                if facts.trainSamples != nil || facts.heldOutSamples != nil {
-                    factRow(
-                        "训练 / 验证样本",
-                        "\(facts.trainSamples.map(String.init) ?? "—") / \(facts.heldOutSamples.map(String.init) ?? "—")"
-                    )
-                }
-                if let template = facts.template { factRow("模板", template.uppercased()) }
-                if let contextLength = facts.contextLength { factRow("ctx", String(contextLength)) }
-                if facts.truncatedSamples != nil || facts.droppedSamples != nil {
-                    factRow(
-                        "截断 / 丢弃",
-                        "\(facts.truncatedSamples.map(String.init) ?? "—") / \(facts.droppedSamples.map(String.init) ?? "—")"
-                    )
-                }
-                if facts.modelName != nil || facts.precision != nil {
-                    factRow(
-                        "模型与精度",
-                        [facts.modelName, facts.precision].compactMap { $0 }.joined(separator: " · ")
-                    )
-                }
-                if let hash = facts.abbreviatedDataHash {
-                    factRow("数据 SHA-256", hash, help: facts.dataHash)
                 }
             }
         }
