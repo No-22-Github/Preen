@@ -24,6 +24,7 @@ struct ChatPanel: View {
     /// 由窗口 toolbar 打开的生成参数 sheet。
     @Binding var isShowingGenerationParameters: Bool
     var onConnect: () -> Void
+    var onApplySessionConfig: (ChatSessionConfig) -> Void
 
     @State private var inputText: String = ""
     /// 启动日志弹窗:点「连接」后显示,ready 自动关 / 失败保留排查。
@@ -34,7 +35,6 @@ struct ChatPanel: View {
     @State private var isFollowingLatest: Bool = true
     /// 参数 sheet 使用草稿，取消时不会把半成品设置写回真实会话。
     @State private var draftSessionConfig: ChatSessionConfig = .defaultConfig
-    @State private var showFormatResetConfirm = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -398,9 +398,7 @@ struct ChatPanel: View {
             HStack {
                 Button("取消", role: .cancel) { isShowingGenerationParameters = false }
                 Spacer()
-                Button("应用") {
-                    requestApplySessionConfig()
-                }
+                Button("应用") { commitSessionConfig() }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
                 .disabled(!draftSessionConfig.isValid)
@@ -408,16 +406,6 @@ struct ChatPanel: View {
             .padding(20)
         }
         .frame(width: 520, height: 720)
-        .confirmationDialog(
-            "更改会话格式会清空当前会话？",
-            isPresented: $showFormatResetConfirm,
-            titleVisibility: .visible
-        ) {
-            Button("更改格式", role: .destructive) { commitSessionConfig() }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("当前消息将被清空，并按新的模板、Reasoning 与思考设置建立会话。此操作无法撤销。")
-        }
     }
 
     private func parameterSection<Content: View>(
@@ -582,17 +570,8 @@ struct ChatPanel: View {
         isShowingStartupLog = true
     }
 
-    private func requestApplySessionConfig() {
-        let formatChanged = draftSessionConfig.normalized().formatFields != store.sessionConfig.formatFields
-        if formatChanged && !store.messages.isEmpty {
-            showFormatResetConfirm = true
-        } else {
-            commitSessionConfig()
-        }
-    }
-
     private func commitSessionConfig() {
-        store.applySessionConfig(draftSessionConfig)
+        onApplySessionConfig(draftSessionConfig)
         isShowingGenerationParameters = false
     }
 

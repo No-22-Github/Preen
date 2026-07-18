@@ -199,6 +199,9 @@ final class ChatStore {
         isConnected = false
         sessionId = nil
         isGenerating = false
+        messages.removeAll()
+        comparisonInFlight = false
+        clearComparison()
         connectedModelPath = nil
         backendStore.updateInference(phase: .idle, message: L10n.string("推理未启动"))
         // 清理启动日志状态(下次连接重新累积)。
@@ -256,6 +259,19 @@ final class ChatStore {
             try? await self.client?.abort()
             // abort 的 ok 立即返回;被中断的 send 的 error{aborted} 会异步到达,
             // 由 consume(event:) 标记 isAborted。
+        }
+    }
+
+    /// 会话替换确认后的唯一停止路径。正常等待 aborted 终结事件；若后端在合理
+    /// 时间内没有结束，则终止进程，避免新意图与旧 busy 请求交叉。
+    func stopGenerationForSessionReplacement() async {
+        guard isGenerating else { return }
+        try? await client?.abort()
+        for _ in 0..<250 where isGenerating {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        if isGenerating {
+            await disconnectAndWait()
         }
     }
 
@@ -465,7 +481,10 @@ final class ChatStore {
                 self.messages.removeAll()
                 self.activationRevision &+= 1
             } catch {
-                self.lastError = L10n.format("建会话失败：%@", error.localizedDescription)
+                let message = L10n.format("建会话失败：%@", error.localizedDescription)
+                // 会话创建失败时不伪装恢复旧 cache；进入明确断开态，保留诊断错误。
+                await self.disconnectAndWait()
+                self.lastError = message
             }
         }
     }
@@ -744,6 +763,15 @@ final class ChatStore {
 
     var canCompare: Bool {
         isConnected && statePath != nil && !isGenerating
+    }
+
+    /// 普通对话、A/B 已输入内容或正在生成都属于用户可能丢失的会话状态。
+    var hasReplaceableSessionContent: Bool {
+        SessionReplacementPolicy.requiresConfirmation(
+            messageCount: messages.count,
+            comparisonHasContent: !comparisonPrompt.isEmpty,
+            isGenerating: isGenerating
+        )
     }
 }
 

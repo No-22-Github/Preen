@@ -618,6 +618,28 @@
 "请先加载 State，再开始基线对比" = "Load a State before starting a baseline comparison";
 "切换单轮 State A/B 对比" = "Toggle single-turn State A/B comparison";
 "这一侧生成失败" = "This side failed to generate";
+"打开新会话" = "Open New Session";
+"卸下 State" = "Unload State";
+"切换模型" = "Switch Model";
+"并停止当前生成？" = "and stop the current generation?";
+"会结束当前会话？" = "will end the current session?";
+"打开这个 State %@" = "Open this State %@";
+"卸下 State %@" = "Unload the State %@";
+"更改模板 %@" = "Change the template %@";
+"切换模型 %@" = "Switch models %@";
+"断开推理连接 %@" = "Disconnect inference %@";
+"新会话将使用模型 %@ 与 State %@。" = "The new session will use model %@ and State %@.";
+"新会话将使用当前模型且不加载 State。" = "The new session will use the current model without a State.";
+"新会话将使用 %@ 格式。" = "The new session will use the %@ format.";
+"新会话将使用模型 %@，且不会继承当前 State。" = "The new session will use model %@ and will not inherit the current State.";
+"推理后端将结束并进入断开状态。" = "The inference backend will stop and become disconnected.";
+"当前消息与模型 cache 将被清除。" = "Current messages and the model cache will be cleared.";
+"当前生成也会停止。" = "The current generation will also stop.";
+"此操作无法撤销。" = "This cannot be undone.";
+"无法打开 State" = "Unable to Open State";
+"State 结构不兼容 RWKV-7：%d 层，格式 %@" = "The State structure is not RWKV-7 compatible: %d layers, format %@";
+"State 检查失败（退出码 %d）" = "State inspection failed (exit code %d)";
+"State 检查失败" = "State inspection failed";
 
 /* About screen descriptions. */
 "核心训练/推理引擎，提供 rwkv7.py 前向与自动微分" = "Core training and inference engine providing the rwkv7.py forward pass and automatic differentiation.";

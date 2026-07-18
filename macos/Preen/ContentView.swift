@@ -15,8 +15,6 @@ import SwiftUI
 struct ContentView: View {
     @Bindable var appState: AppState
     @State private var isShowingChatGenerationParameters = false
-    /// 待执行的 state 动作(有聊天记录时拦截,确认后才执行,与垃圾桶同逻辑)。
-    @State private var pendingStateAction: PendingStateAction?
     /// 「去对话」的一键加载真正完成后,顶部模型 chip 短暂变绿。
     @State private var isModelChipAcknowledged = false
     @State private var modelChipPulseID = UUID()
@@ -117,26 +115,31 @@ struct ContentView: View {
         }
         .frame(minWidth: 1000, minHeight: 680)
         .confirmationDialog(
-            confirmationTitle,
+            sessionReplacementTitle,
             isPresented: Binding(
-                get: { pendingStateAction != nil },
-                set: { if !$0 { pendingStateAction = nil } }
+                get: { appState.pendingSessionReplacement != nil },
+                set: { if !$0 { appState.cancelSessionReplacement() } }
             ),
             titleVisibility: .visible
         ) {
-            Button(confirmationDestructiveButtonTitle, role: .destructive) {
-                let action = pendingStateAction
-                pendingStateAction = nil
-                switch action {
-                case .load: performLoadState()
-                case .clear: performClearState()
-                case .disconnect: appState.disconnectInference()
-                case .none: break
-                }
+            Button(sessionReplacementButtonTitle, role: .destructive) {
+                appState.confirmSessionReplacement()
             }
-            Button("取消", role: .cancel) { pendingStateAction = nil }
+            Button("取消", role: .cancel) { appState.cancelSessionReplacement() }
+                .keyboardShortcut(.cancelAction)
         } message: {
-            Text(confirmationMessage)
+            Text(sessionReplacementMessage)
+        }
+        .alert(
+            "无法打开 State",
+            isPresented: Binding(
+                get: { appState.sessionReplacementError != nil },
+                set: { if !$0 { appState.clearSessionReplacementError() } }
+            )
+        ) {
+            Button("好") { appState.clearSessionReplacementError() }
+        } message: {
+            Text(appState.sessionReplacementError ?? "")
         }
         // 欢迎窗口:作为主窗口的模态 sheet,从顶部滑出、盖在主窗口上方、锁定(点背景不响应)。
         // 首启 / 「窗口 → 欢迎使用 Preen」翻 isWelcomePresented=true 弹出;同一标志也驱动侧栏收起。
@@ -300,32 +303,17 @@ struct ContentView: View {
         }
     }
 
-    /// 请求加载/替换 state:有聊天记录时先拦截确认(加载会清空会话)。
+    /// 先选路径并做只读结构预检；只有目标明确后才进入统一会话替换确认。
     private func requestLoadState() {
-        if appState.chatStore.messages.isEmpty {
-            performLoadState()
-        } else {
-            pendingStateAction = .load
-        }
+        performLoadState()
     }
 
-    /// 请求卸下 state:有聊天记录时先拦截确认(卸下会清空会话)。
     private func requestClearState() {
-        if appState.chatStore.messages.isEmpty {
-            performClearState()
-        } else {
-            pendingStateAction = .clear
-        }
+        appState.requestSessionReplacement(.clearState)
     }
 
-    /// 请求断开推理连接:有聊天记录时先拦截确认(断开会终止会话历史)。
-    /// 空会话直接断开,无破坏性后果,不打扰用户。
     private func requestDisconnect() {
-        if appState.chatStore.messages.isEmpty {
-            appState.disconnectInference()
-        } else {
-            pendingStateAction = .disconnect
-        }
+        appState.disconnectInference()
     }
 
     /// 实际执行:弹文件选择器 → 应用 state。
@@ -339,49 +327,27 @@ struct ContentView: View {
         }
     }
 
-    /// 实际执行:卸下 state(已连接走后端 set_state(nil) 重置会话) + 清跨面板意图。
-    private func performClearState() {
-        appState.chatStore.clearState()
-        appState.chatStore.isComparisonMode = false
-        appState.injectedStatePath = nil
-    }
-
     /// 当前对话 state 的文件名(nil = 未选);驱动 toolbar 胶囊显示。
     private var chatStateBadgeLabel: String? {
         guard let path = appState.chatStore.statePath else { return nil }
         return URL(fileURLWithPath: path).lastPathComponent
     }
 
-    /// 确认弹窗标题(按待执行动作切换)。
-    private var confirmationTitle: String {
-        switch pendingStateAction {
-        case .load: return L10n.string("替换 State 会清空当前会话？")
-        case .clear: return L10n.string("卸下 State 会清空当前会话？")
-        case .disconnect: return L10n.string("断开会清除当前会话？")
-        case .none: return ""
-        }
+    private var sessionReplacementTitle: String {
+        guard let pending = appState.pendingSessionReplacement else { return "" }
+        return pending.intent.title(isGenerating: pending.wasGenerating)
     }
 
-    /// 确认弹窗的破坏性按钮文案。
-    private var confirmationDestructiveButtonTitle: String {
-        switch pendingStateAction {
-        case .load: return L10n.string("替换")
-        case .clear: return L10n.string("卸下")
-        case .disconnect: return L10n.string("断开")
-        case .none: return ""
-        }
+    private var sessionReplacementButtonTitle: String {
+        appState.pendingSessionReplacement?.intent.destructiveButtonTitle ?? ""
     }
 
-    /// 确认弹窗的说明文字。
-    private var confirmationMessage: String {
-        switch pendingStateAction {
-        case .load, .clear:
-            return L10n.string("加载或卸下 State 都会重置会话历史，此操作无法撤销。")
-        case .disconnect:
-            return L10n.string("断开推理连接将终止后端进程并清除当前会话历史，此操作无法撤销。")
-        case .none:
-            return ""
-        }
+    private var sessionReplacementMessage: String {
+        guard let pending = appState.pendingSessionReplacement else { return "" }
+        return pending.intent.consequence(
+            currentModelPath: appState.modelPath,
+            isGenerating: pending.wasGenerating
+        )
     }
 
     @ViewBuilder
@@ -410,7 +376,8 @@ struct ContentView: View {
                 ChatPanel(store: appState.chatStore,
                           modelPath: appState.modelPath,
                           isShowingGenerationParameters: $isShowingChatGenerationParameters,
-                          onConnect: { appState.connectInference() })
+                          onConnect: { appState.connectInference() },
+                          onApplySessionConfig: { appState.requestSessionConfig($0) })
             }
         case .history:
             TrainingHistoryView(appState: appState)
@@ -452,13 +419,6 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-}
-
-/// 待执行的对话 state 动作(加载/卸下/断开),用于有聊天记录时的确认拦截。
-private enum PendingStateAction {
-    case load       // 加载/替换 state
-    case clear      // 卸下 state
-    case disconnect // 断开推理连接(会终止会话)
 }
 
 private struct StateActivationSheet: View {

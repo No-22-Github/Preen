@@ -75,6 +75,10 @@ final class AppState {
     private(set) var runs: [TrainingRun] = []
     private(set) var isSwitchingWorker = false
     private(set) var pendingStateActivation: StateActivationRequest?
+    private(set) var pendingSessionReplacement: PendingSessionReplacement?
+    private(set) var sessionReplacementError: String?
+    private(set) var isInspectingState = false
+    private let stateInspectionRunner = StateInspectionRunner()
 
     init(defaults: UserDefaults = .standard) {
         PythonResolver.ensureApplicationDirectories()
@@ -84,20 +88,24 @@ final class AppState {
         self.runRepository = repository
         self.backendStore = backend
         self.trainStore = TrainStore(repository: repository, backendStore: backend)
-        self.chatStore = ChatStore(backendStore: backend, runRepository: repository)
+        self.chatStore = ChatStore(backendStore: backend, runRepository: repository, defaults: defaults)
         self.toolboxStore = ToolboxStore()
     }
 
     // MARK: - 模型与进程协调
 
     func selectModel(path: String) {
+        guard path != modelCatalog.selectedPath else { return }
+        requestSessionReplacement(.selectModel(path))
+    }
+
+    private func performModelSelection(path: String) async {
         let previousPath = modelCatalog.selectedPath
+        if path != previousPath, chatStore.hasActiveProcess {
+            await chatStore.disconnectAndWait()
+        }
         modelCatalog.select(path: path)
         if modelCatalog.selectedPath != previousPath {
-            // 换模型不会自动重连；先终止旧模型，避免 Metal 内存池继续驻留。
-            if chatStore.hasActiveProcess {
-                chatStore.disconnect()
-            }
             // state 针对特定模型训练,换模型必须清,否则旧模型的 state 会继承给新模型。
             chatStore.clearState()
             injectedStatePath = nil
@@ -153,7 +161,68 @@ final class AppState {
     }
 
     func disconnectInference() {
-        chatStore.disconnect()
+        requestSessionReplacement(.disconnect)
+    }
+
+    // MARK: - 会话替换事务
+
+    /// 所有会清空/替换会话的入口都进入这里。确认前只保存意图，不改变页面、模型、
+    /// State、格式或当前生成；空会话则保持一键执行。
+    func requestSessionReplacement(_ intent: SessionReplacementIntent) {
+        if chatStore.hasReplaceableSessionContent {
+            pendingSessionReplacement = PendingSessionReplacement(
+                intent: intent,
+                wasGenerating: chatStore.isGenerating
+            )
+        } else {
+            Task { await executeSessionReplacement(intent) }
+        }
+    }
+
+    func confirmSessionReplacement() {
+        guard let pending = pendingSessionReplacement else { return }
+        pendingSessionReplacement = nil
+        Task { [weak self] in
+            guard let self else { return }
+            if pending.wasGenerating {
+                await chatStore.stopGenerationForSessionReplacement()
+            }
+            await executeSessionReplacement(pending.intent)
+        }
+    }
+
+    func cancelSessionReplacement() {
+        pendingSessionReplacement = nil
+    }
+
+    func requestSessionConfig(_ proposed: ChatSessionConfig) {
+        let normalized = proposed.normalized()
+        guard normalized.isValid else { return }
+        if normalized.formatFields == chatStore.sessionConfig.formatFields {
+            chatStore.applySessionConfig(normalized)
+        } else {
+            requestSessionReplacement(.applySessionConfig(normalized))
+        }
+    }
+
+    private func executeSessionReplacement(_ intent: SessionReplacementIntent) async {
+        switch intent {
+        case .activateState(let request, let template, let useSuggestedModel):
+            await performStateActivation(
+                request,
+                template: template,
+                useSuggestedModel: useSuggestedModel
+            )
+        case .clearState:
+            chatStore.clearState()
+            injectedStatePath = nil
+        case .applySessionConfig(let config):
+            chatStore.applySessionConfig(config)
+        case .selectModel(let path):
+            await performModelSelection(path: path)
+        case .disconnect:
+            await chatStore.disconnectAndWait()
+        }
     }
 
     /// 深链:切到工具箱并打开「模型转换」页(欢迎窗口 / 训练空态无模型时调用)。
@@ -211,6 +280,32 @@ final class AppState {
         trainingConfig: PersistedTrainingConfig? = nil,
         associatedRunID: UUID? = nil
     ) {
+        guard !isInspectingState else { return }
+        isInspectingState = true
+        sessionReplacementError = nil
+        Task { [weak self] in
+            guard let self else { return }
+            let outcome = await stateInspectionRunner.inspect(stateURL: stateURL)
+            isInspectingState = false
+            switch outcome {
+            case .success:
+                prepareStateActivation(
+                    stateURL: stateURL,
+                    trainingConfig: trainingConfig,
+                    associatedRunID: associatedRunID
+                )
+            case .failure(let message):
+                sessionReplacementError = message
+            }
+        }
+    }
+
+    /// 路径、格式与 RWKV-7 shape 预检成功后才形成 UI 请求。
+    private func prepareStateActivation(
+        stateURL: URL,
+        trainingConfig: PersistedTrainingConfig?,
+        associatedRunID: UUID?
+    ) {
         let metadata = StateMetadata.loadAdjacent(to: stateURL)
         let templateRaw = trainingConfig?.template ?? metadata?.template
         let template = templateRaw.flatMap(ChatTemplate.init(rawValue:))
@@ -241,35 +336,43 @@ final class AppState {
         if template == nil || requiresModelChoice {
             pendingStateActivation = request
         } else {
-            performStateActivation(
-                request,
-                template: template,
+            requestSessionReplacement(.activateState(
+                request: request,
+                template: template ?? .qa,
                 useSuggestedModel: request.autoSwitchModel
-            )
+            ))
         }
     }
 
     func confirmStateActivation(template: ChatTemplate, useSuggestedModel: Bool) {
         guard let request = pendingStateActivation else { return }
         pendingStateActivation = nil
-        performStateActivation(request, template: template, useSuggestedModel: useSuggestedModel)
+        requestSessionReplacement(.activateState(
+            request: request,
+            template: template,
+            useSuggestedModel: useSuggestedModel
+        ))
     }
 
     func cancelStateActivation() {
         pendingStateActivation = nil
     }
 
+    func clearSessionReplacementError() {
+        sessionReplacementError = nil
+    }
+
     private func performStateActivation(
         _ request: StateActivationRequest,
-        template: ChatTemplate?,
+        template: ChatTemplate,
         useSuggestedModel: Bool
-    ) {
+    ) async {
         if useSuggestedModel,
            let suggestedModel = request.suggestedModelPath,
            !suggestedModel.isEmpty,
            FileManager.default.fileExists(atPath: suggestedModel),
            suggestedModel != modelPath {
-            selectModel(path: suggestedModel)
+            await performModelSelection(path: suggestedModel)
         }
 
         chatStore.prepareSessionReplacement(
