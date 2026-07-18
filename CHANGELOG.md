@@ -17,6 +17,7 @@
 - **会话替换统一为 App 级安全事务**：加载/卸下 State、更改 template/reasoning/think、切换模型、断开后端，以及从训练完成页或记录打开比较，全部先形成包含目标模型、State、配置和落地页的意图；有消息、A/B 内容或生成中才显示同一确认，取消不会改变消息、模型、State、页面或生成。确认后先停止生成再只重建一次会话，失败进入明确断开态并保留诊断错误，不伪装回滚旧 cache；State 在确认前通过 `state-info` 只读检查路径、格式、层号连续性与 RWKV-7 shape。
 - **内置 NekoQA 200 首次训练**：App 随包提供经人工与自动审查的固定 200 条角色风格 QA 子集、版本化 manifest、源索引、SHA-256、Apache-2.0 LICENSE 与归属 NOTICE；欢迎页和训练页可在已有 BF16 模型时直接进入配置，无需选择数据文件，INT8/未选模型会先给出 BF16 引导。内置数据固定使用 `qa` 与 `ctx_len=512` 的语义默认值并复用现有训练参数和同源预检，运行记录新增 `dataset_source=builtin:nekoqa_200`、子集版本与 SHA；界面明确说明示例用于学习角色与表达风格、不用于学习新知识，用户仍可随时切回自己的数据。
 - **训练输出路径自动生成**：选择模型与数据后，App 默认在 `~/Library/Application Support/Preen/states/<数据>-<模型>-<时间>/state.npz` 生成带“自动”标记且不冲突的路径，模型或数据变化时自动更新，用户经“更改…”选择后则保持手动路径；同目录关联 `.meta.json` 与可选 `.pth`。启动前按模型层数、head 数和维度估算实际 fp32 State/PTH 及原子写入空间，并检查目录可写性、剩余容量和全部关联目标冲突；Python `validate_training_request` 同步改为在模型加载前拒绝覆盖已有 State/metadata/PTH，PTH 先写临时文件并完成 round-trip 校验后再原子提交。
+- **训练前数据预检与实际 loader 同源**：训练配置页现在通过 `dataset-preview --training-data-route` 按最终模型 tokenizer、模板、`ctx_len` 和 importer sidecar 全量渲染，默认展示 schema/置信度、有效数、token 分布、互斥的部分/完全截断、训练/验证与步数，并可展开 3 条结构化 prefix/target。数据、tokenizer、模板、上下文和映射共同形成工具箱共享缓存键；10K 以内自动重算，更大数据必须手动完成最终配置的完整检查。未知格式会带原路径进入数据导入器，转换完成后自动回到训练页选择标准产物；检查失败、配置过期或丢弃后样本归零均不会启动训练。
 
 ### 变更
 

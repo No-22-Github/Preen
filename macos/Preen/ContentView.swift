@@ -170,6 +170,9 @@ struct ContentView: View {
             appState.injectedStatePath = nil
             acknowledgeModelChip()
         }
+        .onChange(of: appState.toolboxStore.importedDatasetPath) { _, path in
+            appState.consumeImportedDatasetForTraining(path)
+        }
     }
 
     /// 模型选择器(toolbar 下拉菜单 + 精度胶囊,位于窗口中央)。
@@ -365,7 +368,11 @@ struct ContentView: View {
                 onConvertModel: { appState.goToModelConversion() },
                 welcomePresented: appState.isWelcomePresented,
                 builtinTrainingRequestID: appState.builtinTrainingRequestID,
+                importedTrainingDataRequest: appState.importedTrainingDataRequest,
                 onStart: { appState.startTraining(config: $0) },
+                onConfigureImport: {
+                    appState.configureTrainingDataImport(path: $0, ctxLen: $1)
+                },
                 onGoToChat: {
                     appState.goToChat(stateURL: $0, trainingConfig: $1, runID: $2)
                 }

@@ -23,13 +23,16 @@ struct TrainingPanel: View {
     var onConvertModel: () -> Void
     var welcomePresented: Bool
     var builtinTrainingRequestID: UUID?
+    var importedTrainingDataRequest: TrainingDataSelectionRequest?
     @State private var config: TrainingConfig = .defaultConfig
     @State private var phase: Phase = .empty  // idle 态下的子阶段
     @State private var showingChart = false
     @State private var handledBuiltinRequestID: UUID?
+    @State private var handledImportedRequestID: UUID?
     @State private var builtinDatasetError: String?
 
     var onStart: (TrainingConfig) -> Void
+    var onConfigureImport: (String, Int) -> Void
 
     /// 「去对话」回调:把产物 state 路径 + 训练用的模型路径传给对话面板(一键启动)。
     var onGoToChat: (URL, PersistedTrainingConfig?, UUID?) -> Void
@@ -58,6 +61,8 @@ struct TrainingPanel: View {
                 case .configuring:
                     TrainingConfigView(config: $config) {
                         onStart(config)
+                    } onConfigureImport: {
+                        onConfigureImport($0, config.ctxLen)
                     }
                     .toolbar {
                         ToolbarItem(placement: .navigation) {
@@ -109,9 +114,11 @@ struct TrainingPanel: View {
         .onAppear {
             config.modelPath = modelPath
             consumeBuiltinRequestIfNeeded()
+            consumeImportedRequestIfNeeded()
         }
         .onChange(of: modelPath) { _, newValue in config.modelPath = newValue }
         .onChange(of: builtinTrainingRequestID) { _, _ in consumeBuiltinRequestIfNeeded() }
+        .onChange(of: importedTrainingDataRequest?.id) { _, _ in consumeImportedRequestIfNeeded() }
         .alert(
             "无法使用内置示例",
             isPresented: Binding(
@@ -133,6 +140,24 @@ struct TrainingPanel: View {
         guard let id = builtinTrainingRequestID, id != handledBuiltinRequestID else { return }
         handledBuiltinRequestID = id
         useBuiltinDataset()
+    }
+
+    private func consumeImportedRequestIfNeeded() {
+        guard let request = importedTrainingDataRequest,
+              request.id != handledImportedRequestID else { return }
+        handledImportedRequestID = request.id
+        config.markDataAsUserSelected(path: request.path)
+        let sidecar = URL(fileURLWithPath: request.path)
+            .appendingPathExtension("import.json")
+        if let data = try? Data(contentsOf: sidecar),
+           let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let result = root["result"] as? [String: Any],
+           let template = result["template"] as? String,
+           let selected = TrainingTemplate(rawValue: template) {
+            config.template = selected
+        }
+        config.refreshAutomaticOutputPath()
+        phase = .configuring
     }
 
     private func useBuiltinDataset() {

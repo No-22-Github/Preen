@@ -258,6 +258,7 @@ def inspect_standard_records(
         if ctx_len < prefix_len:
             target_lost += 1
         if on_rendered is not None:
+            overflow = max(0, length - ctx_len)
             on_rendered({
                 "full_text": prefix + target,
                 "prefix_text": prefix,
@@ -267,6 +268,9 @@ def inspect_standard_records(
                 "prompt_text": q,
                 "response_text": a,
                 "truncated": length > ctx_len,
+                "stop_token_appended": True,
+                "truncated_prefix_tokens": min(overflow, prefix_len),
+                "truncated_target_tokens": max(0, overflow - prefix_len),
             })
         report_progress(index + 1)
 

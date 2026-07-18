@@ -678,6 +678,40 @@
 "State、metadata 与可选 PTH 将保存在同一目录；已有文件绝不会被覆盖。" = "The State, metadata, and optional PTH are saved together; existing files are never overwritten.";
 "更改…" = "Change…";
 
+/* Training data preflight shared with Toolbox. */
+"预检后没有可训练样本" = "No Trainable Samples Remain After Preflight";
+"必须先完成与当前配置同口径的数据检查" = "Complete a data check for the current configuration first";
+"无法直接训练此数据格式" = "This data format cannot be trained directly";
+"在数据导入器中配置" = "Configure in Data Importer";
+"运行完整检查" = "Run Full Check";
+"数据检查失败：%@" = "Data check failed: %@";
+"训练前数据检查" = "Training Data Preflight";
+"已复用缓存" = "Reused Cache";
+"正在按最终模板检查全部样本…" = "Checking every sample with the final template…";
+"无法识别为训练可直接读取的数据" = "The data is not in a directly trainable format";
+"请在数据导入器中选择字段映射并转换为标准 JSONL；完成后会自动回到这里。" = "Choose a field mapping in Data Importer and convert to standard JSONL. You will return here automatically when it finishes.";
+"检查失败" = "Check Failed";
+"约 %lld 条；为避免每次改参数都重新 tokenize，大数据需手动完成一次最终口径检查。" = "About %lld records. To avoid tokenizing again after every parameter change, run one final full check manually for large datasets.";
+"尚未完成检查。" = "The check has not been completed.";
+"部分前缀截断" = "Partial Prefix Truncation";
+"Target 完全截断" = "Target Fully Truncated";
+"训练 / 验证" = "Training / Validation";
+"预计步数" = "Estimated Steps";
+"将丢弃 %lld 条截断样本，步数已按剩余样本重算。" = "%lld truncated samples will be dropped; steps were recalculated from the remaining samples.";
+"有 %lld 条 target 完全截断；建议增加 ctx_len 或启用丢弃超长样本。" = "%lld targets are fully truncated. Increase ctx_len or enable dropping overlength samples.";
+"有 %lld 条只截去前缀头部；训练会保留 target 与 stop token。" = "%lld samples trim only the start of the prefix; training keeps the target and stop token.";
+"最终模板预览（%lld 条）" = "Final Template Preview (%lld)";
+"未追加 stop token" = "Stop token not appended";
+"已追加 stop token" = "Stop token appended";
+"截断进入 target（%lld tokens）" = "Truncation reaches target (%lld tokens)";
+"仅截去前缀头部（%lld tokens）" = "Only prefix start trimmed (%lld tokens)";
+"未截断" = "Not Truncated";
+"转换为训练数据" = "Convert to Training Data";
+"数据检查已取消" = "Data check cancelled";
+"无法解析数据检查结果" = "Unable to parse the data check result";
+"数据检查进程异常退出" = "The data check process exited unexpectedly";
+"已复用相同配置的数据检查缓存" = "Reused the data check cache for the same configuration";
+
 /* About screen descriptions. */
 "核心训练/推理引擎，提供 rwkv7.py 前向与自动微分" = "Core training and inference engine providing the rwkv7.py forward pass and automatic differentiation.";
 "Apple 机器学习框架，张量运算与自动微分的底层地基" = "Apple's machine-learning framework for tensor operations and automatic differentiation.";

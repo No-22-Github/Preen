@@ -4,7 +4,9 @@ import numpy as np
 import pytest
 
 from statetuner import inspection
-from statetuner.inspection import inspect_data, load_qa_pairs, validate_state_for_model
+from statetuner.inspection import (
+    inspect_data, inspect_standard_records, load_qa_pairs, validate_state_for_model,
+)
 
 
 class CharTokenizer:
@@ -102,6 +104,34 @@ def test_inspect_data_rejects_wrong_field_type(tmp_path):
     path.write_text('[{"instruction": 123, "output": "a"}]', encoding="utf-8")
     with pytest.raises(ValueError, match="instruction must be a string"):
         inspect_data(path, CharTokenizer())
+
+
+def test_rendered_sample_reports_which_segment_is_truncated():
+    rows = [{"prompt": "q", "response": "a"}]
+    full = []
+    inspect_standard_records(
+        rows, CharTokenizer(), template="qa", ctx_len=10_000,
+        on_rendered=full.append,
+    )
+    token_count = full[0]["token_count"]
+    prefix_len = full[0]["prefix_len"]
+    assert full[0]["stop_token_appended"] is True
+
+    prefix_only = []
+    inspect_standard_records(
+        rows, CharTokenizer(), template="qa", ctx_len=token_count - 1,
+        on_rendered=prefix_only.append,
+    )
+    assert prefix_only[0]["truncated_prefix_tokens"] == 1
+    assert prefix_only[0]["truncated_target_tokens"] == 0
+
+    into_target = []
+    inspect_standard_records(
+        rows, CharTokenizer(), template="qa", ctx_len=1,
+        on_rendered=into_target.append,
+    )
+    assert into_target[0]["truncated_prefix_tokens"] == prefix_len
+    assert into_target[0]["truncated_target_tokens"] == token_count - 1 - prefix_len
 
 
 def test_load_qa_pairs_allows_missing_reference(tmp_path):

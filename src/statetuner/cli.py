@@ -981,6 +981,11 @@ def dataset_preview(
         None, "--cache-out", help="Optional JSONL page cache for the complete rendered preview",
     ),
     page_size: int = typer.Option(20, "--page-size", min=1, max=200),
+    template: str = typer.Option("auto", "--template", help="auto | qa | instruction"),
+    training_data_route: bool = typer.Option(
+        False, "--training-data-route",
+        help="Preview the exact legacy/standard loader route used by training",
+    ),
 ):
     """Detect a dataset format, inspect all records, and return the first preview page.
 
@@ -999,6 +1004,10 @@ def dataset_preview(
         _bad_input(ValueError("--prompt-key and --response-key must be provided together"))
     if not 1 <= page_size <= 200:
         _bad_input(ValueError("--page-size must be between 1 and 200"))
+    if template not in ("auto", "qa", "instruction"):
+        _bad_input(ValueError("--template supports only auto / qa / instruction"))
+    if not training_data_route and template != "auto":
+        _bad_input(ValueError("--template overrides require --training-data-route"))
 
     from .importer import (
         convert, detect_schema, detection_for_fields, read_records,
@@ -1024,16 +1033,85 @@ def dataset_preview(
         detection = detect_schema(items)
         if prompt_key is not None:
             detection = detection_for_fields(items, prompt_key, response_key or "")
+        detection_payload = detection.to_dict()
 
         result_payload = None
         rendered_payload: list[dict] = []
         inspection_payload = None
         pagination_payload = None
-        if detection.schema != "unknown":
+        records = None
+        effective_template = None
+        if training_data_route:
+            from .service import _has_import_sidecar
+
+            if _has_import_sidecar(data):
+                # Importer products are already normalized; training selects the
+                # standard loader from the sidecar and applies the chosen template.
+                records = items
+                effective_template = template if template != "auto" else "qa"
+                sidecar = data.with_name(data.stem + data.suffix + ".import.json")
+                try:
+                    sidecar_payload = json.loads(sidecar.read_text(encoding="utf-8"))
+                    result_payload = sidecar_payload.get("result") or sidecar_payload
+                    stored_detection = result_payload.get("detection") if isinstance(result_payload, dict) else None
+                    if isinstance(stored_detection, dict):
+                        detection_payload = stored_detection
+                    else:
+                        detection_payload = detection.to_dict()
+                    recommended = result_payload.get("template") if isinstance(result_payload, dict) else None
+                    if template == "auto" and recommended in ("qa", "instruction"):
+                        effective_template = recommended
+                except (OSError, ValueError, TypeError):
+                    detection_payload = detection.to_dict()
+                if result_payload is None:
+                    result_payload = {
+                        "template": effective_template,
+                        "turn_policy": turn_policy,
+                        "dropped_system": 0,
+                        "dropped_other": 0,
+                        "qa_degradation_hint": False,
+                        "record_count": len(records),
+                    }
+            else:
+                # The legacy training loader accepts only instruction/output and
+                # always renders it as QA. Do not preview unsupported raw schemas
+                # as if training could consume them.
+                legacy_records = []
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    prompt = item.get("instruction")
+                    response = item.get("output")
+                    if isinstance(prompt, str) and isinstance(response, str):
+                        legacy_records.append({"prompt": prompt, "response": response})
+                if legacy_records and template in ("auto", "qa"):
+                    records = legacy_records
+                    effective_template = "qa"
+                    detection = detection_for_fields(items, "instruction", "output")
+                    detection_payload = detection.to_dict()
+                    result_payload = {
+                        "template": "qa",
+                        "turn_policy": turn_policy,
+                        "dropped_system": 0,
+                        "dropped_other": len(items) - len(legacy_records),
+                        "qa_degradation_hint": False,
+                        "record_count": len(legacy_records),
+                    }
+                else:
+                    detection_payload = dict(detection.to_dict())
+                    detection_payload["schema"] = "unknown"
+                    detection_payload["confidence"] = 0.0
+        elif detection.schema != "unknown":
             converted = convert(items, detection, turn_policy=turn_policy)  # type: ignore[arg-type]
+            records = converted.records
+            effective_template = converted.template if template == "auto" else template
             result_payload = converted.to_dict()
+            result_payload["template"] = effective_template
+            detection_payload = detection.to_dict()
+
+        if records is not None and effective_template is not None:
             emitter.emit(tool_progress(
-                tool, "inspect", f"Preparing to check {len(converted.records)} samples",
+                tool, "inspect", f"Preparing to check {len(records)} samples",
             ))
 
             def report_inspection_progress(current: int, total: int) -> None:
@@ -1049,11 +1127,11 @@ def dataset_preview(
             if cache_out is not None:
                 with PreviewCacheWriter(cache_out, page_size=page_size) as cache:
                     inspected = inspect_standard_records(
-                        converted.records, tokenizer, template=converted.template,
+                        records, tokenizer, template=effective_template,
                         ctx_len=ctx_len, path=str(data), on_rendered=cache.append,
                         on_progress=report_inspection_progress,
                     )
-                    meta = cache.commit(template=converted.template, ctx_len=ctx_len)
+                    meta = cache.commit(template=effective_template, ctx_len=ctx_len)
                     rendered_payload = cache.first_page
                 pagination_payload = {
                     "cache_path": str(cache_out),
@@ -1067,18 +1145,20 @@ def dataset_preview(
                         rendered_payload.append(sample)
 
                 inspected = inspect_standard_records(
-                    converted.records, tokenizer, template=converted.template,
+                    records, tokenizer, template=effective_template,
                     ctx_len=ctx_len, path=str(data), on_rendered=collect_first_page,
                     on_progress=report_inspection_progress,
                 )
             inspection_payload = inspected.to_dict()
-            if converted.dropped_system:
+            dropped_system = int((result_payload or {}).get("dropped_system", 0))
+            dropped_other = int((result_payload or {}).get("dropped_other", 0))
+            if dropped_system:
                 emitter.emit(tool_warning(
-                    tool, f"Ignored {converted.dropped_system} system messages",
+                    tool, f"Ignored {dropped_system} system messages",
                 ))
-            if converted.dropped_other:
+            if dropped_other:
                 emitter.emit(tool_warning(
-                    tool, f"Ignored {converted.dropped_other} unpaired records",
+                    tool, f"Ignored {dropped_other} unpaired records",
                 ))
             if inspected.truncated:
                 emitter.emit(tool_warning(
@@ -1089,7 +1169,7 @@ def dataset_preview(
             str(key) for item in detection.sample if isinstance(item, dict) for key in item.keys()
         })
         payload = {
-            "detection": detection.to_dict(),
+            "detection": detection_payload,
             "result": result_payload,
             "preview": rendered_payload,
             "inspection": inspection_payload,

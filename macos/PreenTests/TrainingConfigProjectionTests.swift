@@ -6,6 +6,27 @@ import XCTest
 /// 历史 bug：旧预估用 valid * epochs，没扣 held-out，导致面板显示 400 步而实际只跑 360 步。
 final class TrainingConfigProjectionTests: XCTestCase {
 
+    func testPreflightTruncationSeveritiesAreMutuallyExclusive() {
+        let inspection = DatasetInspectionResult(
+            total: 12, valid: 10, truncated: 4, targetFullyTruncated: 1,
+            minTokens: 1, meanTokens: 2, p95Tokens: 3, maxTokens: 4,
+            ctxLen: 8, template: "qa"
+        )
+        XCTAssertEqual(inspection.partialTruncated, 3)
+        XCTAssertEqual(inspection.usableCount(dropTruncated: false), 10)
+        XCTAssertEqual(inspection.usableCount(dropTruncated: true), 6)
+    }
+
+    func testPreflightUsableCountCannotBecomeNegative() {
+        let inspection = DatasetInspectionResult(
+            total: 1, valid: 0, truncated: 1, targetFullyTruncated: 1,
+            minTokens: 0, meanTokens: 0, p95Tokens: 0, maxTokens: 0,
+            ctxLen: 1, template: "qa"
+        )
+        XCTAssertEqual(inspection.partialTruncated, 0)
+        XCTAssertEqual(inspection.usableCount(dropTruncated: true), 0)
+    }
+
     /// 用户真实场景：200 条全有效、早停开、test_ratio 0.1、2 epoch。
     /// train_test_split: n_test = max(1, int(200*0.1)) = 20 → train 180。
     /// total_steps = 180 * 2 = 360（旧 buggy 预估会给 400）。

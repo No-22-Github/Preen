@@ -9,6 +9,11 @@
 import Foundation
 import Observation
 
+struct TrainingDataSelectionRequest: Equatable {
+    let id: UUID
+    let path: String
+}
+
 /// 侧边栏选中项。
 enum SidebarItem: String, CaseIterable, Identifiable {
     case training
@@ -54,6 +59,8 @@ final class AppState {
     var selection: SidebarItem = .training
     var selectedRunID: UUID?
     private(set) var builtinTrainingRequestID: UUID?
+    private(set) var importedTrainingDataRequest: TrainingDataSelectionRequest?
+    private var returnsToTrainingAfterDatasetImport = false
 
     /// 是否显示欢迎窗口(主窗口的模态 sheet)。为 true 时侧栏也会收起,让背景呈空状态。
     /// 首启 / 「窗口 → 欢迎使用 Preen」菜单翻为 true;sheet 关闭(WelcomeView dismiss / 点背景)翻回 false。
@@ -230,6 +237,26 @@ final class AppState {
     func goToModelConversion() {
         toolboxStore.pendingTool = "modelConversion"
         selection = .toolbox
+    }
+
+    func configureTrainingDataImport(path: String, ctxLen: Int) {
+        toolboxStore.selectDatasetSource(path: path)
+        toolboxStore.datasetContextLength = ctxLen
+        toolboxStore.datasetOutputPath = PythonResolver.datasetsDirectory
+            .appendingPathComponent(
+                URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+                    + ".standard.jsonl"
+            ).path
+        toolboxStore.pendingTool = "datasetPreview"
+        returnsToTrainingAfterDatasetImport = true
+        selection = .toolbox
+    }
+
+    func consumeImportedDatasetForTraining(_ path: String?) {
+        guard returnsToTrainingAfterDatasetImport, let path, !path.isEmpty else { return }
+        returnsToTrainingAfterDatasetImport = false
+        importedTrainingDataRequest = TrainingDataSelectionRequest(id: UUID(), path: path)
+        selection = .training
     }
 
     /// 欢迎页的一键示例入口；TrainingPanel 收到 revision 后从 Bundle 读取固定数据。

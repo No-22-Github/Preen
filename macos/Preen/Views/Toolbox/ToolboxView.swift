@@ -482,6 +482,12 @@ struct ToolboxView: View {
                 } else {
                     analysisSummary(analysis)
                     samplePreview(store.datasetPreviewSamples)
+                    Button {
+                        path.append(.datasetConversion)
+                    } label: {
+                        Label("转换为训练数据", systemImage: "arrow.right.circle.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
             }
         }

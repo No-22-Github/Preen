@@ -40,7 +40,7 @@ struct QuantizationResult: Decodable, Equatable {
     }
 }
 
-struct DatasetDetectionResult: Decodable, Equatable {
+struct DatasetDetectionResult: Codable, Equatable {
     let schema: String
     let promptKeys: [String]
     let responseKeys: [String]
@@ -55,7 +55,7 @@ struct DatasetDetectionResult: Decodable, Equatable {
     }
 }
 
-struct DatasetConversionSummary: Decodable, Equatable {
+struct DatasetConversionSummary: Codable, Equatable {
     let template: String
     let turnPolicy: String
     let droppedSystem: Int
@@ -73,7 +73,7 @@ struct DatasetConversionSummary: Decodable, Equatable {
     }
 }
 
-struct DatasetInspectionResult: Decodable, Equatable {
+struct DatasetInspectionResult: Codable, Equatable {
     let total: Int
     let valid: Int
     let truncated: Int
@@ -96,7 +96,19 @@ struct DatasetInspectionResult: Decodable, Equatable {
     }
 }
 
-struct DatasetRenderedSample: Decodable, Equatable, Identifiable {
+extension DatasetInspectionResult {
+    /// `truncated` includes fully-truncated targets in the backend aggregate.
+    /// Keep the two user-facing severities mutually exclusive.
+    var partialTruncated: Int {
+        max(0, truncated - targetFullyTruncated)
+    }
+
+    func usableCount(dropTruncated: Bool) -> Int {
+        max(0, valid - (dropTruncated ? truncated : 0))
+    }
+}
+
+struct DatasetRenderedSample: Codable, Equatable, Identifiable {
     var id: String { "\(prefixLen)-\(promptText)-\(responseText)" }
     let fullText: String
     let prefixText: String
@@ -106,6 +118,9 @@ struct DatasetRenderedSample: Decodable, Equatable, Identifiable {
     let promptText: String
     let responseText: String
     let truncated: Bool
+    let stopTokenAppended: Bool?
+    let truncatedPrefixTokens: Int?
+    let truncatedTargetTokens: Int?
 
     enum CodingKeys: String, CodingKey {
         case fullText = "full_text"
@@ -116,10 +131,13 @@ struct DatasetRenderedSample: Decodable, Equatable, Identifiable {
         case promptText = "prompt_text"
         case responseText = "response_text"
         case truncated
+        case stopTokenAppended = "stop_token_appended"
+        case truncatedPrefixTokens = "truncated_prefix_tokens"
+        case truncatedTargetTokens = "truncated_target_tokens"
     }
 }
 
-struct DatasetPreviewResult: Decodable, Equatable {
+struct DatasetPreviewResult: Codable, Equatable {
     let detection: DatasetDetectionResult
     let result: DatasetConversionSummary?
     let preview: [DatasetRenderedSample]
@@ -135,7 +153,7 @@ struct DatasetPreviewResult: Decodable, Equatable {
     }
 }
 
-struct DatasetPreviewPagination: Decodable, Equatable {
+struct DatasetPreviewPagination: Codable, Equatable {
     let cachePath: String
     let total: Int
     let pageSize: Int
@@ -149,7 +167,7 @@ struct DatasetPreviewPagination: Decodable, Equatable {
     }
 }
 
-struct DatasetPreviewPageResult: Decodable, Equatable {
+struct DatasetPreviewPageResult: Codable, Equatable {
     let preview: [DatasetRenderedSample]
     let page: Int
     let pageSize: Int
@@ -207,6 +225,7 @@ final class ToolboxStore {
 
     private var runner: ToolJobRunner?
     private var datasetPreviewCachePath: String?
+    private var pendingDatasetCacheKey: DatasetPreflightCacheKey?
 
     var isRunning: Bool { runner?.isRunning == true }
     var canConvertModel: Bool {
@@ -289,10 +308,28 @@ final class ToolboxStore {
         removeDatasetPreviewCache()
         datasetAnalysis = nil
         resetDatasetPreviewPage()
-        let cachePath = FileManager.default.temporaryDirectory
-            .appendingPathComponent("Preen/DatasetPreview", isDirectory: true)
-            .appendingPathComponent(UUID().uuidString + ".jsonl")
-            .path
+        let cacheKey = DatasetPreflightCache.makeKey(
+            modelPath: modelPath,
+            dataPath: datasetSourcePath,
+            ctxLen: datasetContextLength,
+            template: "auto",
+            turnPolicy: datasetTurnPolicy,
+            promptKey: manualPromptKey,
+            responseKey: manualResponseKey,
+            trainingDataRoute: false
+        )
+        if let cached = DatasetPreflightCache.load(cacheKey) {
+            errorMessage = nil
+            warnings = []
+            datasetNeedsRefresh = false
+            presentationTool = "dataset"
+            applyDatasetAnalysis(cached)
+            datasetState = .completed
+            statusMessage = L10n.string("已复用相同配置的数据检查缓存")
+            return
+        }
+        let cachePath = cacheKey.previewURL.path
+        pendingDatasetCacheKey = cacheKey
         datasetPreviewCachePath = cachePath
         begin(tool: "dataset")
         datasetState = .running
@@ -304,6 +341,7 @@ final class ToolboxStore {
             "--data", datasetSourcePath,
             "--ctx-len", String(datasetContextLength),
             "--turn-policy", datasetTurnPolicy,
+            "--template", "auto",
             "--cache-out", cachePath,
             "--page-size", String(datasetPreviewPageSize),
         ]
@@ -508,13 +546,10 @@ final class ToolboxStore {
                     modelState = .completed
                 } else if event.tool == "dataset_preview", let result = event.result {
                     let analysis = try result.decode(DatasetPreviewResult.self)
-                    datasetAnalysis = analysis
-                    datasetPreviewSamples = analysis.preview
-                    datasetPreviewPage = 1
-                    datasetPreviewPageSize = analysis.pagination?.pageSize ?? 20
-                    datasetPreviewPageCount = analysis.pagination?.pageCount ?? (analysis.preview.isEmpty ? 0 : 1)
-                    datasetPreviewTotal = analysis.pagination?.total ?? analysis.preview.count
-                    datasetPreviewCachePath = analysis.pagination?.cachePath
+                    applyDatasetAnalysis(analysis)
+                    if let key = pendingDatasetCacheKey {
+                        DatasetPreflightCache.save(analysis, for: key)
+                    }
                     datasetState = .completed
                 } else if event.tool == "dataset_preview_page", let result = event.result {
                     let page = try result.decode(DatasetPreviewPageResult.self)
@@ -593,10 +628,25 @@ final class ToolboxStore {
         datasetPreviewTotal = 0
     }
 
+    private func applyDatasetAnalysis(_ analysis: DatasetPreviewResult) {
+        datasetAnalysis = analysis
+        datasetPreviewSamples = analysis.preview
+        datasetPreviewPage = 1
+        datasetPreviewPageSize = analysis.pagination?.pageSize ?? max(1, analysis.preview.count)
+        datasetPreviewPageCount = analysis.pagination?.pageCount ?? (analysis.preview.isEmpty ? 0 : 1)
+        datasetPreviewTotal = analysis.pagination?.total ?? analysis.preview.count
+        datasetPreviewCachePath = analysis.pagination?.cachePath
+    }
+
     private func removeDatasetPreviewCache() {
         guard let path = datasetPreviewCachePath else { return }
-        try? FileManager.default.removeItem(atPath: path)
-        try? FileManager.default.removeItem(atPath: path + ".meta.json")
+        // UUID-era temporary caches remain disposable. Stable shared preflight
+        // caches live under ~/Library/Caches/Preen and are reused by training.
+        if !path.hasPrefix(DatasetPreflightCache.rootURL.path) {
+            try? FileManager.default.removeItem(atPath: path)
+            try? FileManager.default.removeItem(atPath: path + ".meta.json")
+        }
         datasetPreviewCachePath = nil
+        pendingDatasetCacheKey = nil
     }
 }

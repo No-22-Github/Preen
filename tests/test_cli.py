@@ -96,6 +96,124 @@ def test_dataset_preview_emits_render_and_inspection(tmp_path, monkeypatch):
     assert payload["preview"][0]["full_text"] == (
         payload["preview"][0]["prefix_text"] + payload["preview"][0]["target_text"]
     )
+    assert payload["preview"][0]["stop_token_appended"] is True
+    assert payload["preview"][0]["truncated_prefix_tokens"] == 0
+    assert payload["preview"][0]["truncated_target_tokens"] == 0
+
+
+def test_dataset_preview_training_route_matches_legacy_qa_loader(tmp_path, monkeypatch):
+    class Tokenizer:
+        @staticmethod
+        def encode(text):
+            return [ord(char) for char in text]
+
+    model = tmp_path / "model"
+    model.mkdir()
+    source = tmp_path / "neko.json"
+    source.write_text(
+        json.dumps([{"instruction": "你好", "output": "喵"}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("mlx_lm.utils.load_tokenizer", lambda *args, **kwargs: Tokenizer())
+    result = runner.invoke(app, [
+        "dataset-preview", "--model", str(model), "--data", str(source),
+        "--template", "qa", "--training-data-route", "--ctx-len", "128",
+    ])
+    assert result.exit_code == 0, result.output
+    payload = [json.loads(line) for line in result.stdout.splitlines() if line.strip()][-1]["result"]
+    assert payload["detection"]["schema"] == "bare_qa"
+    assert payload["inspection"]["template"] == "qa"
+    assert payload["preview"][0]["prefix_text"] == "User: 你好\n\nAssistant:"
+    assert payload["preview"][0]["target_text"] == " 喵"
+
+
+def test_dataset_preview_training_route_marks_unimported_schema_unknown(tmp_path, monkeypatch):
+    class Tokenizer:
+        @staticmethod
+        def encode(text):
+            return [ord(char) for char in text]
+
+    model = tmp_path / "model"
+    model.mkdir()
+    source = tmp_path / "messages.jsonl"
+    source.write_text(
+        json.dumps({"messages": [
+            {"role": "user", "content": "你好"},
+            {"role": "assistant", "content": "喵"},
+        ]}, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("mlx_lm.utils.load_tokenizer", lambda *args, **kwargs: Tokenizer())
+    result = runner.invoke(app, [
+        "dataset-preview", "--model", str(model), "--data", str(source),
+        "--template", "qa", "--training-data-route",
+    ])
+    assert result.exit_code == 0, result.output
+    payload = [json.loads(line) for line in result.stdout.splitlines() if line.strip()][-1]["result"]
+    assert payload["detection"]["schema"] == "unknown"
+    assert payload["inspection"] is None
+    assert payload["preview"] == []
+
+
+def test_dataset_preview_training_route_uses_import_sidecar_template(tmp_path, monkeypatch):
+    class Tokenizer:
+        @staticmethod
+        def encode(text):
+            return [ord(char) for char in text]
+
+    model = tmp_path / "model"
+    model.mkdir()
+    source = tmp_path / "standard.jsonl"
+    source.write_text(
+        json.dumps({
+            "instruction": "翻译", "input": "cat", "response": "猫",
+        }, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    sidecar = source.with_name(source.stem + source.suffix + ".import.json")
+    sidecar.write_text(json.dumps({
+        "result": {
+            "template": "instruction",
+            "turn_policy": "first",
+            "dropped_system": 0,
+            "dropped_other": 0,
+            "qa_degradation_hint": False,
+            "record_count": 1,
+            "detection": {
+                "schema": "alpaca",
+                "prompt_keys": ["instruction", "input"],
+                "response_keys": ["output"],
+                "confidence": 1.0,
+                "total_sampled": 1,
+            },
+        },
+    }), encoding="utf-8")
+    monkeypatch.setattr("mlx_lm.utils.load_tokenizer", lambda *args, **kwargs: Tokenizer())
+    result = runner.invoke(app, [
+        "dataset-preview", "--model", str(model), "--data", str(source),
+        "--template", "auto", "--training-data-route", "--ctx-len", "128",
+    ])
+    assert result.exit_code == 0, result.output
+    payload = [json.loads(line) for line in result.stdout.splitlines() if line.strip()][-1]["result"]
+    assert payload["detection"]["schema"] == "alpaca"
+    assert payload["inspection"]["template"] == "instruction"
+    assert payload["preview"][0]["prefix_text"] == (
+        "Instruction: 翻译\n\nInput: cat\n\nResponse:"
+    )
+    assert payload["preview"][0]["target_text"] == " 猫"
+
+
+def test_dataset_preview_rejects_template_override_outside_training_route(tmp_path):
+    model = tmp_path / "model"
+    model.mkdir()
+    source = tmp_path / "data.jsonl"
+    source.write_text('{"prompt":"q","response":"a"}\n', encoding="utf-8")
+    result = runner.invoke(app, [
+        "dataset-preview", "--model", str(model), "--data", str(source),
+        "--template", "qa",
+    ])
+    assert result.exit_code != 0
+    assert "--training-data-route" in plain(result.output)
 
 
 def test_dataset_preview_cache_pages_without_returning_all_rows(tmp_path, monkeypatch):
