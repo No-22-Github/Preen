@@ -364,6 +364,7 @@ struct ContentView: View {
                 },
                 onConvertModel: { appState.goToModelConversion() },
                 welcomePresented: appState.isWelcomePresented,
+                builtinTrainingRequestID: appState.builtinTrainingRequestID,
                 onStart: { appState.startTraining(config: $0) },
                 onGoToChat: {
                     appState.goToChat(stateURL: $0, trainingConfig: $1, runID: $2)

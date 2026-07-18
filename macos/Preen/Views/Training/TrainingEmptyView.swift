@@ -14,6 +14,7 @@ struct TrainingEmptyView: View {
     var recentRuns: [TrainingRun]
     var onSelectRun: (TrainingRun) -> Void
     var onConfigured: () -> Void  // 选完数据,进配置态
+    var onUseBuiltin: () -> Void
     var onConvertModel: () -> Void  // 无模型时跳工具箱·模型转换
     var welcomePresented: Bool  // 欢迎窗口在前台时强制收起右侧「最近训练」inspector
 
@@ -80,6 +81,22 @@ struct TrainingEmptyView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
 
+            HStack(spacing: 10) {
+                Button(action: onUseBuiltin) {
+                    Label("使用内置示例", systemImage: "sparkles")
+                }
+                .buttonStyle(.borderedProminent)
+                .help("NekoQA 200 · 角色风格 QA · 推荐首次体验")
+
+                Button("选择自己的数据…") { pickOwnData() }
+                    .buttonStyle(.bordered)
+            }
+
+            Text("内置 NekoQA 200 用于体验角色与表达风格迁移，不用于学习新知识。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
             dropZone
                 .frame(maxWidth: 440)
 
@@ -137,6 +154,13 @@ struct TrainingEmptyView: View {
         }
         .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onChange(of: config.dataPath) { _, newValue in
+            let bundledPath = try? BuiltinDataset.nekoQA200().dataURL.standardizedFileURL.path
+            let selectedPath = URL(fileURLWithPath: newValue).standardizedFileURL.path
+            if config.datasetSource != nil && selectedPath != bundledPath {
+                config.markDataAsUserSelected(path: newValue)
+            }
+        }
     }
 
     /// 拖拽接受区:把文件拖进来直接设为训练数据,也保留点击走 Open Panel。
@@ -180,10 +204,20 @@ struct TrainingEmptyView: View {
             let accepted = ["json", "jsonl", "csv"]
             DispatchQueue.main.async {
                 if accepted.contains(ext) {
-                    config.dataPath = url.path
+                    config.markDataAsUserSelected(path: url.path)
                 }
             }
         }
         return true
+    }
+
+    private func pickOwnData() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url {
+            config.markDataAsUserSelected(path: url.path)
+        }
     }
 }

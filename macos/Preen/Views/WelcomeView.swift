@@ -16,6 +16,7 @@ struct WelcomeView: View {
     @Bindable var appState: AppState
     @Environment(\.dismiss) private var dismiss
     @AppStorage("welcomeShowsAtLaunch") private var showsAtLaunch = true
+    @State private var showBuiltinModelGuide = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -31,7 +32,17 @@ struct WelcomeView: View {
             Divider()
             footer
         }
-        .frame(width: 720, height: 460)
+        .frame(width: 720, height: 520)
+        .alert("内置示例训练需要 BF16 模型", isPresented: $showBuiltinModelGuide) {
+            Button("选择 BF16 模型…") { pickModelForBuiltinExample() }
+            Button("去工具箱转换") {
+                appState.goToModelConversion()
+                dismiss()
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("量化模型可用于推理，训练需要 BF16 权重。准备好模型后即可离线使用 NekoQA 200 开始训练。")
+        }
     }
 
     // MARK: - 头部:用途一句话
@@ -85,8 +96,18 @@ struct WelcomeView: View {
 
             WelcomeAction(
                 index: 3,
+                icon: "sparkles",
+                title: "使用内置示例训练",
+                subtitle: "NekoQA 200 · 无需准备数据",
+                prominent: !appState.modelPath.isEmpty && ModelConfigProbe.isTrainable(modelPath: appState.modelPath)
+            ) {
+                beginBuiltinExample()
+            }
+
+            WelcomeAction(
+                index: 4,
                 icon: "graduationcap",
-                title: "选择训练数据",
+                title: "选择自己的训练数据",
                 subtitle: "JSONL / JSON / CSV，自动探测格式",
                 prominent: false
             ) {
@@ -110,6 +131,32 @@ struct WelcomeView: View {
             appState.selection = .training
             dismiss()
         }
+    }
+
+    private func beginBuiltinExample() {
+        guard !appState.modelPath.isEmpty,
+              ModelConfigProbe.isTrainable(modelPath: appState.modelPath) else {
+            showBuiltinModelGuide = true
+            return
+        }
+        appState.requestBuiltinExampleTraining()
+        dismiss()
+    }
+
+    private func pickModelForBuiltinExample() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = L10n.string("选择 BF16 模型目录")
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard ModelConfigProbe.isTrainable(modelPath: url.path) else {
+            showBuiltinModelGuide = true
+            return
+        }
+        appState.selectModel(path: url.path)
+        appState.requestBuiltinExampleTraining()
+        dismiss()
     }
 
     // MARK: - 右列:最近模型

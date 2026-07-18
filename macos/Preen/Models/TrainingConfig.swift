@@ -37,6 +37,9 @@ struct TrainingConfig: Equatable {
     var dataPath: String = ""
     var outPath: String = ""  // 默认 state.npz,UI 会填
     var eventsFilePath: String = ""  // 可选,诊断用
+    var datasetSource: String? = nil
+    var datasetVersion: String? = nil
+    var datasetSHA256: String? = nil
 
     // === 超参(默认值与 cli.py 一致)===
     var lr: Double = 1e-4
@@ -171,7 +174,17 @@ struct TrainingConfig: Equatable {
             cacheLimitGB: cacheLimitGb,
             checkpointDirectory: checkpointDir.isEmpty ? nil : checkpointDir,
             exportPth: exportPth,
-            pthOutputPath: pthOutPath.isEmpty ? nil : pthOutPath
+            pthOutputPath: pthOutPath.isEmpty ? nil : pthOutPath,
+            datasetSource: datasetSource,
+            datasetVersion: datasetVersion,
+            datasetSHA256: datasetSHA256
         )
+    }
+
+    mutating func markDataAsUserSelected(path: String) {
+        dataPath = path
+        datasetSource = nil
+        datasetVersion = nil
+        datasetSHA256 = nil
     }
 }

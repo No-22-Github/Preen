@@ -641,6 +641,31 @@
 "State 检查失败（退出码 %d）" = "State inspection failed (exit code %d)";
 "State 检查失败" = "State inspection failed";
 
+/* Built-in NekoQA 200 first-training experience. */
+"内置数据资源缺失：%@" = "Built-in dataset resource is missing: %@";
+"内置数据 manifest 无法读取" = "The built-in dataset manifest could not be read";
+"内置数据应为 200 条，实际为 %d 条" = "The built-in dataset must contain 200 samples; found %d";
+"内置数据校验失败：预期 %@，实际 %@" = "Built-in dataset verification failed: expected %@, found %@";
+"内置示例 · NekoQA 200" = "Built-in Example · NekoQA 200";
+"200 条 · 角色风格 QA · 模板 QA · 版本 %@" = "200 samples · Character-style QA · QA template · Version %@";
+"用于体验角色与表达风格迁移，不用于学习新知识。" = "For trying character and expression style transfer, not for learning new knowledge.";
+"选择自己的数据…" = "Choose Your Own Data…";
+"NekoQA-10K 来源" = "NekoQA-10K Source";
+"Apache-2.0 许可证" = "Apache-2.0 License";
+"使用内置示例" = "Use Built-in Example";
+"NekoQA 200 · 角色风格 QA · 推荐首次体验" = "NekoQA 200 · Character-style QA · Recommended First Experience";
+"内置 NekoQA 200 用于体验角色与表达风格迁移，不用于学习新知识。" = "The built-in NekoQA 200 demonstrates character and expression style transfer; it does not teach new knowledge.";
+"无法使用内置示例" = "Unable to Use Built-in Example";
+"量化模型可用于推理；内置示例训练需要 BF16 模型。请先在窗口顶部选择 BF16 模型。" = "Quantized models can run inference, but the built-in example requires a BF16 model for training. Choose a BF16 model at the top of the window first.";
+"内置示例训练需要 BF16 模型" = "Built-in Example Training Requires a BF16 Model";
+"选择 BF16 模型…" = "Choose BF16 Model…";
+"去工具箱转换" = "Convert in Toolbox";
+"量化模型可用于推理，训练需要 BF16 权重。准备好模型后即可离线使用 NekoQA 200 开始训练。" = "Quantized models can run inference, while training requires BF16 weights. Once the model is ready, you can train offline with NekoQA 200.";
+"使用内置示例训练" = "Train with Built-in Example";
+"NekoQA 200 · 无需准备数据" = "NekoQA 200 · No Dataset Preparation";
+"选择自己的训练数据" = "Choose Your Own Training Data";
+"选择 BF16 模型目录" = "Choose BF16 Model Folder";
+
 /* About screen descriptions. */
 "核心训练/推理引擎，提供 rwkv7.py 前向与自动微分" = "Core training and inference engine providing the rwkv7.py forward pass and automatic differentiation.";
 "Apple 机器学习框架，张量运算与自动微分的底层地基" = "Apple's machine-learning framework for tensor operations and automatic differentiation.";

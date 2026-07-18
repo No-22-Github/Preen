@@ -43,6 +43,9 @@ struct PersistedTrainingConfig: Codable, Equatable {
     var checkpointDirectory: String? = nil
     var exportPth: Bool = false
     var pthOutputPath: String? = nil
+    var datasetSource: String? = nil
+    var datasetVersion: String? = nil
+    var datasetSHA256: String? = nil
 }
 
 struct TrainingRunArtifacts: Codable, Equatable {

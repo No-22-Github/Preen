@@ -22,9 +22,12 @@ struct TrainingPanel: View {
     var onSelectRun: (TrainingRun) -> Void
     var onConvertModel: () -> Void
     var welcomePresented: Bool
+    var builtinTrainingRequestID: UUID?
     @State private var config: TrainingConfig = .defaultConfig
     @State private var phase: Phase = .empty  // idle 态下的子阶段
     @State private var showingChart = false
+    @State private var handledBuiltinRequestID: UUID?
+    @State private var builtinDatasetError: String?
 
     var onStart: (TrainingConfig) -> Void
 
@@ -48,6 +51,7 @@ struct TrainingPanel: View {
                         recentRuns: recentRuns,
                         onSelectRun: onSelectRun,
                         onConfigured: { phase = .configuring },
+                        onUseBuiltin: useBuiltinDataset,
                         onConvertModel: onConvertModel,
                         welcomePresented: welcomePresented
                     )
@@ -102,11 +106,47 @@ struct TrainingPanel: View {
         }
         .animation(.default, value: store.state)
         .animation(.default, value: phase)
-        .onAppear { config.modelPath = modelPath }
+        .onAppear {
+            config.modelPath = modelPath
+            consumeBuiltinRequestIfNeeded()
+        }
         .onChange(of: modelPath) { _, newValue in config.modelPath = newValue }
+        .onChange(of: builtinTrainingRequestID) { _, _ in consumeBuiltinRequestIfNeeded() }
+        .alert(
+            "无法使用内置示例",
+            isPresented: Binding(
+                get: { builtinDatasetError != nil },
+                set: { if !$0 { builtinDatasetError = nil } }
+            )
+        ) {
+            Button("好") { builtinDatasetError = nil }
+        } message: {
+            Text(builtinDatasetError ?? "")
+        }
         .sheet(isPresented: $showingChart) {
             TrainingChartView(store: store)
                 .frame(minWidth: 760, minHeight: 480)
+        }
+    }
+
+    private func consumeBuiltinRequestIfNeeded() {
+        guard let id = builtinTrainingRequestID, id != handledBuiltinRequestID else { return }
+        handledBuiltinRequestID = id
+        useBuiltinDataset()
+    }
+
+    private func useBuiltinDataset() {
+        guard !modelPath.isEmpty, ModelConfigProbe.isTrainable(modelPath: modelPath) else {
+            builtinDatasetError = L10n.string("量化模型可用于推理；内置示例训练需要 BF16 模型。请先在窗口顶部选择 BF16 模型。")
+            return
+        }
+        do {
+            let dataset = try BuiltinDataset.nekoQA200()
+            config.modelPath = modelPath
+            dataset.apply(to: &config)
+            phase = .configuring
+        } catch {
+            builtinDatasetError = error.localizedDescription
         }
     }
 

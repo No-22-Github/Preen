@@ -53,6 +53,7 @@ final class AppState {
     // === 当前面板 ===
     var selection: SidebarItem = .training
     var selectedRunID: UUID?
+    private(set) var builtinTrainingRequestID: UUID?
 
     /// 是否显示欢迎窗口(主窗口的模态 sheet)。为 true 时侧栏也会收起,让背景呈空状态。
     /// 首启 / 「窗口 → 欢迎使用 Preen」菜单翻为 true;sheet 关闭(WelcomeView dismiss / 点背景)翻回 false。
@@ -229,6 +230,12 @@ final class AppState {
     func goToModelConversion() {
         toolboxStore.pendingTool = "modelConversion"
         selection = .toolbox
+    }
+
+    /// 欢迎页的一键示例入口；TrainingPanel 收到 revision 后从 Bundle 读取固定数据。
+    func requestBuiltinExampleTraining() {
+        builtinTrainingRequestID = UUID()
+        selection = .training
     }
 
     func restoreRuns() async {

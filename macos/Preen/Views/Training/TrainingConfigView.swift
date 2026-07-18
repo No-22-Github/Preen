@@ -326,10 +326,14 @@ struct TrainingConfigView: View {
                 Spacer()
             }
 
-            // 训练数据。
-            PathRow(label: "训练数据（JSON / JSONL）",
-                    path: $config.dataPath,
-                    isDirectory: false)
+            // 训练数据。内置资源显示只读归属；自选数据保留原 PathRow。
+            if config.datasetSource == "builtin:nekoqa_200" {
+                builtinDatasetRow
+            } else {
+                PathRow(label: "训练数据（JSON / JSONL）",
+                        path: $config.dataPath,
+                        isDirectory: false)
+            }
 
             // 输出 state。
             PathRow(label: "输出 state(.npz)",
@@ -337,6 +341,47 @@ struct TrainingConfigView: View {
                     isDirectory: false,
                     saveMode: true,
                     defaultFilename: "state.npz")
+        }
+    }
+
+    private var builtinDatasetRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("训练数据")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 200, alignment: .leading)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("内置示例 · NekoQA 200")
+                        .font(.body.weight(.medium))
+                    Text("200 条 · 角色风格 QA · 模板 QA · 版本 \(config.datasetVersion ?? "—")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("用于体验角色与表达风格迁移，不用于学习新知识。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("选择自己的数据…") { pickOwnData() }
+            }
+            HStack(spacing: 12) {
+                Color.clear.frame(width: 200, height: 1)
+                Link("NekoQA-10K 来源", destination: URL(string: "https://huggingface.co/datasets/liumindmind/NekoQA-10K")!)
+                if let licenseURL = try? BuiltinDataset.nekoQA200().directoryURL.appendingPathComponent("LICENSE") {
+                    Link("Apache-2.0 许可证", destination: licenseURL)
+                }
+            }
+            .font(.caption)
+        }
+    }
+
+    private func pickOwnData() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url {
+            config.markDataAsUserSelected(path: url.path)
         }
     }
 
