@@ -237,6 +237,20 @@ extension ServeRequest {
     static func closeSession(id: String, sessionId: String) -> ServeRequest {
         ServeRequest(id: id, cmd: "close_session", params: .closeSession(SessionParams(sessionId: sessionId)))
     }
+    static func preview(id: String,
+                        prompt: String,
+                        template: String? = "raw",
+                        reasoning: Bool? = nil,
+                        think: String? = nil,
+                        statePath: String? = nil,
+                        ab: Bool? = nil,
+                        genConfig: GenConfigDTO? = nil) -> ServeRequest {
+        ServeRequest(id: id, cmd: "preview",
+                     params: .preview(PreviewParams(prompt: prompt, template: template,
+                                                    reasoning: reasoning, think: think,
+                                                    statePath: statePath, ab: ab,
+                                                    genConfig: genConfig)))
+    }
     static func shutdown(id: String) -> ServeRequest {
         ServeRequest(id: id, cmd: "shutdown", params: .shutdown)
     }

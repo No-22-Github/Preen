@@ -49,13 +49,51 @@ struct ChatMessage: Identifiable, Equatable {
     }
 }
 
+enum ComparisonSideStatus: Equatable {
+    case idle
+    case waiting
+    case generating
+    case completed
+    case failed
+    case aborted
+    case skipped
+}
+
+struct ComparisonSideOutput {
+    var segments: [ChatSegment] = []
+    var summary: String?
+    var errorText: String?
+    var result: GenerationResult?
+    var status: ComparisonSideStatus = .idle
+
+    var fullText: String { segments.map(\.text).joined() }
+
+    var message: ChatMessage {
+        ChatMessage(
+            role: .assistant,
+            segments: segments.isEmpty ? [ChatSegment(phase: .answer, text: "")] : segments,
+            summary: summary,
+            isAborted: status == .aborted,
+            errorText: errorText
+        )
+    }
+}
+
 @Observable
 @MainActor
 final class ChatStore {
     private let backendStore: BackendStore
+    private let runRepository: RunRepository?
+    private let defaults: UserDefaults
 
-    init(backendStore: BackendStore) {
+    init(
+        backendStore: BackendStore,
+        runRepository: RunRepository? = nil,
+        defaults: UserDefaults = .standard
+    ) {
         self.backendStore = backendStore
+        self.runRepository = runRepository
+        self.defaults = defaults
     }
 
     convenience init() {
@@ -96,6 +134,16 @@ final class ChatStore {
     /// 模型 + State 已真正落到可用会话上的递增信号。
     /// set_state 的 ok 或 new_session 成功后递增,供顶部模型 chip 做克制的完成反馈。
     private(set) var activationRevision: Int = 0
+
+    // === 单轮 A/B 比较 ===
+    var isComparisonMode = false
+    private(set) var comparisonPrompt = ""
+    private(set) var baselineComparison = ComparisonSideOutput()
+    private(set) var stateComparison = ComparisonSideOutput()
+    private(set) var comparisonSuggestions: [String] = []
+    private(set) var comparisonSaveMessage: String?
+    private(set) var associatedRunID: UUID?
+    private var comparisonInFlight = false
 
     // MARK: - 生命周期
 
@@ -211,6 +259,78 @@ final class ChatStore {
         }
     }
 
+    func startComparison(prompt: String) {
+        let prompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty, statePath != nil, isConnected, !isGenerating else { return }
+        comparisonPrompt = prompt
+        baselineComparison = ComparisonSideOutput(status: .generating)
+        stateComparison = ComparisonSideOutput(status: .waiting)
+        comparisonSaveMessage = nil
+        comparisonInFlight = true
+        isGenerating = true
+        lastError = nil
+        rememberComparisonPrompt(prompt)
+
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.client?.preview(
+                    prompt: prompt,
+                    template: self.sessionConfig.template.rawValue,
+                    reasoning: self.sessionConfig.reasoning,
+                    think: self.sessionConfig.think.rawValue,
+                    statePath: self.statePath,
+                    ab: true,
+                    genConfig: self.genConfig.toDTO()
+                )
+            } catch let error as ServeError {
+                self.handleComparisonTerminalError(error)
+            } catch {
+                self.handleComparisonTerminalError(.ioError(error.localizedDescription))
+            }
+        }
+    }
+
+    func clearComparison() {
+        guard !isGenerating else { return }
+        comparisonPrompt = ""
+        baselineComparison = ComparisonSideOutput()
+        stateComparison = ComparisonSideOutput()
+        comparisonSaveMessage = nil
+    }
+
+    func configureComparisonContext(dataPath: String?, runID: UUID?) {
+        associatedRunID = runID
+        let datasetPrompts = dataPath.map(Self.promptSuggestions(from:)) ?? []
+        let recent = defaults.stringArray(forKey: "recentComparisonPrompts") ?? []
+        comparisonSuggestions = Array((datasetPrompts + recent).uniqued().prefix(6))
+    }
+
+    func saveComparison() {
+        guard let runRepository, let runID = associatedRunID,
+              baselineComparison.status == .completed,
+              stateComparison.status == .completed else { return }
+        let record = SavedComparison(
+            prompt: comparisonPrompt,
+            baselineText: baselineComparison.fullText,
+            stateText: stateComparison.fullText,
+            template: sessionConfig.template.rawValue,
+            reasoning: sessionConfig.reasoning,
+            think: sessionConfig.think.rawValue,
+            genConfig: genConfig,
+            baseline: ComparisonMetrics(result: baselineComparison.result),
+            withState: ComparisonMetrics(result: stateComparison.result)
+        )
+        Task { [weak self] in
+            do {
+                try await runRepository.appendComparison(runID: runID, record: record)
+                self?.comparisonSaveMessage = L10n.string("比较结果已保存")
+            } catch {
+                self?.comparisonSaveMessage = error.localizedDescription
+            }
+        }
+    }
+
     func clearLastError() {
         lastError = nil
     }
@@ -303,6 +423,8 @@ final class ChatStore {
     /// 已连接时走后端 set_state(nil)(会重置会话);未连接只清本地字段,
     /// 这样下次连接 newSession() 不会把旧模型的 state 带给新模型。
     func clearState() {
+        isComparisonMode = false
+        clearComparison()
         if sessionId != nil, isConnected {
             setState(path: nil)
         } else {
@@ -357,15 +479,27 @@ final class ChatStore {
             backendStore.updateInference(phase: .ready, pid: client?.pid, message: inferenceSummary)
             // 自动按用户当前会话口径建会话；安全默认是 qa + 非 reasoning。
             newSession()
-        case .textChunk(let id, _, let delta, let phase):
-            handleTextChunk(id: id, delta: delta, phase: phase)
-        case .turnEnd(let id, _, _, let result, let thinking, let answer):
-            handleTurnEnd(id: id, result: result, thinking: thinking, answer: answer)
+        case .textChunk(let id, _, let side, let delta, let phase):
+            if let side {
+                handleComparisonChunk(id: id, side: side, delta: delta, phase: phase)
+            } else {
+                handleTextChunk(id: id, delta: delta, phase: phase)
+            }
+        case .turnEnd(let id, _, let side, let result, let thinking, let answer):
+            if let side {
+                handleComparisonTurnEnd(id: id, side: side, result: result,
+                                        thinking: thinking, answer: answer)
+            } else {
+                handleTurnEnd(id: id, result: result, thinking: thinking, answer: answer)
+            }
+        case .sideError(let id, let side, _, let message):
+            handleComparisonSideError(id: id, side: side, message: message)
         case .ok(let id, _):
             // 终结事件(非 send 的指令,如 set_config/set_state)。标记生成结束。
             if id == inFlightId {
                 isGenerating = false
                 inFlightId = nil
+                comparisonInFlight = false
             }
         case .error(let id, let code, let message):
             // 启动期(未 connected)的 error = 后端启动失败,记录给启动日志弹窗。
@@ -436,6 +570,13 @@ final class ChatStore {
     }
 
     private func handleError(id: String?, code: ServeErrorCode, message: String) {
+        if comparisonInFlight {
+            let error: ServeError = code == .aborted
+                ? .aborted
+                : .serveError(code: code, message: message)
+            handleComparisonTerminalError(error)
+            return
+        }
         // error 是终结事件。
         if id == inFlightId {
             isGenerating = false
@@ -482,6 +623,107 @@ final class ChatStore {
         }
     }
 
+    private func handleComparisonChunk(
+        id: String,
+        side: ServeSide,
+        delta: String,
+        phase: ServePhase
+    ) {
+        inFlightId = id
+        var output = comparisonOutput(for: side)
+        output.status = .generating
+        if let index = output.segments.lastIndex(where: { $0.phase == phase }) {
+            output.segments[index].text += delta
+        } else {
+            output.segments.append(ChatSegment(phase: phase, text: delta))
+        }
+        setComparisonOutput(output, for: side)
+    }
+
+    private func handleComparisonTurnEnd(
+        id: String,
+        side: ServeSide,
+        result: GenerationResult,
+        thinking: String?,
+        answer: String?
+    ) {
+        inFlightId = id
+        var output = comparisonOutput(for: side)
+        if let thinking, let answer {
+            output.segments = []
+            if !thinking.isEmpty { output.segments.append(ChatSegment(phase: .think, text: thinking)) }
+            output.segments.append(ChatSegment(phase: .answer, text: answer))
+        } else {
+            output.segments = [ChatSegment(phase: .answer, text: result.text)]
+        }
+        output.result = result
+        output.summary = buildSummary(result: result)
+        output.status = .completed
+        setComparisonOutput(output, for: side)
+        if side == .baseline, stateComparison.status == .waiting {
+            stateComparison.status = .generating
+        }
+    }
+
+    private func handleComparisonSideError(id: String, side: ServeSide?, message: String) {
+        inFlightId = id
+        guard let side else { return }
+        var output = comparisonOutput(for: side)
+        output.status = .failed
+        output.errorText = L10n.backendMessage(message, fallback: "这一侧生成失败")
+        setComparisonOutput(output, for: side)
+        if side == .baseline, stateComparison.status == .waiting {
+            stateComparison.status = .generating
+        }
+    }
+
+    private func handleComparisonTerminalError(_ error: ServeError) {
+        guard comparisonInFlight else { return }
+        let aborted: Bool
+        if case .aborted = error { aborted = true } else { aborted = false }
+        if baselineComparison.status == .generating {
+            baselineComparison.status = aborted ? .aborted : .failed
+            if !aborted { baselineComparison.errorText = error.localizedDescription }
+        } else if stateComparison.status == .generating {
+            stateComparison.status = aborted ? .aborted : .failed
+            if !aborted { stateComparison.errorText = error.localizedDescription }
+        }
+        if stateComparison.status == .waiting { stateComparison.status = .skipped }
+        comparisonInFlight = false
+        isGenerating = false
+        inFlightId = nil
+    }
+
+    private func comparisonOutput(for side: ServeSide) -> ComparisonSideOutput {
+        side == .baseline ? baselineComparison : stateComparison
+    }
+
+    private func setComparisonOutput(_ output: ComparisonSideOutput, for side: ServeSide) {
+        if side == .baseline { baselineComparison = output } else { stateComparison = output }
+    }
+
+    private func rememberComparisonPrompt(_ prompt: String) {
+        var recent = defaults.stringArray(forKey: "recentComparisonPrompts") ?? []
+        recent.removeAll { $0 == prompt }
+        recent.insert(prompt, at: 0)
+        defaults.set(Array(recent.prefix(10)), forKey: "recentComparisonPrompts")
+        comparisonSuggestions = Array((comparisonSuggestions + [prompt]).uniqued().prefix(6))
+    }
+
+    private static func promptSuggestions(from path: String) -> [String] {
+        let preview = TrainingDataPreview.load(path: path, limit: 3)
+        let keys = ["prompt", "instruction", "question", "q"]
+        return preview.samples.compactMap { sample in
+            for key in keys {
+                if let value = sample.fields.first(where: { $0.key == key })?.value,
+                   !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return value
+                }
+            }
+            return nil
+        }
+    }
+
     /// 拼技术摘要(stop_reason · token 数 · t/s)。
     private func buildSummary(result: GenerationResult) -> String {
         var parts: [String] = []
@@ -498,5 +740,16 @@ final class ChatStore {
     /// 是否可以发送(已连接 + 有会话 + 不在生成)。
     var canSend: Bool {
         isConnected && sessionId != nil && !isGenerating
+    }
+
+    var canCompare: Bool {
+        isConnected && statePath != nil && !isGenerating
+    }
+}
+
+private extension Array where Element == String {
+    func uniqued() -> [String] {
+        var seen = Set<String>()
+        return filter { seen.insert($0).inserted }
     }
 }

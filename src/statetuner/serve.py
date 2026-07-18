@@ -51,9 +51,10 @@ CAPABILITIES = {
 
 # 协议版本(T1,协议冻结点)。
 # 主版本号:turn_end / text_chunk / hello 的字段结构有破坏性变更时 +1。
-# 当前 1:首版含 thinking/answer/phase 字段(本次 commit 引入)。
+# v2:preview A/B 新增 side-tagged text_chunk / turn_end / side_error，并固定
+# baseline → with_state 顺序流式生成。
 # 此后改协议字段结构必须先 bump 此号,UI 据此拒绝不兼容的 serve。
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 
 
 # ── 事件构造助手(§3.4)──────────────────────────────────────
@@ -237,13 +238,18 @@ class ServeSessionManager:
         with self._lock:
             return list(self._sessions.keys())
 
-    def preview(self, params: dict) -> Tuple[List[dict], bool]:
-        """一次性预览(§3.3 preview),不建 session。
+    def preview(
+        self,
+        params: dict,
+        *,
+        on_event=None,
+        should_abort=None,
+    ) -> Tuple[List[dict], bool]:
+        """单轮预览/A-B，不建 session。
 
-        ab=False → 返回 (流式事件列表[可空], is_ab=False),result 在 turn_end 里。
-        ab=True  → 返回 (两个 turn_end 事件, is_ab=True)。
-
-        返回的事件列表不含 ok 终结(ServeProtocol 统一加)。
+        A/B 固定按 baseline → with_state 顺序执行；每侧都从同一 seed、同一
+        GenerationConfig 和空 cache 开始。on_event 存在时边生成边发带 side 的
+        text_chunk；返回列表仍保留给直接调用者和测试使用。
         """
         prompt = params.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip():
@@ -268,6 +274,9 @@ class ServeSessionManager:
                     temperature=float(gen_config_params.get("temperature", 0.0)),
                     top_p=float(gen_config_params.get("top_p", 0.9)),
                     seed=int(gen_config_params.get("seed", 42)),
+                    presence_penalty=float(gen_config_params.get("presence_penalty", 0.0)),
+                    frequency_penalty=float(gen_config_params.get("frequency_penalty", 0.0)),
+                    penalty_decay=float(gen_config_params.get("penalty_decay", 0.996)),
                 ),
                 template,
             )
@@ -289,15 +298,53 @@ class ServeSessionManager:
             return fields
 
         events: List[dict] = []
+
+        def emit(event: dict) -> None:
+            events.append(event)
+            if on_event is not None:
+                on_event(event)
+
+        sides = [(None, state)]
         if ab:
-            result = self.engine.compare(wrapped, state=state, config=cfg)
-            events.append(_event("turn_end", side="with_state", **_turn_end_fields(result.with_state.to_dict())))
-            events.append(_event("turn_end", side="baseline", **_turn_end_fields(result.baseline.to_dict())))
-            return events, True
-        # 单路:无 on_text 流式(preview 是一次性,不建 session);事件只含 turn_end
-        result = self.engine.generate(wrapped, state=state, config=cfg)
-        events.append(_event("turn_end", **_turn_end_fields(result.to_dict())))
-        return events, False
+            sides = [("baseline", None), ("with_state", state)]
+
+        for side, side_state in sides:
+            accum = [""]
+
+            def on_text(delta: str, *, _side=side) -> None:
+                accum[0] += delta
+                if track_think:
+                    from .thinking import classify_phase
+                    phase = classify_phase(accum[0])
+                else:
+                    phase = "answer"
+                fields = {"delta": delta, "phase": phase}
+                if _side is not None:
+                    fields["side"] = _side
+                emit(_event("text_chunk", **fields))
+
+            try:
+                result = self.engine.generate(
+                    wrapped,
+                    state=side_state,
+                    config=cfg,
+                    on_text=on_text,
+                    should_abort=should_abort,
+                )
+            except GenerationAborted:
+                raise
+            except Exception as exc:
+                fields = {"code": "internal", "message": str(exc)}
+                if side is not None:
+                    fields["side"] = side
+                emit(_event("side_error", **fields))
+                continue
+
+            fields = _turn_end_fields(result.to_dict())
+            if side is not None:
+                fields["side"] = side
+            emit(_event("turn_end", **fields))
+        return events, ab
 
     def detect_import(self, params: dict) -> dict:
         """探测数据格式 + 转换 + 渲染预览(不落盘,§4.1/§4.4 UI 确认步)。
@@ -701,18 +748,23 @@ class ServeProtocol:
     def _handle_preview(self, id_: Optional[str], params: dict) -> None:
         """preview(§3.3):一次性,不建 session,内部即建即弃 cache。
 
-        ab=False → turn_end → ok
-        ab=True  → turn_end{side:with_state} → turn_end{side:baseline} → ok
+        ab=False → text_chunk* → turn_end → ok
+        ab=True  → baseline(text_chunk* → turn_end) → with_state(...) → ok
         """
         if not self._busy.acquire(blocking=False):
             raise ProtocolError("busy: generation already in progress", code="busy")
         self._in_flight_id = id_
         self._abort_event.clear()
         try:
-            events, _is_ab = self.manager.preview(params)
-            for evt in events:
+            def emit_preview_event(evt: dict) -> None:
                 evt["id"] = id_  # preview 事件带回 id(§3.2)
                 self._emit(evt)
+
+            self.manager.preview(
+                params,
+                on_event=emit_preview_event,
+                should_abort=self._abort_event.is_set,
+            )
             self._emit(_ok(id_))
         except GenerationAborted:
             self._emit(_error("aborted", "Generation aborted", id_=id_))

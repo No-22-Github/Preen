@@ -65,6 +65,58 @@ struct TrainingRunSummary: Codable, Equatable {
     static let empty = TrainingRunSummary()
 }
 
+struct ComparisonMetrics: Codable, Equatable {
+    var stopReason: String?
+    var tokenCount: Int?
+    var generationTPS: Double?
+
+    init(result: GenerationResult?) {
+        stopReason = result?.stopReason
+        tokenCount = result?.tokenCount
+        generationTPS = result?.generationTps
+    }
+}
+
+struct SavedComparison: Codable, Identifiable, Equatable {
+    let id: UUID
+    let prompt: String
+    let baselineText: String
+    let stateText: String
+    let template: String
+    let reasoning: Bool
+    let think: String
+    let genConfig: GenConfig
+    let baseline: ComparisonMetrics
+    let withState: ComparisonMetrics
+    let createdAt: Date
+
+    init(
+        id: UUID = UUID(),
+        prompt: String,
+        baselineText: String,
+        stateText: String,
+        template: String,
+        reasoning: Bool,
+        think: String,
+        genConfig: GenConfig,
+        baseline: ComparisonMetrics,
+        withState: ComparisonMetrics,
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.prompt = prompt
+        self.baselineText = baselineText
+        self.stateText = stateText
+        self.template = template
+        self.reasoning = reasoning
+        self.think = think
+        self.genConfig = genConfig
+        self.baseline = baseline
+        self.withState = withState
+        self.createdAt = createdAt
+    }
+}
+
 struct TrainingRun: Codable, Identifiable, Equatable {
     static let schemaVersion = 1
 

@@ -18,6 +18,7 @@ actor RunRepository {
     static let runFilename = "run.json"
     static let eventsFilename = "events.jsonl"
     static let stderrFilename = "stderr.log"
+    static let comparisonsFilename = "comparisons.jsonl"
 
     let rootURL: URL
     private let fileManager: FileManager
@@ -72,6 +73,32 @@ actor RunRepository {
     func loadStderr(id: UUID) -> String {
         let url = directoryURL(for: id).appendingPathComponent(Self.stderrFilename)
         return (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+    }
+
+    func appendComparison(runID: UUID, record: SavedComparison) throws {
+        _ = try load(id: runID)  // 只允许写入真实存在的 run。
+        let url = directoryURL(for: runID).appendingPathComponent(Self.comparisonsFilename)
+        let lineEncoder = JSONEncoder()
+        lineEncoder.dateEncodingStrategy = .iso8601
+        lineEncoder.outputFormatting = [.sortedKeys]
+        var line = try lineEncoder.encode(record)
+        line.append(0x0A)
+        if !fileManager.fileExists(atPath: url.path) {
+            try line.write(to: url, options: .atomic)
+            return
+        }
+        let handle = try FileHandle(forWritingTo: url)
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: line)
+    }
+
+    func loadComparisons(runID: UUID) -> [SavedComparison] {
+        let url = directoryURL(for: runID).appendingPathComponent(Self.comparisonsFilename)
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+        return text.split(whereSeparator: \.isNewline).compactMap { line in
+            try? decoder.decode(SavedComparison.self, from: Data(line.utf8))
+        }
     }
 
     func registerImportedState(stateURL: URL, metadataURL: URL? = nil) throws -> TrainingRun {

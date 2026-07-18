@@ -451,7 +451,7 @@ def test_preview_ab_requires_state_path():
 
 
 def test_preview_ab_emits_two_turn_ends():
-    """ab=True:turn_end{side:with_state} → turn_end{side:baseline} → ok。
+    """ab=True:baseline → with_state 顺序流式，每侧独立 turn_end → ok。
 
     用 FakeEngine 的 compare(state=None 也能跑,产出 baseline/tuned 文本)。
     state_path 传一个假路径——compare 内部走 state=str(path),
@@ -465,9 +465,61 @@ def test_preview_ab_emits_two_turn_ends():
     })
     types = [e["type"] for e in events]
     turn_ends = [e for e in events if e["type"] == "turn_end"]
+    chunks = [e for e in events if e["type"] == "text_chunk"]
     assert len(turn_ends) == 2
-    assert turn_ends[0]["side"] == "with_state"
-    assert turn_ends[1]["side"] == "baseline"
+    assert turn_ends[0]["side"] == "baseline"
+    assert turn_ends[1]["side"] == "with_state"
+    assert [e["side"] for e in chunks] == ["baseline", "with_state"]
+    assert term["type"] == "ok"
+
+
+def test_preview_ab_preserves_all_seven_generation_fields():
+    cap = CaptureProtocol()
+    events, term = _send_and_collect(cap, {
+        "id": "p4", "cmd": "preview", "prompt": "你好", "template": "qa",
+        "ab": True, "state_path": "fake.npz",
+        "gen_config": {
+            "max_tokens": 123, "temperature": 0.7, "top_p": 0.8, "seed": 9,
+            "presence_penalty": 0.11, "frequency_penalty": 0.22,
+            "penalty_decay": 0.987,
+        },
+    })
+    assert term["type"] == "ok"
+    snapshots = [e["result"]["config"] for e in events if e["type"] == "turn_end"]
+    assert len(snapshots) == 2
+    for cfg in snapshots:
+        assert cfg["max_tokens"] == 123
+        assert cfg["temperature"] == 0.7
+        assert cfg["top_p"] == 0.8
+        assert cfg["seed"] == 9
+        assert cfg["presence_penalty"] == 0.11
+        assert cfg["frequency_penalty"] == 0.22
+        assert cfg["penalty_decay"] == 0.987
+
+
+def test_preview_ab_side_failure_is_nonterminal_and_other_side_continues():
+    """单侧失败发 side_error，仍运行另一侧，最后只有一个 ok 终结。"""
+    class BaselineFailingEngine(FakeEngine):
+        def generate(self, prompt, *, state=None, config=None, cache=None,
+                     on_text=None, should_abort=None):
+            if state is None:
+                raise RuntimeError("baseline failed")
+            return super().generate(
+                prompt, state=state, config=config, cache=cache,
+                on_text=on_text, should_abort=should_abort,
+            )
+
+    cap = CaptureProtocol(engine=BaselineFailingEngine())
+    events, term = _send_and_collect(cap, {
+        "id": "p5", "cmd": "preview", "prompt": "你好", "template": "qa",
+        "ab": True, "state_path": "fake.npz",
+    })
+    side_errors = [event for event in events if event["type"] == "side_error"]
+    turn_ends = [event for event in events if event["type"] == "turn_end"]
+    assert [(event["side"], event["code"]) for event in side_errors] == [
+        ("baseline", "internal")
+    ]
+    assert [event["side"] for event in turn_ends] == ["with_state"]
     assert term["type"] == "ok"
 
 

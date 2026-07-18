@@ -2,6 +2,28 @@ import XCTest
 @testable import Preen
 
 final class RunRepositoryTests: XCTestCase {
+    func testSavedComparisonPersistsInRunDirectory() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repository = RunRepository(rootURL: root)
+        let run = TrainingRun(status: .completed)
+        _ = try await repository.create(run)
+        let record = SavedComparison(
+            prompt: "hello",
+            baselineText: "plain",
+            stateText: "styled",
+            template: "qa",
+            reasoning: true,
+            think: "fast",
+            genConfig: .defaultConfig,
+            baseline: ComparisonMetrics(result: nil),
+            withState: ComparisonMetrics(result: nil),
+            createdAt: Date(timeIntervalSince1970: 1_000)
+        )
+        try await repository.appendComparison(runID: run.id, record: record)
+        let loaded = await repository.loadComparisons(runID: run.id)
+        XCTAssertEqual(loaded, [record])
+    }
     private var temporaryRoot: URL!
 
     override func setUpWithError() throws {

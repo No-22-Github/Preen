@@ -26,12 +26,15 @@ enum ServeEvent: Decodable {
     /// - `id`:对应请求 id;`session_id`:对应会话(可选)。
     /// - `delta`:增量文本片段。
     /// - `phase`:`.think` / `.answer`(决定 UI dim 渲染;仅 reasoning && think=on && template!=raw 时区分)。
-    case textChunk(id: String, sessionId: String?, delta: String, phase: ServePhase)
+    case textChunk(id: String, sessionId: String?, side: ServeSide?, delta: String, phase: ServePhase)
 
     /// 一轮生成结算。result = GenerationResult(cache 已 pop)。
     /// ab 模式带 side;think=on 时顶层有 thinking/answer 拆分字段。
     case turnEnd(id: String, sessionId: String?, side: ServeSide?, result: GenerationResult,
                  thinking: String?, answer: String?)
+
+    /// A/B 某一侧失败；不是请求终结事件，另一侧仍可继续。
+    case sideError(id: String, side: ServeSide?, code: ServeErrorCode, message: String)
 
     /// 终结事件:请求成功。具体 payload 随指令而异(如 new_session 带 session_id)。
     case ok(id: String, payload: OkPayload)
@@ -56,6 +59,7 @@ enum ServeEvent: Decodable {
             self = .textChunk(
                 id: try c.decode(String.self, forKey: .id),
                 sessionId: try c.decodeIfPresent(String.self, forKey: .sessionId),
+                side: try c.decodeIfPresent(ServeSide.self, forKey: .side),
                 delta: try c.decodeIfPresent(String.self, forKey: .delta) ?? "",
                 phase: ServePhase(raw: phaseStr)
             )
@@ -67,6 +71,14 @@ enum ServeEvent: Decodable {
                 result: try c.decode(GenerationResult.self, forKey: .result),
                 thinking: try c.decodeIfPresent(String.self, forKey: .thinking),
                 answer: try c.decodeIfPresent(String.self, forKey: .answer)
+            )
+        case "side_error":
+            let codeRaw = try c.decodeIfPresent(String.self, forKey: .code) ?? "internal"
+            self = .sideError(
+                id: try c.decode(String.self, forKey: .id),
+                side: try c.decodeIfPresent(ServeSide.self, forKey: .side),
+                code: ServeErrorCode(raw: codeRaw),
+                message: try c.decodeIfPresent(String.self, forKey: .message) ?? ""
             )
         case "ok":
             // ok 的字段(session_id / state_label / message 等)同样是顶层平铺,
@@ -99,10 +111,19 @@ enum ServeEvent: Decodable {
     var requestId: String? {
         switch self {
         case .ready: return nil
-        case .textChunk(let id, _, _, _): return id
+        case .textChunk(let id, _, _, _, _): return id
         case .turnEnd(let id, _, _, _, _, _): return id
+        case .sideError(let id, _, _, _): return id
         case .ok(let id, _): return id
         case .error(let id, _, _): return id
+        }
+    }
+
+    /// 仅 ok / error 能结束对应请求；side_error 只结束 A/B 的一侧。
+    var isTerminal: Bool {
+        switch self {
+        case .ok, .error: true
+        default: false
         }
     }
 }

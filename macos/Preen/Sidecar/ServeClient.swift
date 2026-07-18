@@ -235,6 +235,31 @@ final class ServeClient {
         }
     }
 
+    /// 单轮 preview / A-B。流式内容从 events 广播消费，本调用只等待 ok/error。
+    func preview(
+        prompt: String,
+        template: String,
+        reasoning: Bool,
+        think: String,
+        statePath: String?,
+        ab: Bool,
+        genConfig: GenConfigDTO
+    ) async throws {
+        let resp = try await send(.preview(
+            id: newId(),
+            prompt: prompt,
+            template: template,
+            reasoning: reasoning,
+            think: think,
+            statePath: statePath,
+            ab: ab,
+            genConfig: genConfig
+        ))
+        if case .error(let code, let msg) = resp {
+            throw ServeError.serveError(code: code, message: msg)
+        }
+    }
+
     /// 便捷:abort。**独立通道**:用自己的 id,不耦合被中断的 send。
     /// abort 的语义:发 → 立即收 ok(读线程内联);被中断的原 send(另一个 await)收 error{aborted}。
     func abort() async throws {
@@ -302,13 +327,11 @@ final class ServeClient {
             return
         }
 
-        // text_chunk / turn_end:流式,只广播(resume 由后续终结事件负责)。
-        switch event {
-        case .textChunk, .turnEnd:
+        // 流式或非终结事件只广播；continuation 必须留给后续唯一终结 ok/error，
+        // 否则 side_error 会让 preview 永久悬挂。
+        guard event.isTerminal else {
             broadcast.yield(event)
             return
-        default:
-            break
         }
 
         // ok / error:终结事件。先广播(让 UI 同步看到状态),再 resume continuation。

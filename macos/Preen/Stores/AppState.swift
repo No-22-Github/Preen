@@ -43,6 +43,8 @@ struct StateActivationRequest: Identifiable, Equatable {
     let suggestedModelName: String?
     let requiresModelChoice: Bool
     let autoSwitchModel: Bool
+    let dataPath: String?
+    let runID: UUID?
 }
 
 @Observable
@@ -82,7 +84,7 @@ final class AppState {
         self.runRepository = repository
         self.backendStore = backend
         self.trainStore = TrainStore(repository: repository, backendStore: backend)
-        self.chatStore = ChatStore(backendStore: backend)
+        self.chatStore = ChatStore(backendStore: backend, runRepository: repository)
         self.toolboxStore = ToolboxStore()
     }
 
@@ -190,15 +192,24 @@ final class AppState {
     ///  3. 切到对话面板;
     ///  4. 若后端未连接 → 自动 connect(ready 后 newSession 用预注入的 state)。
     ///     已连接则直接 setState 下发。
-    func goToChat(stateURL: URL, trainingConfig: PersistedTrainingConfig?) {
-        requestStateActivation(stateURL: stateURL, trainingConfig: trainingConfig)
+    func goToChat(
+        stateURL: URL,
+        trainingConfig: PersistedTrainingConfig?,
+        runID: UUID?
+    ) {
+        requestStateActivation(
+            stateURL: stateURL,
+            trainingConfig: trainingConfig,
+            associatedRunID: runID
+        )
     }
 
     /// 训练记录优先、相邻 metadata 次之、App 默认最后。缺模板或外部 State
     /// 模型名不同时先形成待确认请求，不提前清空/切页。
     func requestStateActivation(
         stateURL: URL,
-        trainingConfig: PersistedTrainingConfig? = nil
+        trainingConfig: PersistedTrainingConfig? = nil,
+        associatedRunID: UUID? = nil
     ) {
         let metadata = StateMetadata.loadAdjacent(to: stateURL)
         let templateRaw = trainingConfig?.template ?? metadata?.template
@@ -223,7 +234,9 @@ final class AppState {
             suggestedModelPath: suggestedModelPath,
             suggestedModelName: suggestedModelName,
             requiresModelChoice: requiresModelChoice,
-            autoSwitchModel: trainingConfig != nil
+            autoSwitchModel: trainingConfig != nil,
+            dataPath: trainingConfig?.dataPath,
+            runID: associatedRunID
         )
         if template == nil || requiresModelChoice {
             pendingStateActivation = request
@@ -264,6 +277,8 @@ final class AppState {
             suggestedTemplate: template,
             source: request.source
         )
+        chatStore.isComparisonMode = true
+        chatStore.configureComparisonContext(dataPath: request.dataPath, runID: request.runID)
         injectedStatePath = request.stateURL.path
         selection = .chat
         if chatStore.isConnected {

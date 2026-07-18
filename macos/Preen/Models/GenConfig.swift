@@ -16,7 +16,7 @@
 import Foundation
 
 /// 推理采样配置。Swift UI 编辑,提交时转 GenConfigDTO 发给 serve。
-struct GenConfig: Equatable {
+struct GenConfig: Codable, Equatable {
 
     // === 采样组(4)===
     var temperature: Double = 1.2

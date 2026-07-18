@@ -8,6 +8,7 @@ struct TrainingRunDetailView: View {
     @State private var events: [TrainEvent] = []
     @State private var stderrLog = ""
     @State private var replayStore: TrainStore?
+    @State private var comparisons: [SavedComparison] = []
     @State private var exportMessage: String?
     @State private var exportError: String?
 
@@ -21,6 +22,7 @@ struct TrainingRunDetailView: View {
                         .frame(minHeight: 460)
                 }
                 artifacts
+                if !comparisons.isEmpty { savedComparisonsSection }
                 if !stderrLog.isEmpty { logSection }
                 EventLogView(events: events)
             }
@@ -39,12 +41,15 @@ struct TrainingRunDetailView: View {
                 Text(L10n.string(run.kind == .imported ? "外部 State" : "训练记录")).font(.title2)
                 Text(run.status.label).foregroundStyle(.secondary)
                 Spacer()
+                if run.artifacts.statePath != nil {
+                    Button("比较效果") { goToChat() }
+                        .buttonStyle(.borderedProminent)
+                }
                 Menu("操作") {
                     Button("复制日志") { copyLog() }
                     Button("导出事件") { exportEvents() }
                     Button("在 Finder 中显示") { revealRun() }
                     if run.artifacts.statePath != nil {
-                        Button("去对话") { goToChat() }
                         Button("导出 .pth") { exportPth() }
                     }
                     Divider()
@@ -114,9 +119,44 @@ struct TrainingRunDetailView: View {
         }
     }
 
+    private var savedComparisonsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("已保存比较").font(.headline)
+            ForEach(comparisons.reversed()) { comparison in
+                DisclosureGroup {
+                    HStack(alignment: .top, spacing: 12) {
+                        savedComparisonText("无 State（基线）", comparison.baselineText)
+                        savedComparisonText("有 State", comparison.stateText)
+                    }
+                    Text("\(comparison.template) · \(comparison.reasoning ? comparison.think : "off") · seed \(comparison.genConfig.seed)")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(comparison.prompt).lineLimit(1)
+                        Text(comparison.createdAt, format: .dateTime.year().month().day().hour().minute())
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    private func savedComparisonText(_ title: String, _ text: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(L10n.string(title)).font(.caption.weight(.semibold))
+            Text(text).textSelection(.enabled)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+    }
+
     private func loadDetails() async {
         events = await appState.runRepository.loadEvents(id: run.id)
         stderrLog = await appState.runRepository.loadStderr(id: run.id)
+        comparisons = await appState.runRepository.loadComparisons(runID: run.id)
         let store = TrainStore()
         store.replay(events: events)
         replayStore = store
@@ -145,7 +185,11 @@ struct TrainingRunDetailView: View {
 
     private func goToChat() {
         guard let path = run.artifacts.statePath else { return }
-        appState.goToChat(stateURL: URL(fileURLWithPath: path), trainingConfig: run.config)
+        appState.goToChat(
+            stateURL: URL(fileURLWithPath: path),
+            trainingConfig: run.config,
+            runID: run.id
+        )
     }
 
     private func exportPth() {

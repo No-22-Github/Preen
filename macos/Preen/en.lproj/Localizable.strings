@@ -597,6 +597,27 @@
 "加载 State" = "Load State";
 "未选择" = "Not Selected";
 "未记录" = "Not Recorded";
+"State 效果 A/B" = "State Effect A/B";
+"保存比较" = "Save Comparison";
+"比较结果已保存" = "Comparison saved";
+"外部 State 没有关联训练记录，无法保存到 run 目录" = "This external State is not linked to a training record, so it cannot be saved to a run directory.";
+"保存到对应训练记录" = "Save to the associated training record";
+"试试" = "Try";
+"无 State（基线）" = "No State (Baseline)";
+"有 State" = "With State";
+"有 State · %@" = "With State · %@";
+"等待生成" = "Waiting to Generate";
+"等待" = "Waiting";
+"已跳过" = "Skipped";
+"正在生成" = "Generating";
+"将在基线完成后生成" = "Will generate after the baseline finishes";
+"停止后未开始这一侧" = "This side was not started after stopping";
+"输入同一个问题开始比较" = "Enter one prompt to start the comparison";
+"已保存比较" = "Saved Comparisons";
+"比较效果" = "Compare Effects";
+"请先加载 State，再开始基线对比" = "Load a State before starting a baseline comparison";
+"切换单轮 State A/B 对比" = "Toggle single-turn State A/B comparison";
+"这一侧生成失败" = "This side failed to generate";
 
 /* About screen descriptions. */
 "核心训练/推理引擎，提供 rwkv7.py 前向与自动微分" = "Core training and inference engine providing the rwkv7.py forward pass and automatic differentiation.";

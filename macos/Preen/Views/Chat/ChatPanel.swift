@@ -38,7 +38,11 @@ struct ChatPanel: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            messageList
+            if store.isComparisonMode {
+                comparisonContent
+            } else {
+                messageList
+            }
             Divider()
             if let error = store.lastError {
                 chatErrorBanner(error)
@@ -46,16 +50,25 @@ struct ChatPanel: View {
             }
             ChatInputBar(
                 text: $inputText,
-                canSend: store.canSend,
+                canSend: store.isComparisonMode ? store.canCompare : store.canSend,
                 isGenerating: store.isGenerating,
-                canClear: store.isConnected && !store.messages.isEmpty,
+                canClear: store.isComparisonMode
+                    ? !store.comparisonPrompt.isEmpty
+                    : (store.isConnected && !store.messages.isEmpty),
                 onSend: {
                     isFollowingLatest = true
-                    store.send(text: inputText)
+                    if store.isComparisonMode {
+                        store.startComparison(prompt: inputText)
+                    } else {
+                        store.send(text: inputText)
+                    }
                     inputText = ""
                 },
                 onAbort: { store.abort() },
-                onClearSession: { showClearConfirm = true }
+                onClearSession: {
+                    if store.isComparisonMode { store.clearComparison() }
+                    else { showClearConfirm = true }
+                }
             )
         }
         .confirmationDialog(
@@ -85,6 +98,174 @@ struct ChatPanel: View {
                 draftSessionConfig = store.sessionConfig
             }
         }
+    }
+
+    // MARK: - State A/B
+
+    private var comparisonContent: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("State 效果 A/B")
+                        .font(.headline)
+                    Text(comparisonConfigurationSummary)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if comparisonCompleted {
+                    Button("保存比较") { store.saveComparison() }
+                        .disabled(store.associatedRunID == nil)
+                        .help(store.associatedRunID == nil
+                              ? "外部 State 没有关联训练记录，无法保存到 run 目录"
+                              : "保存到对应训练记录")
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+
+            if !store.comparisonSuggestions.isEmpty && store.comparisonPrompt.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        Text("试试")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        ForEach(store.comparisonSuggestions, id: \.self) { prompt in
+                            Button(prompt) { inputText = prompt }
+                                .buttonStyle(.bordered)
+                                .lineLimit(1)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+                }
+            }
+
+            Divider()
+
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 0) {
+                    comparisonPane(
+                        title: "无 State（基线）",
+                        output: store.baselineComparison,
+                        accented: false
+                    )
+                    Divider()
+                    comparisonPane(
+                        title: stateComparisonTitle,
+                        output: store.stateComparison,
+                        accented: true
+                    )
+                }
+                .frame(minWidth: 640)
+
+                ScrollView {
+                    VStack(spacing: 12) {
+                        comparisonPane(
+                            title: "无 State（基线）",
+                            output: store.baselineComparison,
+                            accented: false
+                        )
+                        comparisonPane(
+                            title: stateComparisonTitle,
+                            output: store.stateComparison,
+                            accented: true
+                        )
+                    }
+                    .padding(10)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            if let message = store.comparisonSaveMessage {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.bottom, 6)
+            }
+        }
+    }
+
+    private func comparisonPane(
+        title: String,
+        output: ComparisonSideOutput,
+        accented: Bool
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(L10n.string(title))
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                comparisonStatus(output.status)
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+
+            ScrollView {
+                if output.segments.isEmpty && output.errorText == nil {
+                    ContentUnavailableView(
+                        "等待生成",
+                        systemImage: output.status == .generating ? "ellipsis" : "text.bubble",
+                        description: Text(statusDescription(output.status))
+                    )
+                    .frame(maxWidth: .infinity, minHeight: 180)
+                } else {
+                    ChatMessageView(message: output.message)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(alignment: .leading) {
+            if accented {
+                Rectangle()
+                    .fill(Color.accentColor.opacity(0.8))
+                    .frame(width: 2)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func comparisonStatus(_ status: ComparisonSideStatus) -> some View {
+        switch status {
+        case .generating:
+            ProgressView().controlSize(.small)
+        case .completed:
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+        case .failed:
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
+        case .aborted:
+            Text("已中断").foregroundStyle(.orange)
+        case .skipped:
+            Text("已跳过").foregroundStyle(.secondary)
+        case .idle, .waiting:
+            Text("等待").foregroundStyle(.secondary)
+        }
+    }
+
+    private func statusDescription(_ status: ComparisonSideStatus) -> String {
+        switch status {
+        case .generating: return L10n.string("正在生成")
+        case .waiting: return L10n.string("将在基线完成后生成")
+        case .skipped: return L10n.string("停止后未开始这一侧")
+        default: return L10n.string("输入同一个问题开始比较")
+        }
+    }
+
+    private var comparisonCompleted: Bool {
+        store.baselineComparison.status == .completed
+            && store.stateComparison.status == .completed
+    }
+
+    private var comparisonConfigurationSummary: String {
+        let config = store.sessionConfig
+        return "\(config.formatSummary) · seed \(config.genConfig.seed) · temp \(config.genConfig.temperature) · top_p \(config.genConfig.topP)"
+    }
+
+    private var stateComparisonTitle: String {
+        let name = store.statePath.map { URL(fileURLWithPath: $0).lastPathComponent }
+            ?? L10n.string("未加载 State")
+        return L10n.format("有 State · %@", name)
     }
 
     private var samplerSheet: some View {

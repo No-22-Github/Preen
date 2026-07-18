@@ -43,6 +43,19 @@ struct ContentView: View {
                                 }
                                 .help("断开推理连接")
 
+                                Button {
+                                    appState.chatStore.isComparisonMode.toggle()
+                                } label: {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "rectangle.split.2x1")
+                                        Text("A/B")
+                                    }
+                                }
+                                .disabled(appState.chatStore.statePath == nil || appState.chatStore.isGenerating)
+                                .help(appState.chatStore.statePath == nil
+                                      ? "请先加载 State，再开始基线对比"
+                                      : "切换单轮 State A/B 对比")
+
                                 if let badge = chatStateBadgeLabel {
                                     // 已选 state:文件名按钮(点此重选,透明底)+ 紧邻的 ×(点此卸下)。
                                     // 两者用 plain 样式去掉系统 bezel,避免被渲染成两个分离气泡;
@@ -329,6 +342,7 @@ struct ContentView: View {
     /// 实际执行:卸下 state(已连接走后端 set_state(nil) 重置会话) + 清跨面板意图。
     private func performClearState() {
         appState.chatStore.clearState()
+        appState.chatStore.isComparisonMode = false
         appState.injectedStatePath = nil
     }
 
@@ -385,7 +399,9 @@ struct ContentView: View {
                 onConvertModel: { appState.goToModelConversion() },
                 welcomePresented: appState.isWelcomePresented,
                 onStart: { appState.startTraining(config: $0) },
-                onGoToChat: { appState.goToChat(stateURL: $0, trainingConfig: $1) }
+                onGoToChat: {
+                    appState.goToChat(stateURL: $0, trainingConfig: $1, runID: $2)
+                }
             )
         case .chat:
             if appState.modelPath.isEmpty {
