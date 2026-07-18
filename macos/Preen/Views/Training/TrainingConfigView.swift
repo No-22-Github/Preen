@@ -12,6 +12,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct TrainingConfigView: View {
     @Binding var config: TrainingConfig
@@ -25,6 +26,7 @@ struct TrainingConfigView: View {
     @State private var inspectionError: String?
     @State private var isInspecting = false
     @State private var inspectTask: Task<Void, Never>?
+    @State private var outputValidationError: String?
     private let inspector = DataInspectionRunner()
     /// 超过此条数不在改动时即时检查(避免大数据集卡顿),改由手动「检查数据」触发。
     private let autoCheckCap = 30_000
@@ -101,9 +103,21 @@ struct TrainingConfigView: View {
                 .background(.regularMaterial)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear { onDataChanged() }
-        .onChange(of: config.dataPath) { _, _ in onDataChanged() }
-        .onChange(of: config.modelPath) { _, _ in onDataChanged() }
+        .onAppear {
+            config.refreshAutomaticOutputPath()
+            onDataChanged()
+        }
+        .onChange(of: config.dataPath) { _, _ in
+            outputValidationError = nil
+            config.refreshAutomaticOutputPath()
+            onDataChanged()
+        }
+        .onChange(of: config.modelPath) { _, _ in
+            outputValidationError = nil
+            config.refreshAutomaticOutputPath()
+            onDataChanged()
+        }
+        .onChange(of: config.outPath) { _, _ in outputValidationError = nil }
         .onChange(of: config.ctxLen) { _, _ in onCtxChanged() }
         .onDisappear { inspectTask?.cancel() }
     }
@@ -173,7 +187,8 @@ struct TrainingConfigView: View {
             return L10n.string("当前模型为 INT8，仅支持推理，请另选 BF16 模型")
         }
         if config.dataPath.isEmpty { return L10n.string("请选择训练数据") }
-        if config.outPath.isEmpty { return L10n.string("请选择输出 state 路径（.npz）") }
+        if config.outPath.isEmpty { return L10n.string("无法生成输出 State 路径") }
+        if let outputValidationError { return outputValidationError }
         // 截断(含完全截断)只警告不阻断,见 dataSummary。这里不再拦截。
         return nil
     }
@@ -182,7 +197,7 @@ struct TrainingConfigView: View {
         HStack(spacing: 10) {
             statusArea
             Spacer(minLength: 8)
-            Button(action: onStart) {
+            Button(action: validateAndStart) {
                 Label("开始训练", systemImage: "play.fill")
                     .frame(minWidth: 140)
             }
@@ -194,6 +209,21 @@ struct TrainingConfigView: View {
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 12)
+    }
+
+    private func validateAndStart() {
+        do {
+            _ = try TrainingOutputPath.validate(config: config)
+            outputValidationError = nil
+            onStart()
+        } catch TrainingOutputPathError.destinationExists where config.outputPathMode == .automatic {
+            // A directory may have appeared after the suggestion was rendered.
+            // Automatic mode resolves the race to a fresh non-conflicting path.
+            config.regenerateAutomaticOutputPath()
+            validateAndStart()
+        } catch {
+            outputValidationError = error.localizedDescription
+        }
     }
 
     /// 按钮左侧状态区:阻断原因 > 检查中 > 数据摘要 > 大数据集手动检查 > 检查失败。
@@ -335,12 +365,57 @@ struct TrainingConfigView: View {
                         isDirectory: false)
             }
 
-            // 输出 state。
-            PathRow(label: "输出 state(.npz)",
-                    path: $config.outPath,
-                    isDirectory: false,
-                    saveMode: true,
-                    defaultFilename: "state.npz")
+            outputPathRow
+        }
+    }
+
+    private var outputPathRow: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text("输出 State（.npz）")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 200, alignment: .leading)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(config.outPath.isEmpty ? L10n.string("正在生成…") : config.outPath)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(config.outPath)
+                    if config.outputPathMode == .automatic {
+                        Text("自动")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(.quaternary, in: Capsule())
+                    }
+                }
+                Text("State、metadata 与可选 PTH 将保存在同一目录；已有文件绝不会被覆盖。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("更改…") { pickOutputPath() }
+        }
+    }
+
+    private func pickOutputPath() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "state.npz"
+        panel.allowedContentTypes = [UTType(filenameExtension: "npz") ?? .data]
+        if !config.outPath.isEmpty {
+            panel.directoryURL = URL(fileURLWithPath: config.outPath).deletingLastPathComponent()
+        }
+        guard panel.runModal() == .OK, var url = panel.url else { return }
+        if url.pathExtension.lowercased() != "npz" {
+            url.appendPathExtension("npz")
+        }
+        config.markOutputPathManual(url.path)
+        do {
+            _ = try TrainingOutputPath.validate(config: config)
+            outputValidationError = nil
+        } catch {
+            outputValidationError = error.localizedDescription
         }
     }
 

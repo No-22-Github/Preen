@@ -666,6 +666,18 @@
 "选择自己的训练数据" = "Choose Your Own Training Data";
 "选择 BF16 模型目录" = "Choose BF16 Model Folder";
 
+/* Managed training output path. */
+"无法从模型 config.json 估算 State 产物大小" = "Unable to estimate State artifact size from the model's config.json";
+"目标已存在，不会覆盖：%@。请选择其他位置。" = "The destination already exists and will not be overwritten: %@. Choose another location.";
+"输出目录不可写：%@。请选择其他位置。" = "The output folder is not writable: %@. Choose another location.";
+"空间不足：产物与原子写入预计需要 %@，当前可用 %@。请选择其他磁盘或关闭 PTH 导出。" = "Not enough space: artifacts and atomic writes need an estimated %@, with %@ available. Choose another disk or disable PTH export.";
+"无法生成输出 State 路径" = "Unable to Generate an Output State Path";
+"输出 State（.npz）" = "Output State (.npz)";
+"正在生成…" = "Generating…";
+"自动" = "Automatic";
+"State、metadata 与可选 PTH 将保存在同一目录；已有文件绝不会被覆盖。" = "The State, metadata, and optional PTH are saved together; existing files are never overwritten.";
+"更改…" = "Change…";
+
 /* About screen descriptions. */
 "核心训练/推理引擎，提供 rwkv7.py 前向与自动微分" = "Core training and inference engine providing the rwkv7.py forward pass and automatic differentiation.";
 "Apple 机器学习框架，张量运算与自动微分的底层地基" = "Apple's machine-learning framework for tensor operations and automatic differentiation.";

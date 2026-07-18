@@ -16,6 +16,7 @@
 - **State 效果 A/B 比较**：训练完成页、训练记录和对话 toolbar 提供可见入口，共用一个输入框按“无 State 基线 → 有 State”顺序逐侧流式生成；两侧固定使用同一模板、reasoning、think、seed 与七个采样/惩罚字段，每侧独立展示进度、错误、停止原因、token 数和速度。停止会保留已生成文本并跳过未开始侧；用户可主动把 prompt、两侧文本、实际配置与技术摘要保存到对应 run，重开 App 后仍可在记录详情查看，默认不会保存自然语言内容。`serve` 协议版本同步升级至 v2，`preview` 的 `text_chunk` / `turn_end` 新增 `side`，并新增非终结 `side_error`；协议消费者需按侧组装输出并在单侧失败时继续处理另一侧，整次请求仍严格只有一个终结 `ok` / `error`。
 - **会话替换统一为 App 级安全事务**：加载/卸下 State、更改 template/reasoning/think、切换模型、断开后端，以及从训练完成页或记录打开比较，全部先形成包含目标模型、State、配置和落地页的意图；有消息、A/B 内容或生成中才显示同一确认，取消不会改变消息、模型、State、页面或生成。确认后先停止生成再只重建一次会话，失败进入明确断开态并保留诊断错误，不伪装回滚旧 cache；State 在确认前通过 `state-info` 只读检查路径、格式、层号连续性与 RWKV-7 shape。
 - **内置 NekoQA 200 首次训练**：App 随包提供经人工与自动审查的固定 200 条角色风格 QA 子集、版本化 manifest、源索引、SHA-256、Apache-2.0 LICENSE 与归属 NOTICE；欢迎页和训练页可在已有 BF16 模型时直接进入配置，无需选择数据文件，INT8/未选模型会先给出 BF16 引导。内置数据固定使用 `qa` 与 `ctx_len=512` 的语义默认值并复用现有训练参数和同源预检，运行记录新增 `dataset_source=builtin:nekoqa_200`、子集版本与 SHA；界面明确说明示例用于学习角色与表达风格、不用于学习新知识，用户仍可随时切回自己的数据。
+- **训练输出路径自动生成**：选择模型与数据后，App 默认在 `~/Library/Application Support/Preen/states/<数据>-<模型>-<时间>/state.npz` 生成带“自动”标记且不冲突的路径，模型或数据变化时自动更新，用户经“更改…”选择后则保持手动路径；同目录关联 `.meta.json` 与可选 `.pth`。启动前按模型层数、head 数和维度估算实际 fp32 State/PTH 及原子写入空间，并检查目录可写性、剩余容量和全部关联目标冲突；Python `validate_training_request` 同步改为在模型加载前拒绝覆盖已有 State/metadata/PTH，PTH 先写临时文件并完成 round-trip 校验后再原子提交。
 
 ### 变更
 

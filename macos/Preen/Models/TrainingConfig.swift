@@ -36,6 +36,8 @@ struct TrainingConfig: Equatable {
     var modelPath: String = ""
     var dataPath: String = ""
     var outPath: String = ""  // 默认 state.npz,UI 会填
+    var outputPathMode: TrainingOutputPathMode = .automatic
+    private(set) var automaticOutputSourceKey: String? = nil
     var eventsFilePath: String = ""  // 可选,诊断用
     var datasetSource: String? = nil
     var datasetVersion: String? = nil
@@ -186,5 +188,31 @@ struct TrainingConfig: Equatable {
         datasetSource = nil
         datasetVersion = nil
         datasetSHA256 = nil
+    }
+
+    mutating func refreshAutomaticOutputPath(date: Date = Date(), rootURL: URL = PythonResolver.statesDirectory) {
+        guard outputPathMode == .automatic, !modelPath.isEmpty, !dataPath.isEmpty else { return }
+        let sourceKey = "\(dataPath)\u{0}\(modelPath)"
+        guard outPath.isEmpty || sourceKey != automaticOutputSourceKey else { return }
+        outPath = TrainingOutputPath.automaticURL(
+            dataPath: dataPath,
+            modelPath: modelPath,
+            rootURL: rootURL,
+            date: date
+        ).path
+        automaticOutputSourceKey = sourceKey
+    }
+
+    mutating func markOutputPathManual(_ path: String) {
+        outPath = path
+        outputPathMode = .manual
+        automaticOutputSourceKey = nil
+    }
+
+    mutating func regenerateAutomaticOutputPath(date: Date = Date(), rootURL: URL = PythonResolver.statesDirectory) {
+        guard outputPathMode == .automatic else { return }
+        outPath = ""
+        automaticOutputSourceKey = nil
+        refreshAutomaticOutputPath(date: date, rootURL: rootURL)
     }
 }

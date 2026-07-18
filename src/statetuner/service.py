@@ -73,6 +73,15 @@ def validate_training_request(request: TrainingRequest) -> None:
         raise ValueError("test_ratio must be in the range (0, 1)")
     if request.pth_out is not None and not request.export_pth:
         raise ValueError("pth_out requires export_pth")
+    # Product output contract: training artifacts are create-only. Reject all
+    # related destinations before model loading so CLI and App cannot silently
+    # replace an existing State, metadata file, or optional PTH.
+    artifact_paths = [request.out, request.out.with_suffix(".meta.json")]
+    if request.export_pth:
+        artifact_paths.append(request.pth_out or request.out.with_suffix(".pth"))
+    existing = next((path for path in artifact_paths if path.exists()), None)
+    if existing is not None:
+        raise ValueError(f"Output artifact already exists; choose another path: {existing}")
     # 训练精度契约:权重 bf16 + state fp32(docs/decision-precision.md)。
     # int8 量化模型是推理专用产物(state tuning 的 S₀ 叠加到量化权重上会破坏
     # 精度契约)→ 读 config.json 的 quantization 字段早期拦下。
@@ -229,13 +238,18 @@ def run_training(
 
         pth_path = request.pth_out or request.out.with_suffix(".pth")
         pth_path.parent.mkdir(parents=True, exist_ok=True)
-        export_pth({i: result.states[i] for i in result.states}, pth_path)
-        ok, message = verify_roundtrip(
-            {i: result.states[i] for i in result.states}, pth_path
-        )
+        pth_tmp = pth_path.with_name(pth_path.name + ".tmp")
+        try:
+            export_pth({i: result.states[i] for i in result.states}, pth_tmp)
+            ok, message = verify_roundtrip(
+                {i: result.states[i] for i in result.states}, pth_tmp
+            )
+            if not ok:
+                raise RuntimeError(f"PTH round-trip validation failed: {message}")
+            pth_tmp.replace(pth_path)
+        finally:
+            pth_tmp.unlink(missing_ok=True)
         notify(f"pth → {pth_path} ({'OK' if ok else 'FAIL'}: {message})")
-        if not ok:
-            raise RuntimeError(f"PTH round-trip validation failed: {message}")
 
     metadata_path = write_state_metadata(
         request.out,

@@ -32,6 +32,16 @@ def test_validate_training_request_accepts_normal_config(tmp_path):
     validate_training_request(_request(tmp_path))
 
 
+def test_validate_training_request_never_overwrites_related_artifacts(tmp_path):
+    for suffix in (".npz", ".meta.json", ".pth"):
+        request = _request(tmp_path, export_pth=suffix == ".pth")
+        target = request.out if suffix == ".npz" else request.out.with_suffix(suffix)
+        target.write_text("existing")
+        with pytest.raises(ValueError, match="already exists"):
+            validate_training_request(request)
+        target.unlink()
+
+
 def test_validate_training_request_rejects_pth_out_without_export(tmp_path):
     request = _request(tmp_path, pth_out=tmp_path / "state.pth")
     with pytest.raises(ValueError, match="export_pth"):
