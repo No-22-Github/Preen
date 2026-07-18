@@ -488,12 +488,12 @@ final class TrainStore {
         if FileManager.default.fileExists(atPath: metadataURL.path) {
             run.artifacts.metadataPath = metadataURL.path
             if let metadata = try? StateMetadata.load(from: metadataURL) {
-                run.summary.actualEpochs = metadata.result.epochsRun
-                run.summary.finalLoss = metadata.result.finalLoss
-                run.summary.heldOutLoss = metadata.result.bestHeldOutLoss
-                run.summary.stateStd = metadata.result.finalStateStd
-                run.summary.elapsedSeconds = metadata.result.elapsed
-                run.summary.dataHash = metadata.dataSHA256
+                run.summary.actualEpochs = metadata.result?.epochsRun
+                run.summary.finalLoss = metadata.result?.finalLoss
+                run.summary.heldOutLoss = metadata.result?.bestHeldOutLoss
+                run.summary.stateStd = metadata.result?.finalStateStd
+                run.summary.elapsedSeconds = metadata.result?.elapsed
+                run.summary.dataHash = metadata.dataSHA256.isEmpty ? nil : metadata.dataSHA256
             }
         }
         if let config = run.config {

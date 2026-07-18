@@ -29,8 +29,13 @@ def write_state_metadata(
     """在 state 旁写 `<stem>.meta.json`，供 CLI/未来 UI 读取。"""
     meta_path = state_path.with_suffix(".meta.json")
     payload = {
-        "format_version": 1,
+        "format_version": 2,
         "created_at": time.time(),
+        "model_name": model_path.name,
+        "model_path": str(model_path),
+        "state_format": state_path.suffix.removeprefix(".").lower() or "npz",
+        "state_dtype": "float32",
+        # v1 aliases remain present so older Preen builds can still inspect v2 files.
         "model": str(model_path),
         "data": str(data_path),
         "data_sha256": file_sha256(data_path),

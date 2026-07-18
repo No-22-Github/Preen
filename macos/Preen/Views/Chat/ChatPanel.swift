@@ -112,6 +112,16 @@ struct ChatPanel: View {
             ScrollView {
                 VStack(spacing: 14) {
                     parameterSection(title: "会话格式") {
+                        HStack {
+                            Text("配置来源")
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Text(store.sessionConfigSource.label)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Divider()
+
                         Picker("模板", selection: $draftSessionConfig.template) {
                             ForEach(ChatTemplate.allCases) { template in
                                 Text(template.displayName).tag(template)

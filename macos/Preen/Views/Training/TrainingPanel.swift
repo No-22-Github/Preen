@@ -29,7 +29,7 @@ struct TrainingPanel: View {
     var onStart: (TrainingConfig) -> Void
 
     /// 「去对话」回调:把产物 state 路径 + 训练用的模型路径传给对话面板(一键启动)。
-    var onGoToChat: (URL, String?) -> Void
+    var onGoToChat: (URL, PersistedTrainingConfig?) -> Void
 
     /// idle 态子阶段。
     private enum Phase {

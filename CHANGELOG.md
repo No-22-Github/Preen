@@ -12,8 +12,11 @@
 ### 新增
 
 - **会话格式成为显式配置**：对话参数面板新增 QA / Instruction / Raw、Reasoning 与 Off / Fast / On 设置，toolbar 持续显示当前口径；新会话会把格式与七个采样字段完整下发给 `serve`，默认保持 `qa + reasoning=false + think=off`，非法组合在界面禁用且后端继续校验。有历史时更改格式会先确认，取消不会污染当前设置；think=on 继续按后端 `phase / thinking / answer` 分段展示。
+- **训练配置与 State 元数据同源进入验证会话**：训练完成页与记录入口现在传递不可变训练配置，外部 State 则读取同目录 `.meta.json`，来源优先级为训练记录 → metadata → App 默认；用户明确调整后的会话格式始终优先。缺少模板时必须先选择，模型名称不同时显示当前/训练模型并允许切换或继续，最终仍由后端校验 State 层数、层号和 shape。
 
 ### 变更
+
+- **State metadata 升级为向后兼容的 v2 契约**：新文件新增 `model_name`、`model_path`、`state_format=npz` 与 `state_dtype=float32`，保留 v1 `model` 别名供旧 App 读取；Swift 可解码字段不完整的旧 v1 与最小 v2 文件，不会因缺少非必需训练摘要而拒绝登记。
 
 - **模型转换改为 mmap 流式读写,并以完整目录为单位安全提交**:`model_converter.convert` 此前通过 `read_pth` 全量加载源 storage,再构建完整目标权重 dict,转换 1.5B 模型峰值约 6GB。现改为:
   - 新增 `pth_io.peek_pth_tensors` 与 `iter_pth`:前者只读 `data.pkl` 和 ZIP 元数据,预先校验 storage 大小、tensor offset/stride、配置键、映射与 shape;后者把未压缩 storage 只读 `mmap` 为 numpy 视图,按目标键顺序逐 tensor 访问。1.5B 完整转换实测物理内存峰值降至约 0.65GB;`read_pth` / `write_pth` 既有 API 不变。

@@ -580,6 +580,23 @@
 "当前消息将被清空，并按新的模板、Reasoning 与思考设置建立会话。此操作无法撤销。" = "Current messages will be cleared and a new session will use the selected template, Reasoning, and thinking settings. This cannot be undone.";
 "会话格式组合无效" = "Invalid session format combination";
 "会话格式、Reasoning、思考与生成参数" = "Session format, Reasoning, thinking, and generation parameters";
+"配置来源" = "Configuration Source";
+"App 默认" = "App Default";
+"建议来自训练记录" = "Suggested by Training Record";
+"建议来自 State 元数据" = "Suggested by State Metadata";
+"用户已调整" = "User Adjusted";
+"未找到模板信息" = "Template Information Not Found";
+"确认 State 配置" = "Confirm State Configuration";
+"这个 State 没有可读取的训练模板。请选择实际训练时使用的格式，确认前不会开始生成。" = "This State has no readable training template. Select the format used during training; generation will not start until you confirm.";
+"模型名称不同" = "Model Names Differ";
+"当前模型" = "Current Model";
+"训练模型" = "Training Model";
+"名称不是可靠指纹；继续使用当前模型时，后端仍会在加载 State 时校验层数与每层 shape。" = "A name is not a reliable fingerprint. If you keep the current model, the backend will still validate layer count and each State shape during loading.";
+"仍用当前模型" = "Keep Current Model";
+"切换到训练模型" = "Switch to Training Model";
+"加载 State" = "Load State";
+"未选择" = "Not Selected";
+"未记录" = "Not Recorded";
 
 /* About screen descriptions. */
 "核心训练/推理引擎，提供 rwkv7.py 前向与自动微分" = "Core training and inference engine providing the rwkv7.py forward pass and automatic differentiation.";

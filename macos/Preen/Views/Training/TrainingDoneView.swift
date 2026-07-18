@@ -15,7 +15,7 @@ import SwiftUI
 struct TrainingDoneView: View {
     @Bindable var store: TrainStore
     /// 「去对话」回调:把 state 路径 + 训练用的模型路径传给对话面板(一键启动)。
-    var onGoToChat: (URL, String?) -> Void
+    var onGoToChat: (URL, PersistedTrainingConfig?) -> Void
     /// 「返回首页」回调:reset store + 回训练面板空态落地页。
     var onGoHome: () -> Void
     var onShowChart: () -> Void
@@ -38,7 +38,7 @@ struct TrainingDoneView: View {
             HStack(spacing: 10) {
                 if let path = store.outputPath {
                     Button {
-                        onGoToChat(URL(fileURLWithPath: path), store.currentRun?.config?.modelPath)
+                        onGoToChat(URL(fileURLWithPath: path), store.currentRun?.config)
                     } label: {
                         Text("去对话")
                             .frame(minWidth: 120)

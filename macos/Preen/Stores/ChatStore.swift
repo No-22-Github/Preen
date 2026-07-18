@@ -85,6 +85,7 @@ final class ChatStore {
 
     // === 配置 ===
     var sessionConfig: ChatSessionConfig = .defaultConfig
+    private(set) var sessionConfigSource: ChatConfigurationSource = .appDefault
     var genConfig: GenConfig {
         get { sessionConfig.genConfig }
         set { sessionConfig.genConfig = newValue }
@@ -243,6 +244,7 @@ final class ChatStore {
         let formatChanged = next.formatFields != sessionConfig.formatFields
         let generationChanged = next.genConfig != sessionConfig.genConfig
         sessionConfig = next
+        sessionConfigSource = .user
 
         guard isConnected else { return }
         if formatChanged {
@@ -250,6 +252,27 @@ final class ChatStore {
         } else if generationChanged {
             applyConfig()
         }
+    }
+
+    /// 准备一次 State/会话替换。训练记录或 metadata 只提供初始建议；用户一旦
+    /// 明确调整过格式，后续加载不会把它静默改回。
+    func prepareSessionReplacement(
+        statePath: String,
+        suggestedTemplate: ChatTemplate?,
+        source: ChatConfigurationSource
+    ) {
+        self.statePath = statePath
+        guard sessionConfigSource != .user, let suggestedTemplate else { return }
+        sessionConfig.template = suggestedTemplate
+        sessionConfig = sessionConfig.normalized()
+        sessionConfigSource = source
+    }
+
+    /// 将已经预检/确认的替换意图落到后端。new_session 会一次性应用模板、
+    /// reasoning/think、采样配置与 State，避免 set_state 后再二次重置。
+    func activatePreparedSession() {
+        guard isConnected else { return }
+        newSession()
     }
 
     /// 切换 state 文件。

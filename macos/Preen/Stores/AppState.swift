@@ -34,6 +34,17 @@ enum SidebarItem: String, CaseIterable, Identifiable {
     }
 }
 
+struct StateActivationRequest: Identifiable, Equatable {
+    let id = UUID()
+    let stateURL: URL
+    let suggestedTemplate: ChatTemplate?
+    let source: ChatConfigurationSource
+    let suggestedModelPath: String?
+    let suggestedModelName: String?
+    let requiresModelChoice: Bool
+    let autoSwitchModel: Bool
+}
+
 @Observable
 @MainActor
 final class AppState {
@@ -61,6 +72,7 @@ final class AppState {
     let runRepository: RunRepository
     private(set) var runs: [TrainingRun] = []
     private(set) var isSwitchingWorker = false
+    private(set) var pendingStateActivation: StateActivationRequest?
 
     init(defaults: UserDefaults = .standard) {
         PythonResolver.ensureApplicationDirectories()
@@ -178,23 +190,85 @@ final class AppState {
     ///  3. 切到对话面板;
     ///  4. 若后端未连接 → 自动 connect(ready 后 newSession 用预注入的 state)。
     ///     已连接则直接 setState 下发。
-    func goToChat(stateURL: URL, trainingModelPath: String?) {
-        // 1. 模型一致性:训练模型与当前不同则切换(会 disconnect 旧模型 + clearState)。
-        if let trainingModel = trainingModelPath,
-           !trainingModel.isEmpty,
-           trainingModel != modelPath {
-            selectModel(path: trainingModel)
-        }
-        // 2. 预注入 state(不立即下发后端;已连接路径下面 setState,未连接则 newSession 带上)。
-        chatStore.prepareInjectedState(path: stateURL.path)
-        injectedStatePath = stateURL.path
-        // 3. 切到对话面板。
-        selection = .chat
-        // 4. 启动:未连接则自动 connect(用当前 modelPath,即上面可能已切换的训练模型);
-        //    已连接则直接下发 state。
-        if chatStore.isConnected {
-            chatStore.setState(path: stateURL.path)
+    func goToChat(stateURL: URL, trainingConfig: PersistedTrainingConfig?) {
+        requestStateActivation(stateURL: stateURL, trainingConfig: trainingConfig)
+    }
+
+    /// 训练记录优先、相邻 metadata 次之、App 默认最后。缺模板或外部 State
+    /// 模型名不同时先形成待确认请求，不提前清空/切页。
+    func requestStateActivation(
+        stateURL: URL,
+        trainingConfig: PersistedTrainingConfig? = nil
+    ) {
+        let metadata = StateMetadata.loadAdjacent(to: stateURL)
+        let templateRaw = trainingConfig?.template ?? metadata?.template
+        let template = templateRaw.flatMap(ChatTemplate.init(rawValue:))
+        let source: ChatConfigurationSource = trainingConfig != nil
+            ? .trainingRecord
+            : (metadata != nil ? .stateMetadata : .appDefault)
+        let suggestedModelPath = trainingConfig?.modelPath ?? metadata?.modelPath
+        let suggestedModelName = metadata?.modelName
+            ?? suggestedModelPath.map { URL(fileURLWithPath: $0).lastPathComponent }
+        let currentModelName = modelPath.isEmpty
+            ? nil
+            : URL(fileURLWithPath: modelPath).lastPathComponent
+        let requiresModelChoice = trainingConfig == nil
+            && suggestedModelName != nil
+            && suggestedModelName != currentModelName
+
+        let request = StateActivationRequest(
+            stateURL: stateURL,
+            suggestedTemplate: template,
+            source: source,
+            suggestedModelPath: suggestedModelPath,
+            suggestedModelName: suggestedModelName,
+            requiresModelChoice: requiresModelChoice,
+            autoSwitchModel: trainingConfig != nil
+        )
+        if template == nil || requiresModelChoice {
+            pendingStateActivation = request
         } else {
+            performStateActivation(
+                request,
+                template: template,
+                useSuggestedModel: request.autoSwitchModel
+            )
+        }
+    }
+
+    func confirmStateActivation(template: ChatTemplate, useSuggestedModel: Bool) {
+        guard let request = pendingStateActivation else { return }
+        pendingStateActivation = nil
+        performStateActivation(request, template: template, useSuggestedModel: useSuggestedModel)
+    }
+
+    func cancelStateActivation() {
+        pendingStateActivation = nil
+    }
+
+    private func performStateActivation(
+        _ request: StateActivationRequest,
+        template: ChatTemplate?,
+        useSuggestedModel: Bool
+    ) {
+        if useSuggestedModel,
+           let suggestedModel = request.suggestedModelPath,
+           !suggestedModel.isEmpty,
+           FileManager.default.fileExists(atPath: suggestedModel),
+           suggestedModel != modelPath {
+            selectModel(path: suggestedModel)
+        }
+
+        chatStore.prepareSessionReplacement(
+            statePath: request.stateURL.path,
+            suggestedTemplate: template,
+            source: request.source
+        )
+        injectedStatePath = request.stateURL.path
+        selection = .chat
+        if chatStore.isConnected {
+            chatStore.activatePreparedSession()
+        } else if !modelPath.isEmpty {
             connectInference()
         }
     }

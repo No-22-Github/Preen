@@ -3,13 +3,19 @@ import Foundation
 struct StateMetadata: Decodable, Equatable {
     let formatVersion: Int
     let createdAt: Double
-    let model: String
+    let modelName: String
+    let modelPath: String
     let data: String
     let dataSHA256: String
-    let template: String
-    let config: Config
-    let result: Result
-    let artifacts: Artifacts
+    let template: String?
+    let stateFormat: String?
+    let stateDtype: String?
+    let config: Config?
+    let result: Result?
+    let artifacts: Artifacts?
+
+    /// v1 UI compatibility: historical metadata called this path `model`.
+    var model: String { modelPath }
 
     struct Config: Decodable, Equatable {
         let lr: Double
@@ -67,12 +73,42 @@ struct StateMetadata: Decodable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case model, data, template, config, result, artifacts
+        case modelName = "model_name"
+        case modelPath = "model_path"
+        case stateFormat = "state_format"
+        case stateDtype = "state_dtype"
         case formatVersion = "format_version"
         case createdAt = "created_at"
         case dataSHA256 = "data_sha256"
     }
 
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        formatVersion = try c.decodeIfPresent(Int.self, forKey: .formatVersion) ?? 1
+        createdAt = try c.decodeIfPresent(Double.self, forKey: .createdAt) ?? 0
+        let legacyModel = try c.decodeIfPresent(String.self, forKey: .model) ?? ""
+        modelPath = try c.decodeIfPresent(String.self, forKey: .modelPath) ?? legacyModel
+        modelName = try c.decodeIfPresent(String.self, forKey: .modelName)
+            ?? URL(fileURLWithPath: modelPath).lastPathComponent
+        data = try c.decodeIfPresent(String.self, forKey: .data) ?? ""
+        dataSHA256 = try c.decodeIfPresent(String.self, forKey: .dataSHA256) ?? ""
+        template = try c.decodeIfPresent(String.self, forKey: .template)
+        stateFormat = try c.decodeIfPresent(String.self, forKey: .stateFormat)
+        stateDtype = try c.decodeIfPresent(String.self, forKey: .stateDtype)
+        config = try c.decodeIfPresent(Config.self, forKey: .config)
+        result = try c.decodeIfPresent(Result.self, forKey: .result)
+        artifacts = try c.decodeIfPresent(Artifacts.self, forKey: .artifacts)
+    }
+
     static func load(from url: URL) throws -> StateMetadata {
         try JSONDecoder().decode(StateMetadata.self, from: Data(contentsOf: url))
+    }
+
+    static func adjacentURL(for stateURL: URL) -> URL {
+        stateURL.deletingPathExtension().appendingPathExtension("meta.json")
+    }
+
+    static func loadAdjacent(to stateURL: URL) -> StateMetadata? {
+        try? load(from: adjacentURL(for: stateURL))
     }
 }

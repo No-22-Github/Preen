@@ -145,7 +145,7 @@ struct TrainingRunDetailView: View {
 
     private func goToChat() {
         guard let path = run.artifacts.statePath else { return }
-        appState.goToChat(stateURL: URL(fileURLWithPath: path), trainingModelPath: run.config?.modelPath)
+        appState.goToChat(stateURL: URL(fileURLWithPath: path), trainingConfig: run.config)
     }
 
     private func exportPth() {
@@ -191,7 +191,7 @@ struct TrainingRunInspectorView: View {
                     } else if let metadata {
                         inspectorPathRow("模型", metadata.model)
                         inspectorPathRow("数据", metadata.data)
-                        inspectorRow("模板", metadata.template)
+                        inspectorRow("模板", metadata.template ?? L10n.string("未记录"))
                     }
                     if let hash = run.summary.dataHash ?? metadata?.dataSHA256 {
                         inspectorRow("数据 SHA-256", abbreviatedHash(hash), help: hash)
@@ -208,19 +208,19 @@ struct TrainingRunInspectorView: View {
                 }
 
                 inspectorSection("结果") {
-                    if let epochs = run.summary.actualEpochs ?? metadata?.result.epochsRun {
+                    if let epochs = run.summary.actualEpochs ?? metadata?.result?.epochsRun {
                         inspectorRow("实际轮数", "\(epochs)")
                     }
-                    if let loss = run.summary.finalLoss ?? metadata?.result.finalLoss {
+                    if let loss = run.summary.finalLoss ?? metadata?.result?.finalLoss {
                         inspectorRow("Final loss", String(format: "%.4f", loss))
                     }
-                    if let held = run.summary.heldOutLoss ?? metadata?.result.bestHeldOutLoss {
+                    if let held = run.summary.heldOutLoss ?? metadata?.result?.bestHeldOutLoss {
                         inspectorRow("Held-out loss", String(format: "%.4f", held))
                     }
-                    if let std = run.summary.stateStd ?? metadata?.result.finalStateStd {
+                    if let std = run.summary.stateStd ?? metadata?.result?.finalStateStd {
                         inspectorRow("State std", String(format: "%.4f", std))
                     }
-                    if let elapsed = run.summary.elapsedSeconds ?? metadata?.result.elapsed {
+                    if let elapsed = run.summary.elapsedSeconds ?? metadata?.result?.elapsed {
                         inspectorRow("耗时", TrainStore.formatDuration(elapsed))
                     }
                 }

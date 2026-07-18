@@ -130,6 +130,24 @@ struct ContentView: View {
         .sheet(isPresented: $appState.isWelcomePresented) {
             WelcomeView(appState: appState)
         }
+        .sheet(isPresented: Binding(
+            get: { appState.pendingStateActivation != nil },
+            set: { if !$0 { appState.cancelStateActivation() } }
+        )) {
+            if let request = appState.pendingStateActivation {
+                StateActivationSheet(
+                    request: request,
+                    currentModelPath: appState.modelPath,
+                    onCancel: { appState.cancelStateActivation() },
+                    onConfirm: { template, useSuggestedModel in
+                        appState.confirmStateActivation(
+                            template: template,
+                            useSuggestedModel: useSuggestedModel
+                        )
+                    }
+                )
+            }
+        }
         .onChange(of: appState.chatStore.activationRevision) { _, _ in
             // 模型 + State 真正落到可用会话:连接就绪(new_session 成功)或切换 state 后,
             // 顶部模型 chip 短暂变绿。覆盖正常点「连接」、去对话一键加载、手动切 state 等所有就绪时刻。
@@ -304,7 +322,7 @@ struct ContentView: View {
         panel.allowedContentTypes = [.data]  // .npz 走 UTI data
         panel.allowsMultipleSelection = false
         if panel.runModal() == .OK, let url = panel.url {
-            appState.chatStore.setState(path: url.path)
+            appState.requestStateActivation(stateURL: url)
         }
     }
 
@@ -367,7 +385,7 @@ struct ContentView: View {
                 onConvertModel: { appState.goToModelConversion() },
                 welcomePresented: appState.isWelcomePresented,
                 onStart: { appState.startTraining(config: $0) },
-                onGoToChat: { appState.goToChat(stateURL: $0, trainingModelPath: $1) }
+                onGoToChat: { appState.goToChat(stateURL: $0, trainingConfig: $1) }
             )
         case .chat:
             if appState.modelPath.isEmpty {
@@ -425,4 +443,94 @@ private enum PendingStateAction {
     case load       // 加载/替换 state
     case clear      // 卸下 state
     case disconnect // 断开推理连接(会终止会话)
+}
+
+private struct StateActivationSheet: View {
+    let request: StateActivationRequest
+    let currentModelPath: String
+    let onCancel: () -> Void
+    let onConfirm: (ChatTemplate, Bool) -> Void
+
+    @State private var template: ChatTemplate
+
+    init(
+        request: StateActivationRequest,
+        currentModelPath: String,
+        onCancel: @escaping () -> Void,
+        onConfirm: @escaping (ChatTemplate, Bool) -> Void
+    ) {
+        self.request = request
+        self.currentModelPath = currentModelPath
+        self.onCancel = onCancel
+        self.onConfirm = onConfirm
+        _template = State(initialValue: request.suggestedTemplate ?? .qa)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(request.suggestedTemplate == nil ? "未找到模板信息" : "确认 State 配置")
+                    .font(.title3.weight(.semibold))
+                Text(request.source.label)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if request.suggestedTemplate == nil {
+                Text("这个 State 没有可读取的训练模板。请选择实际训练时使用的格式，确认前不会开始生成。")
+                    .foregroundStyle(.secondary)
+            }
+
+            Picker("模板", selection: $template) {
+                ForEach(ChatTemplate.allCases) { value in
+                    Text(value.displayName).tag(value)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            if request.requiresModelChoice {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("模型名称不同")
+                        .font(.headline)
+                    LabeledContent("当前模型", value: currentModelName)
+                    LabeledContent("训练模型", value: request.suggestedModelName ?? L10n.string("未记录"))
+                    Text("名称不是可靠指纹；继续使用当前模型时，后端仍会在加载 State 时校验层数与每层 shape。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(12)
+                .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
+            }
+
+            Divider()
+
+            HStack {
+                Button("取消", role: .cancel, action: onCancel)
+                Spacer()
+                if request.requiresModelChoice {
+                    Button("仍用当前模型") { onConfirm(template, false) }
+                    if canSwitchToSuggestedModel {
+                        Button("切换到训练模型") { onConfirm(template, true) }
+                            .buttonStyle(.borderedProminent)
+                    }
+                } else {
+                    Button("加载 State") { onConfirm(template, request.autoSwitchModel) }
+                        .buttonStyle(.borderedProminent)
+                }
+            }
+        }
+        .padding(22)
+        .frame(width: 520)
+    }
+
+    private var currentModelName: String {
+        currentModelPath.isEmpty
+            ? L10n.string("未选择")
+            : URL(fileURLWithPath: currentModelPath).lastPathComponent
+    }
+
+    private var canSwitchToSuggestedModel: Bool {
+        guard let path = request.suggestedModelPath else { return false }
+        return FileManager.default.fileExists(atPath: path)
+    }
 }

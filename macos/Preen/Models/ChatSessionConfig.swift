@@ -8,6 +8,22 @@
 
 import Foundation
 
+enum ChatConfigurationSource: String, Equatable {
+    case appDefault
+    case trainingRecord
+    case stateMetadata
+    case user
+
+    var label: String {
+        switch self {
+        case .appDefault: return L10n.string("App 默认")
+        case .trainingRecord: return L10n.string("建议来自训练记录")
+        case .stateMetadata: return L10n.string("建议来自 State 元数据")
+        case .user: return L10n.string("用户已调整")
+        }
+    }
+}
+
 enum ChatTemplate: String, CaseIterable, Codable, Identifiable {
     case qa
     case instruction

@@ -14,8 +14,72 @@ final class StateMetadataTests: XCTestCase {
         let metadata = try StateMetadata.load(from: url)
         XCTAssertEqual(metadata.formatVersion, 1)
         XCTAssertEqual(metadata.template, "qa")
-        XCTAssertGreaterThan(metadata.result.epochsRun, 0)
+        XCTAssertGreaterThan(metadata.result?.epochsRun ?? 0, 0)
         XCTAssertGreaterThan(metadata.dataSHA256.count, 10)
+    }
+
+    func testLegacyV1DerivesModelNameAndKeepsOptionalFieldsCompatible() throws {
+        let json = """
+        {
+          "format_version": 1,
+          "created_at": 1,
+          "model": "/models/rwkv-old",
+          "data": "/data/train.json",
+          "data_sha256": "abc",
+          "template": "instruction"
+        }
+        """
+        let metadata = try JSONDecoder().decode(StateMetadata.self, from: Data(json.utf8))
+        XCTAssertEqual(metadata.modelPath, "/models/rwkv-old")
+        XCTAssertEqual(metadata.modelName, "rwkv-old")
+        XCTAssertEqual(metadata.template, "instruction")
+        XCTAssertNil(metadata.stateFormat)
+        XCTAssertNil(metadata.result)
+    }
+
+    func testMinimalV2ContractDecodesWithoutLegacyTrainingSummary() throws {
+        let json = """
+        {
+          "format_version": 2,
+          "created_at": 1784300000,
+          "model_name": "rwkv7-g1d-0.4b",
+          "model_path": "/models/rwkv7-g1d-0.4b",
+          "template": "qa",
+          "data_sha256": "0123456789",
+          "state_format": "npz",
+          "state_dtype": "float32"
+        }
+        """
+        let metadata = try JSONDecoder().decode(StateMetadata.self, from: Data(json.utf8))
+        XCTAssertEqual(metadata.formatVersion, 2)
+        XCTAssertEqual(metadata.modelName, "rwkv7-g1d-0.4b")
+        XCTAssertEqual(metadata.stateFormat, "npz")
+        XCTAssertEqual(metadata.stateDtype, "float32")
+        XCTAssertNil(metadata.config)
+        XCTAssertNil(metadata.result)
+    }
+
+    @MainActor
+    func testRecordSuggestionAppliesUntilUserExplicitlyOverrides() {
+        let store = ChatStore()
+        store.prepareSessionReplacement(
+            statePath: "/tmp/first.npz",
+            suggestedTemplate: .instruction,
+            source: .trainingRecord
+        )
+        XCTAssertEqual(store.sessionConfig.template, .instruction)
+        XCTAssertEqual(store.sessionConfigSource, .trainingRecord)
+
+        var userConfig = store.sessionConfig
+        userConfig.template = .raw
+        store.applySessionConfig(userConfig)
+        store.prepareSessionReplacement(
+            statePath: "/tmp/second.npz",
+            suggestedTemplate: .qa,
+            source: .stateMetadata
+        )
+        XCTAssertEqual(store.sessionConfig.template, .raw)
+        XCTAssertEqual(store.sessionConfigSource, .user)
     }
 
     func testImportedRecordDoesNotInventTrainingConfig() async throws {
