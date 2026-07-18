@@ -205,19 +205,27 @@ def test_event_serialization():
 
     em = events.EventEmitter(quiet=True)
     em.emit(events.start({"lr": 0.01, "epochs": 20}))
+    em.emit(events.data_summary(
+        total_records=200, valid_samples=198, train_samples=178,
+        held_out_samples=20, truncated_samples=3, dropped_samples=0,
+        target_fully_truncated=1,
+    ))
     em.emit(events.epoch_end(0, loss=1.5, state_std=0.2, lr=0.01))
     em.emit(events.std_warning(1, 1.2, 1.0))
     em.emit(events.early_stop(3, best=0.8, held_out_loss=0.9))
 
-    assert len(em.events) == 4
+    assert len(em.events) == 5
     for ev in em.events:
         s = json.dumps(ev)  # 不抛异常 = 全原生类型
         assert "type" in ev
         assert "timestamp" in ev
     assert em.events[0]["type"] == "start"
     assert em.events[0]["config"]["lr"] == 0.01
-    assert em.events[2]["type"] == "std_warning"
-    assert em.events[3]["type"] == "early_stop"
+    assert em.events[1]["type"] == "data_summary"
+    assert em.events[1]["train_samples"] == 178
+    assert em.events[1]["target_fully_truncated"] == 1
+    assert em.events[3]["type"] == "std_warning"
+    assert em.events[4]["type"] == "early_stop"
 
 
 def test_events_file_overwrites_not_appends(tmp_path):

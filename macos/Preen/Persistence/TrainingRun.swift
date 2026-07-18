@@ -59,11 +59,20 @@ struct TrainingRunArtifacts: Codable, Equatable {
 
 struct TrainingRunSummary: Codable, Equatable {
     var actualEpochs: Int?
+    var firstEpochLoss: Double?
     var finalLoss: Double?
     var heldOutLoss: Double?
+    var bestHeldOutEpoch: Int?
     var stateStd: Double?
     var elapsedSeconds: Double?
     var dataHash: String?
+    var trainSamples: Int?
+    var heldOutSamples: Int?
+    var truncatedSamples: Int?
+    var droppedSamples: Int?
+    var targetFullyTruncated: Int?
+    var earlyStopped: Bool?
+    var earlyStopEpoch: Int?
 
     static let empty = TrainingRunSummary()
 }
@@ -162,13 +171,32 @@ extension TrainingRun {
         case .start:
             status = .running
             startedAt = date
-        case .resume, .epochStart, .step, .stdWarning, .earlyStop, .unknown:
+        case .dataSummary(
+            _, _, let train, let heldOut, let truncated, let dropped,
+            let targetFullyTruncated, _
+        ):
+            summary.trainSamples = train
+            summary.heldOutSamples = heldOut
+            summary.truncatedSamples = truncated
+            summary.droppedSamples = dropped
+            summary.targetFullyTruncated = targetFullyTruncated
+        case .resume, .epochStart, .step, .stdWarning, .unknown:
             break
         case .epochEnd(let epoch, let loss, let stateStd, _, let heldOutLoss, _, _, _):
             summary.actualEpochs = epoch + 1
+            if summary.firstEpochLoss == nil { summary.firstEpochLoss = loss }
             summary.finalLoss = loss
-            summary.heldOutLoss = heldOutLoss
+            if let heldOutLoss {
+                let isNewBest = summary.heldOutLoss.map { heldOutLoss < $0 } ?? true
+                if isNewBest {
+                    summary.heldOutLoss = heldOutLoss
+                    summary.bestHeldOutEpoch = epoch + 1
+                }
+            }
             summary.stateStd = stateStd
+        case .earlyStop(let epoch, _, _, _, _):
+            summary.earlyStopped = true
+            summary.earlyStopEpoch = epoch + 1
         case .checkpoint(_, let path, _):
             if !artifacts.checkpoints.contains(path) {
                 artifacts.checkpoints.append(path)

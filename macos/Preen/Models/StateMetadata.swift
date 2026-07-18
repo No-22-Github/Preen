@@ -10,7 +10,9 @@ struct StateMetadata: Decodable, Equatable {
     let template: String?
     let stateFormat: String?
     let stateDtype: String?
+    let precision: Precision?
     let config: Config?
+    let dataStats: DataStats?
     let result: Result?
     let artifacts: Artifacts?
 
@@ -50,6 +52,7 @@ struct StateMetadata: Decodable, Equatable {
         let finalLoss: Double
         let finalStateStd: Double
         let bestHeldOutLoss: Double?
+        let bestHeldOutEpoch: Int?
         let elapsed: Double
 
         enum CodingKeys: String, CodingKey {
@@ -58,6 +61,36 @@ struct StateMetadata: Decodable, Equatable {
             case finalLoss = "final_loss"
             case finalStateStd = "final_state_std"
             case bestHeldOutLoss = "best_held_out_loss"
+            case bestHeldOutEpoch = "best_held_out_epoch"
+        }
+    }
+
+    struct DataStats: Decodable, Equatable {
+        let total: Int?
+        let valid: Int?
+        let truncated: Int?
+        let targetFullyTruncated: Int?
+        let trainSamples: Int?
+        let heldOutSamples: Int?
+        let droppedSamples: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case total, valid, truncated
+            case targetFullyTruncated = "target_fully_truncated"
+            case trainSamples = "train_samples"
+            case heldOutSamples = "held_out_samples"
+            case droppedSamples = "dropped_samples"
+        }
+    }
+
+    struct Precision: Decodable, Equatable {
+        let weights: String?
+        let trainState: String?
+        let export: String?
+
+        enum CodingKeys: String, CodingKey {
+            case weights, export
+            case trainState = "train_state"
         }
     }
 
@@ -72,7 +105,8 @@ struct StateMetadata: Decodable, Equatable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case model, data, template, config, result, artifacts
+        case model, data, template, precision, config, result, artifacts
+        case dataStats = "data_stats"
         case modelName = "model_name"
         case modelPath = "model_path"
         case stateFormat = "state_format"
@@ -95,7 +129,9 @@ struct StateMetadata: Decodable, Equatable {
         template = try c.decodeIfPresent(String.self, forKey: .template)
         stateFormat = try c.decodeIfPresent(String.self, forKey: .stateFormat)
         stateDtype = try c.decodeIfPresent(String.self, forKey: .stateDtype)
+        precision = try c.decodeIfPresent(Precision.self, forKey: .precision)
         config = try c.decodeIfPresent(Config.self, forKey: .config)
+        dataStats = try c.decodeIfPresent(DataStats.self, forKey: .dataStats)
         result = try c.decodeIfPresent(Result.self, forKey: .result)
         artifacts = try c.decodeIfPresent(Artifacts.self, forKey: .artifacts)
     }

@@ -26,6 +26,12 @@ import Foundation
 enum TrainEvent: Decodable {
     /// `{"type":"start","config":{...}}` —— 训练开始,带超参快照。
     case start(config: TrainConfigSnapshot, timestamp: Double)
+    /// 最终 loader 口径的数据事实，在丢弃与训练/验证拆分后、训练循环前发出。
+    case dataSummary(
+        totalRecords: Int, validSamples: Int, trainSamples: Int, heldOutSamples: Int,
+        truncatedSamples: Int, droppedSamples: Int, targetFullyTruncated: Int,
+        timestamp: Double
+    )
     /// `{"type":"resume","epoch":N,"message":"..."}` —— 从 checkpoint 恢复(train.py:186-192)。
     case resume(epoch: Int, message: String, timestamp: Double)
     /// `{"type":"epoch_start","epoch":N}` —— 每轮开始。
@@ -81,6 +87,17 @@ enum TrainEvent: Decodable {
         case "start":
             let cfg = try c.decode(TrainConfigSnapshot.self, forKey: .config)
             self = .start(config: cfg, timestamp: ts)
+        case "data_summary":
+            self = .dataSummary(
+                totalRecords: try c.decode(Int.self, forKey: .totalRecords),
+                validSamples: try c.decode(Int.self, forKey: .validSamples),
+                trainSamples: try c.decode(Int.self, forKey: .trainSamples),
+                heldOutSamples: try c.decode(Int.self, forKey: .heldOutSamples),
+                truncatedSamples: try c.decode(Int.self, forKey: .truncatedSamples),
+                droppedSamples: try c.decode(Int.self, forKey: .droppedSamples),
+                targetFullyTruncated: try c.decode(Int.self, forKey: .targetFullyTruncated),
+                timestamp: ts
+            )
         case "resume":
             self = .resume(
                 epoch: try c.decode(Int.self, forKey: .epoch),
@@ -178,6 +195,13 @@ enum TrainEvent: Decodable {
         case heldOutLoss = "held_out_loss", best
         case patienceLeft = "patience_left"
         case message, path, elapsed
+        case totalRecords = "total_records"
+        case validSamples = "valid_samples"
+        case trainSamples = "train_samples"
+        case heldOutSamples = "held_out_samples"
+        case truncatedSamples = "truncated_samples"
+        case droppedSamples = "dropped_samples"
+        case targetFullyTruncated = "target_fully_truncated"
     }
 
     private struct DynamicKey: CodingKey {
@@ -193,6 +217,7 @@ enum TrainEvent: Decodable {
     var timestamp: Double {
         switch self {
         case .start(_, let t): return t
+        case .dataSummary(_, _, _, _, _, _, _, let t): return t
         case .resume(_, _, let t): return t
         case .epochStart(_, let t): return t
         case .step(_, _, _, _, _, let t): return t

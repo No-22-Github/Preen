@@ -7,6 +7,7 @@
 
 事件类型:
   start          训练开始,带 config 快照
+  data_summary   最终 loader 口径的数据量、验证集和截断事实
   epoch_start    epoch 开始
   step           一个训练步(按 log_every 抽样)
   epoch_end      epoch 结束,带平均 loss / state_std / lr
@@ -52,6 +53,13 @@ class Event:
     path: Optional[str] = None
     config: Optional[dict] = None
     elapsed: Optional[float] = None
+    total_records: Optional[int] = None
+    valid_samples: Optional[int] = None
+    train_samples: Optional[int] = None
+    held_out_samples: Optional[int] = None
+    truncated_samples: Optional[int] = None
+    dropped_samples: Optional[int] = None
+    target_fully_truncated: Optional[int] = None
 
     def to_dict(self) -> dict:
         """转 dict,丢弃值为 None 的字段(type/timestamp 总保留)。"""
@@ -128,6 +136,29 @@ class EventEmitter:
 # ── 便捷工厂(让 train.py 调用更清晰)─────────────────────────
 def start(config: dict) -> Event:
     return Event(type="start", config=config)
+
+
+def data_summary(
+    *,
+    total_records: int,
+    valid_samples: int,
+    train_samples: int,
+    held_out_samples: int,
+    truncated_samples: int,
+    dropped_samples: int,
+    target_fully_truncated: int,
+) -> Event:
+    """Record objective loader facts after dropping/splitting, before training starts."""
+    return Event(
+        type="data_summary",
+        total_records=total_records,
+        valid_samples=valid_samples,
+        train_samples=train_samples,
+        held_out_samples=held_out_samples,
+        truncated_samples=truncated_samples,
+        dropped_samples=dropped_samples,
+        target_fully_truncated=target_fully_truncated,
+    )
 
 
 def epoch_start(epoch: int) -> Event:

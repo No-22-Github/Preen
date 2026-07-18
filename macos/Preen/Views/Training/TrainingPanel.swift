@@ -193,61 +193,80 @@ struct TrainingPanel: View {
     // MARK: - failed
 
     private var failedView: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "xmark.octagon.fill")
-                .font(.system(size: 48))
-                .foregroundStyle(.red)
-            Text("训练失败")
-                .font(.title)
+        ScrollView {
+            VStack(spacing: 16) {
+                Image(systemName: "xmark.octagon.fill")
+                    .font(.system(size: 48))
+                    .foregroundStyle(.red)
+                Text("训练失败")
+                    .font(.title)
 
-            if let msg = store.errorMessage {
-                ScrollView { Text(msg).textSelection(.enabled).frame(maxWidth: 500) }
-                    .frame(maxHeight: 200)
-                    .padding(8)
-                    .background(.red.opacity(0.1), in: .rect)
-            }
+                TrainingResultSummaryView(facts: TrainingResultExplanation(store: store))
+                    .frame(maxWidth: 760)
 
-            HStack {
-                Button("返回配置") { store.reset(); phase = .configuring }
-                Button("查看曲线") { showingChart = true }
-                    .disabled(store.lossPoints.isEmpty)
+                if let msg = store.errorMessage {
+                    Text(msg)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: 720, alignment: .leading)
+                        .padding(8)
+                        .background(.red.opacity(0.1), in: .rect)
+                }
+
+                HStack {
+                    Button("返回配置") { store.reset(); phase = .configuring }
+                    Button("查看完整曲线") { showingChart = true }
+                        .disabled(store.lossPoints.isEmpty)
+                    Button("复制诊断") { copyTrainingDiagnostics() }
+                }
+                .buttonStyle(.bordered)
             }
-            .buttonStyle(.bordered)
-            .controlSize(.large)
+            .padding(32)
+            .frame(maxWidth: .infinity)
         }
-        .padding(32)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - cancelled
 
     private var cancelledView: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "stop.circle.fill")
-                .font(.system(size: 48))
-                .foregroundStyle(.orange)
-            Text("已停止")
-                .font(.title)
+        ScrollView {
+            VStack(spacing: 16) {
+                Image(systemName: "stop.circle.fill")
+                    .font(.system(size: 48))
+                    .foregroundStyle(.orange)
+                Text("已停止")
+                    .font(.title)
 
-            if let msg = store.cancelledMessage {
-                Text(msg)
-                    .font(.caption)
+                TrainingResultSummaryView(facts: TrainingResultExplanation(store: store))
+                    .frame(maxWidth: 760)
+
+                if let msg = store.cancelledMessage {
+                    Text(msg)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Text("训练已被取消，曲线已保留")
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
-            }
 
-            Text("训练已被取消，曲线已保留")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-
-            HStack {
-                Button("查看曲线") { showingChart = true }
-                    .disabled(store.lossPoints.isEmpty)
-                Button("返回配置") { store.reset(); phase = .configuring }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
+                HStack {
+                    Button("查看完整曲线") { showingChart = true }
+                        .disabled(store.lossPoints.isEmpty)
+                    Button("复制诊断") { copyTrainingDiagnostics() }
+                    Button("返回配置") { store.reset(); phase = .configuring }
+                }
+                .buttonStyle(.bordered)
             }
+            .padding(32)
+            .frame(maxWidth: .infinity)
         }
-        .padding(32)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func copyTrainingDiagnostics() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(
+            TrainingResultExplanation(store: store).diagnosticText,
+            forType: .string
+        )
     }
 }

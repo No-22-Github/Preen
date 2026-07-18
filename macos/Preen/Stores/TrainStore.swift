@@ -59,11 +59,13 @@ final class TrainStore {
 
     // === 进度(3 秒判据:不点不滚能读到)===
     private(set) var currentEpoch: Int = 0
+    private(set) var lastStartedEpoch: Int?
     private(set) var currentStep: Int = 0
     private(set) var totalSteps: Int = 0
     private(set) var currentLoss: Double = 0
     private(set) var currentLr: Double = 0
     private(set) var startedAt: Date?
+    private(set) var finishedAt: Date?
     private(set) var estimatedRemainingSeconds: Double?
     private(set) var currentSecondsPerStep: Double?
     private var stepTimingSamples: [(step: Int, timestamp: Double)] = []
@@ -77,6 +79,11 @@ final class TrainStore {
     private(set) var elapsed: Double?         // completed 的 elapsed
     private(set) var checkpoints: [(epoch: Int, path: String)] = []
     private(set) var earlyStopInfo: (epoch: Int, best: Double, heldOutLoss: Double)?
+    private(set) var trainSampleCount: Int?
+    private(set) var heldOutSampleCount: Int?
+    private(set) var truncatedSampleCount: Int?
+    private(set) var droppedSampleCount: Int?
+    private(set) var targetFullyTruncatedCount: Int?
 
     // === 失败/取消 ===
     private(set) var errorMessage: String?
@@ -191,11 +198,13 @@ final class TrainStore {
         epochLossPoints.removeAll()
         epochBoundaries.removeAll()
         currentEpoch = 0
+        lastStartedEpoch = nil
         currentStep = 0
         totalSteps = 0
         currentLoss = 0
         currentLr = 0
         startedAt = nil
+        finishedAt = nil
         estimatedRemainingSeconds = nil
         currentSecondsPerStep = nil
         stepTimingSamples.removeAll()
@@ -205,6 +214,11 @@ final class TrainStore {
         elapsed = nil
         checkpoints.removeAll()
         earlyStopInfo = nil
+        trainSampleCount = nil
+        heldOutSampleCount = nil
+        truncatedSampleCount = nil
+        droppedSampleCount = nil
+        targetFullyTruncatedCount = nil
         errorMessage = nil
         cancelledMessage = nil
         unknownEventCount = 0
@@ -247,22 +261,37 @@ final class TrainStore {
         case .start(let config, _):
             configSnapshot = config
             totalSteps = config.nSamples * config.epochs  // total_steps = epochs * n_samples
+        case .dataSummary(
+            _, _, let train, let heldOut, let truncated, let dropped,
+            let targetFullyTruncated, _
+        ):
+            trainSampleCount = train
+            heldOutSampleCount = heldOut
+            truncatedSampleCount = truncated
+            droppedSampleCount = dropped
+            targetFullyTruncatedCount = targetFullyTruncated
         case .resume(let epoch, _, _):
             currentEpoch = epoch
+            lastStartedEpoch = epoch + 1
         case .epochStart(let epoch, _):
             currentEpoch = epoch
+            lastStartedEpoch = epoch + 1
         case .step(let step, let total, let loss, let lr, let epoch, let timestamp):
             currentStep = step
             currentLoss = loss
             currentLr = lr
             totalSteps = total
-            if let ep = epoch { currentEpoch = ep }
+            if let ep = epoch {
+                currentEpoch = ep
+                lastStartedEpoch = ep + 1
+            }
             lossPoints.append(TrainingMetric(
                 step: step, loss: loss, learningRate: lr, epoch: currentEpoch, timestamp: timestamp
             ))
             updateEta(step: step, timestamp: timestamp)
         case .epochEnd(let epoch, let loss, let stateStd, _, let heldOut, let best, _, _):
             currentEpoch = epoch
+            lastStartedEpoch = epoch + 1
             let epochEndStep = actualEpochEndStep(epoch: epoch)
             epochBoundaries.append(EpochBoundary(epoch: epoch, step: epochEndStep))
             epochLossPoints.append(EpochLossPoint(
@@ -295,12 +324,15 @@ final class TrainStore {
             self.elapsed = elapsed
             if totalSteps > 0 { currentStep = totalSteps - 1 }
             estimatedRemainingSeconds = 0
+            finishedAt = Date(timeIntervalSince1970: event.timestamp)
             state = .completed
         case .failed(let message, _, _):
             self.errorMessage = L10n.backendMessage(message, fallback: "训练失败，请查看训练日志")
+            finishedAt = Date(timeIntervalSince1970: event.timestamp)
             state = .failed
         case .cancelled(let message, _):
             self.cancelledMessage = L10n.backendMessage(message, fallback: "训练已取消")
+            finishedAt = Date(timeIntervalSince1970: event.timestamp)
             state = .cancelled
         case .unknown:
             // 演进兜底:Python 加新事件类型不让旧 app 崩。
@@ -344,7 +376,7 @@ final class TrainStore {
                     body: L10n.backendMessage(message, fallback: "训练已取消")
                 )
             }
-        case .start, .resume, .epochStart, .epochEnd, .stdWarning,
+        case .start, .dataSummary, .resume, .epochStart, .epochEnd, .stdWarning,
              .checkpoint, .earlyStop, .final, .unknown:
             break
         }
@@ -471,9 +503,10 @@ final class TrainStore {
 
         let shouldSave: Bool
         switch event {
-        case .start, .epochEnd, .checkpoint, .final, .completed, .failed, .cancelled:
+        case .start, .dataSummary, .epochEnd, .checkpoint, .earlyStop,
+             .final, .completed, .failed, .cancelled:
             shouldSave = true
-        case .resume, .epochStart, .step, .stdWarning, .earlyStop, .unknown:
+        case .resume, .epochStart, .step, .stdWarning, .unknown:
             shouldSave = false
         }
         if shouldSave {
@@ -491,9 +524,21 @@ final class TrainStore {
                 run.summary.actualEpochs = metadata.result?.epochsRun
                 run.summary.finalLoss = metadata.result?.finalLoss
                 run.summary.heldOutLoss = metadata.result?.bestHeldOutLoss
+                run.summary.bestHeldOutEpoch = metadata.result?.bestHeldOutEpoch
+                    ?? run.summary.bestHeldOutEpoch
                 run.summary.stateStd = metadata.result?.finalStateStd
                 run.summary.elapsedSeconds = metadata.result?.elapsed
                 run.summary.dataHash = metadata.dataSHA256.isEmpty ? nil : metadata.dataSHA256
+                run.summary.trainSamples = metadata.dataStats?.trainSamples
+                    ?? run.summary.trainSamples
+                run.summary.heldOutSamples = metadata.dataStats?.heldOutSamples
+                    ?? run.summary.heldOutSamples
+                run.summary.truncatedSamples = metadata.dataStats?.truncated
+                    ?? run.summary.truncatedSamples
+                run.summary.droppedSamples = metadata.dataStats?.droppedSamples
+                    ?? run.summary.droppedSamples
+                run.summary.targetFullyTruncated = metadata.dataStats?.targetFullyTruncated
+                    ?? run.summary.targetFullyTruncated
             }
         }
         if let config = run.config {
@@ -505,13 +550,18 @@ final class TrainStore {
         }
     }
 
+    func recordPthArtifact(path: String) async throws {
+        guard let id = currentRun?.id else { return }
+        currentRun = try await repository.setPthArtifact(runID: id, path: path)
+    }
+
     // MARK: - 派生(UI 便利)
 
     /// 已运行秒数(从 start 到现在)。
     var elapsedSeconds: Double? {
         guard let start = startedAt else { return nil }
         if state == .completed || state == .failed || state == .cancelled {
-            return elapsed
+            return elapsed ?? finishedAt?.timeIntervalSince(start)
         }
         return Date().timeIntervalSince(start)
     }

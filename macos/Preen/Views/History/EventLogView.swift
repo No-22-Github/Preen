@@ -51,6 +51,7 @@ extension TrainEvent {
     var typeName: String {
         switch self {
         case .start: return "start"
+        case .dataSummary: return "data_summary"
         case .resume: return "resume"
         case .epochStart: return "epoch_start"
         case .step: return "step"
@@ -69,6 +70,11 @@ extension TrainEvent {
     var summaryText: String {
         switch self {
         case .start(let config, _): return L10n.format("%lld 条 · %lld 轮 · ctx %lld", config.nSamples, config.epochs, config.ctxLen)
+        case .dataSummary(_, _, let train, let heldOut, let truncated, let dropped, _, _):
+            return L10n.format(
+                "训练 %lld · 验证 %lld · 截断 %lld · 丢弃 %lld",
+                train, heldOut, truncated, dropped
+            )
         case .resume(let epoch, let message, _):
             return L10n.format("第 %lld 轮 · %@", epoch + 1, L10n.backendMessage(message, fallback: "正在恢复训练"))
         case .epochStart(let epoch, _): return L10n.format("第 %lld 轮开始", epoch + 1)

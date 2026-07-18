@@ -112,9 +112,15 @@ actor RunRepository {
                 run.summary.actualEpochs = metadata.result?.epochsRun
                 run.summary.finalLoss = metadata.result?.finalLoss
                 run.summary.heldOutLoss = metadata.result?.bestHeldOutLoss
+                run.summary.bestHeldOutEpoch = metadata.result?.bestHeldOutEpoch
                 run.summary.stateStd = metadata.result?.finalStateStd
                 run.summary.elapsedSeconds = metadata.result?.elapsed
                 run.summary.dataHash = metadata.dataSHA256.isEmpty ? nil : metadata.dataSHA256
+                run.summary.trainSamples = metadata.dataStats?.trainSamples
+                run.summary.heldOutSamples = metadata.dataStats?.heldOutSamples
+                run.summary.truncatedSamples = metadata.dataStats?.truncated
+                run.summary.droppedSamples = metadata.dataStats?.droppedSamples
+                run.summary.targetFullyTruncated = metadata.dataStats?.targetFullyTruncated
             }
         }
         _ = try create(run)

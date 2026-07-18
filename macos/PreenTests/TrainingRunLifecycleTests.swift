@@ -6,6 +6,11 @@ final class TrainingRunLifecycleTests: XCTestCase {
         var run = TrainingRun(createdAt: Date(timeIntervalSince1970: 1))
         run.apply(event: .start(config: snapshot, timestamp: 2))
         XCTAssertEqual(run.status, .running)
+        run.apply(event: .dataSummary(
+            totalRecords: 12, validSamples: 12, trainSamples: 10, heldOutSamples: 2,
+            truncatedSamples: 1, droppedSamples: 0, targetFullyTruncated: 0,
+            timestamp: 2.5
+        ))
         run.apply(event: .epochEnd(
             epoch: 0, loss: 2.5, stateStd: 0.12, lr: 0.01,
             heldOutLoss: 2.7, best: 2.7, patienceLeft: 3, timestamp: 3
@@ -15,7 +20,12 @@ final class TrainingRunLifecycleTests: XCTestCase {
         run.apply(event: .completed(path: "/tmp/state.npz", elapsed: 11, message: nil, timestamp: 5))
         XCTAssertEqual(run.status, .completed)
         XCTAssertEqual(run.summary.finalLoss, 2.5)
+        XCTAssertEqual(run.summary.firstEpochLoss, 2.5)
+        XCTAssertEqual(run.summary.bestHeldOutEpoch, 1)
         XCTAssertEqual(run.summary.actualEpochs, 1)
+        XCTAssertEqual(run.summary.trainSamples, 10)
+        XCTAssertEqual(run.summary.heldOutSamples, 2)
+        XCTAssertEqual(run.summary.truncatedSamples, 1)
         XCTAssertEqual(run.artifacts.statePath, "/tmp/state.npz")
     }
 

@@ -11,12 +11,16 @@ struct TrainingRunDetailView: View {
     @State private var comparisons: [SavedComparison] = []
     @State private var exportMessage: String?
     @State private var exportError: String?
+    @State private var metadata: StateMetadata?
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 header
                 Divider()
+                if run.kind == .training || metadata?.result != nil {
+                    TrainingResultSummaryView(facts: explanation)
+                }
                 if let replayStore, !replayStore.lossPoints.isEmpty {
                     TrainingChartView(store: replayStore)
                         .frame(minHeight: 460)
@@ -46,6 +50,7 @@ struct TrainingRunDetailView: View {
                         .buttonStyle(.borderedProminent)
                 }
                 Menu("操作") {
+                    Button("复制诊断") { copyDiagnostics() }
                     Button("复制日志") { copyLog() }
                     Button("导出事件") { exportEvents() }
                     Button("在 Finder 中显示") { revealRun() }
@@ -157,6 +162,11 @@ struct TrainingRunDetailView: View {
         events = await appState.runRepository.loadEvents(id: run.id)
         stderrLog = await appState.runRepository.loadStderr(id: run.id)
         comparisons = await appState.runRepository.loadComparisons(runID: run.id)
+        if let path = run.artifacts.metadataPath {
+            metadata = try? StateMetadata.load(from: URL(fileURLWithPath: path))
+        } else {
+            metadata = nil
+        }
         let store = TrainStore()
         store.replay(events: events)
         replayStore = store
@@ -165,6 +175,15 @@ struct TrainingRunDetailView: View {
     private func copyLog() {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(stderrLog, forType: .string)
+    }
+
+    private var explanation: TrainingResultExplanation {
+        TrainingResultExplanation(run: run, events: events, metadata: metadata)
+    }
+
+    private func copyDiagnostics() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(explanation.diagnosticText, forType: .string)
     }
 
     private func exportEvents() {

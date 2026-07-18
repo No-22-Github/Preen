@@ -712,6 +712,38 @@
 "数据检查进程异常退出" = "The data check process exited unexpectedly";
 "已复用相同配置的数据检查缓存" = "Reused the data check cache for the same configuration";
 
+/* Objective training result explanation. */
+"训练结果" = "Training Result";
+"结束原因" = "End Reason";
+"实际轮数 / 配置上限" = "Actual Epochs / Configured Limit";
+"训练 loss（第 1 轮→最终轮）" = "Training Loss (Epoch 1 → Final Epoch)";
+"验证 loss" = "Validation Loss";
+"验证集" = "Validation Set";
+"未启用验证集，无法判断泛化趋势" = "No validation set was enabled, so generalization trends cannot be assessed";
+"已发生阶段" = "Last Reached Stage";
+"总耗时" = "Total Duration";
+"数据与配置" = "Data & Configuration";
+"训练 / 验证样本" = "Training / Validation Samples";
+"截断 / 丢弃" = "Truncated / Dropped";
+"模型与精度" = "Model & Precision";
+"正常完成" = "Completed Normally";
+"因连续 %lld 轮未改善而早停" = "Stopped early after %lld consecutive epochs without improvement";
+"因验证 loss 未继续改善而早停" = "Stopped early because validation loss stopped improving";
+"用户取消" = "Cancelled by User";
+"App 退出导致中断" = "Interrupted When the App Exited";
+"仍在进行" = "Still in Progress";
+"无变化" = "No Change";
+"下降" = "Decreased";
+"上升" = "Increased";
+" · 最佳 %.4f（第 %lld 轮）" = " · best %.4f (epoch %lld)";
+"尚未完成第 1 轮" = "Epoch 1 Was Not Completed";
+"已进入第 %lld 轮" = "Reached Epoch %lld";
+"已记录 %lld 步" = "Recorded %lld Steps";
+"更多" = "More";
+"查看完整曲线" = "View Full Curves";
+"复制诊断" = "Copy Diagnostics";
+"训练 %lld · 验证 %lld · 截断 %lld · 丢弃 %lld" = "Training %lld · Validation %lld · Truncated %lld · Dropped %lld";
+
 /* About screen descriptions. */
 "核心训练/推理引擎，提供 rwkv7.py 前向与自动微分" = "Core training and inference engine providing the rwkv7.py forward pass and automatic differentiation.";
 "Apple 机器学习框架，张量运算与自动微分的底层地基" = "Apple's machine-learning framework for tensor operations and automatic differentiation.";

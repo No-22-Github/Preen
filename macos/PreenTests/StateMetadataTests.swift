@@ -59,6 +59,35 @@ final class StateMetadataTests: XCTestCase {
         XCTAssertNil(metadata.result)
     }
 
+    func testV2ExplanationFieldsDecodeWhenPresent() throws {
+        let json = """
+        {
+          "format_version": 2,
+          "created_at": 1,
+          "model_path": "/models/rwkv",
+          "data_sha256": "abcdef",
+          "precision": {"weights":"bf16","train_state":"fp32","export":"fp32"},
+          "data_stats": {
+            "total": 200, "valid": 198, "truncated": 4,
+            "target_fully_truncated": 1, "train_samples": 178,
+            "held_out_samples": 20, "dropped_samples": 0
+          },
+          "result": {
+            "epochs_run": 3, "final_loss": 1.2, "final_state_std": 0.13,
+            "best_held_out_loss": 1.1, "best_held_out_epoch": 2, "elapsed": 12
+          }
+        }
+        """
+        let metadata = try JSONDecoder().decode(StateMetadata.self, from: Data(json.utf8))
+        XCTAssertEqual(metadata.precision?.weights, "bf16")
+        XCTAssertEqual(metadata.precision?.trainState, "fp32")
+        XCTAssertEqual(metadata.dataStats?.trainSamples, 178)
+        XCTAssertEqual(metadata.dataStats?.heldOutSamples, 20)
+        XCTAssertEqual(metadata.dataStats?.truncated, 4)
+        XCTAssertEqual(metadata.dataStats?.droppedSamples, 0)
+        XCTAssertEqual(metadata.result?.bestHeldOutEpoch, 2)
+    }
+
     @MainActor
     func testRecordSuggestionAppliesUntilUserExplicitlyOverrides() {
         let store = ChatStore()

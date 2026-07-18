@@ -226,7 +226,26 @@ def run_training(
                 f"Held-out: {len(held_out)} samples (split {request.test_ratio:.0%} from training data)"
             )
 
+    dropped_samples = data_summary.truncated if request.drop_truncated else 0
+    emitter.emit(events.data_summary(
+        total_records=data_summary.total,
+        valid_samples=data_summary.valid,
+        train_samples=len(samples),
+        held_out_samples=len(held_out or []),
+        truncated_samples=data_summary.truncated,
+        dropped_samples=dropped_samples,
+        target_fully_truncated=data_summary.target_fully_truncated,
+    ))
+
     result = Trainer(model, cfg, emitter).train(samples, held_out)
+    best_held_out_epoch = None
+    if result.best_held_out_loss is not None:
+        best_held_out_epoch = next((
+            event["epoch"] + 1
+            for event in emitter.events
+            if event["type"] == "epoch_end"
+            and event.get("held_out_loss") == result.best_held_out_loss
+        ), None)
 
     request.out.parent.mkdir(parents=True, exist_ok=True)
     save_state_npz(result.states, request.out)
@@ -257,12 +276,18 @@ def run_training(
         data_path=request.data,
         template=request.template,
         config=cfg.to_dict(),
-        data_stats=data_summary.to_dict(),
+        data_stats={
+            **data_summary.to_dict(),
+            "train_samples": len(samples),
+            "held_out_samples": len(held_out or []),
+            "dropped_samples": dropped_samples,
+        },
         result={
             "epochs_run": result.epochs_run,
             "final_loss": result.final_loss,
             "final_state_std": result.final_state_std,
             "best_held_out_loss": result.best_held_out_loss,
+            "best_held_out_epoch": best_held_out_epoch,
             "elapsed": result.elapsed,
         },
         pth_path=pth_path,
