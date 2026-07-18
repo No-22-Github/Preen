@@ -9,6 +9,10 @@
 
 ## [未发布]
 
+### 新增
+
+- **会话格式成为显式配置**：对话参数面板新增 QA / Instruction / Raw、Reasoning 与 Off / Fast / On 设置，toolbar 持续显示当前口径；新会话会把格式与七个采样字段完整下发给 `serve`，默认保持 `qa + reasoning=false + think=off`，非法组合在界面禁用且后端继续校验。有历史时更改格式会先确认，取消不会污染当前设置；think=on 继续按后端 `phase / thinking / answer` 分段展示。
+
 ### 变更
 
 - **模型转换改为 mmap 流式读写,并以完整目录为单位安全提交**:`model_converter.convert` 此前通过 `read_pth` 全量加载源 storage,再构建完整目标权重 dict,转换 1.5B 模型峰值约 6GB。现改为:

@@ -87,10 +87,10 @@ struct ContentView: View {
                                 } label: {
                                     HStack(spacing: 6) {
                                         Image(systemName: "slider.horizontal.3")
-                                        Text("生成参数…")
+                                        Text(appState.chatStore.sessionConfig.formatSummary)
                                     }
                                 }
-                                .help("温度、top_p、惩罚等生成参数")
+                                .help("会话格式、Reasoning、思考与生成参数")
                             }
                         }
 

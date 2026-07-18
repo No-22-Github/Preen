@@ -572,6 +572,14 @@
 "输入前缀" = "Input Prefix";
 "训练目标" = "Training Target";
 "held-out loss" = "Held-out Loss";
+"会话格式" = "Session Format";
+"Reasoning 格式" = "Reasoning Format";
+"RWKV G1 类 reasoning 模型通常使用 QA + Reasoning + Fast。Fast 使用空 think 标签直接回答；On 展示思考与正式回答。" = "RWKV G1 reasoning models commonly use QA + Reasoning + Fast. Fast uses an empty think tag for a direct answer; On shows reasoning separately from the final answer.";
+"更改会话格式会清空当前会话？" = "Changing the session format will clear this chat?";
+"更改格式" = "Change Format";
+"当前消息将被清空，并按新的模板、Reasoning 与思考设置建立会话。此操作无法撤销。" = "Current messages will be cleared and a new session will use the selected template, Reasoning, and thinking settings. This cannot be undone.";
+"会话格式组合无效" = "Invalid session format combination";
+"会话格式、Reasoning、思考与生成参数" = "Session format, Reasoning, thinking, and generation parameters";
 
 /* About screen descriptions. */
 "核心训练/推理引擎，提供 rwkv7.py 前向与自动微分" = "Core training and inference engine providing the rwkv7.py forward pass and automatic differentiation.";

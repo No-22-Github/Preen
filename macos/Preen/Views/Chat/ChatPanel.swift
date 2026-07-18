@@ -32,6 +32,9 @@ struct ChatPanel: View {
     @State private var showClearConfirm: Bool = false
     /// 仅当用户仍位于底部附近时，才跟随流式输出。
     @State private var isFollowingLatest: Bool = true
+    /// 参数 sheet 使用草稿，取消时不会把半成品设置写回真实会话。
+    @State private var draftSessionConfig: ChatSessionConfig = .defaultConfig
+    @State private var showFormatResetConfirm = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -77,6 +80,11 @@ struct ChatPanel: View {
         .sheet(isPresented: $isShowingGenerationParameters) {
             samplerSheet
         }
+        .onChange(of: isShowingGenerationParameters) { _, shown in
+            if shown {
+                draftSessionConfig = store.sessionConfig
+            }
+        }
     }
 
     private var samplerSheet: some View {
@@ -93,9 +101,9 @@ struct ChatPanel: View {
                 Spacer()
 
                 Button("恢复默认") {
-                    store.genConfig = .defaultConfig
+                    draftSessionConfig = .defaultConfig
                 }
-                .disabled(store.genConfig == .defaultConfig)
+                .disabled(draftSessionConfig == .defaultConfig)
             }
             .padding(20)
 
@@ -103,25 +111,58 @@ struct ChatPanel: View {
 
             ScrollView {
                 VStack(spacing: 14) {
+                    parameterSection(title: "会话格式") {
+                        Picker("模板", selection: $draftSessionConfig.template) {
+                            ForEach(ChatTemplate.allCases) { template in
+                                Text(template.displayName).tag(template)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .onChange(of: draftSessionConfig.template) { _, _ in
+                            draftSessionConfig = draftSessionConfig.normalized()
+                        }
+
+                        Divider()
+
+                        Toggle("Reasoning 格式", isOn: $draftSessionConfig.reasoning)
+                            .disabled(draftSessionConfig.template != .qa)
+                            .onChange(of: draftSessionConfig.reasoning) { _, _ in
+                                draftSessionConfig = draftSessionConfig.normalized()
+                            }
+
+                        Picker("思考", selection: $draftSessionConfig.think) {
+                            ForEach(ThinkMode.allCases) { mode in
+                                Text(mode.displayName).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .disabled(!draftSessionConfig.reasoning || draftSessionConfig.template != .qa)
+
+                        Text("RWKV G1 类 reasoning 模型通常使用 QA + Reasoning + Fast。Fast 使用空 think 标签直接回答；On 展示思考与正式回答。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
                     parameterSection(title: "采样") {
                         GenerationDoubleField(
                             title: "温度",
                             detail: "控制回答的随机性",
-                            value: $store.genConfig.temperature,
+                            value: $draftSessionConfig.genConfig.temperature,
                             defaultValue: 1.2
                         )
                         Divider()
                         GenerationDoubleField(
                             title: "核采样",
                             detail: "限制候选 token 范围",
-                            value: $store.genConfig.topP,
+                            value: $draftSessionConfig.genConfig.topP,
                             defaultValue: 0.5
                         )
                         Divider()
                         GenerationIntField(
                             title: "最大长度",
                             detail: "单次回复的 token 上限",
-                            value: $store.genConfig.maxTokens,
+                            value: $draftSessionConfig.genConfig.maxTokens,
                             defaultValue: 300
                         )
                     }
@@ -130,21 +171,21 @@ struct ChatPanel: View {
                         GenerationDoubleField(
                             title: "出现惩罚",
                             detail: "降低已出现内容再次生成的概率",
-                            value: $store.genConfig.presencePenalty,
+                            value: $draftSessionConfig.genConfig.presencePenalty,
                             defaultValue: 0.4
                         )
                         Divider()
                         GenerationDoubleField(
                             title: "频率惩罚",
                             detail: "按出现次数增加惩罚",
-                            value: $store.genConfig.frequencyPenalty,
+                            value: $draftSessionConfig.genConfig.frequencyPenalty,
                             defaultValue: 0.4
                         )
                         Divider()
                         GenerationDoubleField(
                             title: "惩罚衰减",
                             detail: "控制重复惩罚随时间衰减",
-                            value: $store.genConfig.penaltyDecay,
+                            value: $draftSessionConfig.genConfig.penaltyDecay,
                             defaultValue: 0.996
                         )
                     }
@@ -153,7 +194,7 @@ struct ChatPanel: View {
                         GenerationIntField(
                             title: "随机种子",
                             detail: "相同参数下复现采样结果",
-                            value: $store.genConfig.seed,
+                            value: $draftSessionConfig.genConfig.seed,
                             defaultValue: 42
                         )
                     }
@@ -167,15 +208,25 @@ struct ChatPanel: View {
                 Button("取消", role: .cancel) { isShowingGenerationParameters = false }
                 Spacer()
                 Button("应用") {
-                    store.applyConfig()
-                    isShowingGenerationParameters = false
+                    requestApplySessionConfig()
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
+                .disabled(!draftSessionConfig.isValid)
             }
             .padding(20)
         }
-        .frame(width: 520, height: 600)
+        .frame(width: 520, height: 720)
+        .confirmationDialog(
+            "更改会话格式会清空当前会话？",
+            isPresented: $showFormatResetConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("更改格式", role: .destructive) { commitSessionConfig() }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("当前消息将被清空，并按新的模板、Reasoning 与思考设置建立会话。此操作无法撤销。")
+        }
     }
 
     private func parameterSection<Content: View>(
@@ -338,6 +389,20 @@ struct ChatPanel: View {
         onConnect()
         // 弹出启动日志窗口,实时看后端输出,ready 自动关。
         isShowingStartupLog = true
+    }
+
+    private func requestApplySessionConfig() {
+        let formatChanged = draftSessionConfig.normalized().formatFields != store.sessionConfig.formatFields
+        if formatChanged && !store.messages.isEmpty {
+            showFormatResetConfirm = true
+        } else {
+            commitSessionConfig()
+        }
+    }
+
+    private func commitSessionConfig() {
+        store.applySessionConfig(draftSessionConfig)
+        isShowingGenerationParameters = false
     }
 
 }

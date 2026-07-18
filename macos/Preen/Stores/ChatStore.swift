@@ -84,7 +84,11 @@ final class ChatStore {
     private var consumeTask: Task<Void, Never>?
 
     // === 配置 ===
-    var genConfig: GenConfig = .defaultConfig
+    var sessionConfig: ChatSessionConfig = .defaultConfig
+    var genConfig: GenConfig {
+        get { sessionConfig.genConfig }
+        set { sessionConfig.genConfig = newValue }
+    }
     var statePath: String?  // 当前 state 文件路径(nil = 无 state 基线)
     /// 当前已连接的模型路径(connect 时记录,disconnect 清)。供状态栏与 toolbar 展示。
     private(set) var connectedModelPath: String?
@@ -228,6 +232,26 @@ final class ChatStore {
         }
     }
 
+    /// 应用完整会话配置。格式字段变化会重建 session；仅采样字段变化走 set_config。
+    /// 是否需要确认丢弃历史由调用方统一裁决，Store 只执行已经确认的意图。
+    func applySessionConfig(_ proposed: ChatSessionConfig) {
+        let next = proposed.normalized()
+        guard next.isValid else {
+            lastError = L10n.string("会话格式组合无效")
+            return
+        }
+        let formatChanged = next.formatFields != sessionConfig.formatFields
+        let generationChanged = next.genConfig != sessionConfig.genConfig
+        sessionConfig = next
+
+        guard isConnected else { return }
+        if formatChanged {
+            newSession()
+        } else if generationChanged {
+            applyConfig()
+        }
+    }
+
     /// 切换 state 文件。
     func setState(path: String?) {
         guard let sid = sessionId else { return }
@@ -283,12 +307,14 @@ final class ChatStore {
     }
 
     /// 新建会话(连接后自动调,或换模板/切 state 后重建)。
-    func newSession(template: String = "qa", reasoning: Bool? = nil, think: String? = nil) {
+    func newSession() {
         Task { [weak self] in
             guard let self else { return }
             do {
-                let sid = try await self.client?.newSession(template: template, reasoning: reasoning,
-                                                            think: think, statePath: self.statePath,
+                let sid = try await self.client?.newSession(template: self.sessionConfig.template.rawValue,
+                                                            reasoning: self.sessionConfig.reasoning,
+                                                            think: self.sessionConfig.think.rawValue,
+                                                            statePath: self.statePath,
                                                             genConfig: self.genConfig.toDTO())
                 self.sessionId = sid
                 self.messages.removeAll()
@@ -306,7 +332,7 @@ final class ChatStore {
         case .ready:
             isConnected = true
             backendStore.updateInference(phase: .ready, pid: client?.pid, message: inferenceSummary)
-            // 自动建会话(qa 模板默认)。
+            // 自动按用户当前会话口径建会话；安全默认是 qa + 非 reasoning。
             newSession()
         case .textChunk(let id, _, let delta, let phase):
             handleTextChunk(id: id, delta: delta, phase: phase)
