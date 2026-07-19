@@ -31,6 +31,7 @@ struct ChatPanel: View {
     @State private var isShowingStartupLog: Bool = false
     /// 清除会话确认弹窗。
     @State private var showClearConfirm: Bool = false
+    @State private var showClearComparisonConfirm: Bool = false
     /// 仅当用户仍位于底部附近时，才跟随流式输出。
     @State private var isFollowingLatest: Bool = true
     /// 参数 sheet 使用草稿，取消时不会把半成品设置写回真实会话。
@@ -56,7 +57,7 @@ struct ChatPanel: View {
                         inputText = ""
                     },
                     onAbort: { store.abort() },
-                    onClearSession: { store.clearComparison() }
+                    onClearSession: { showClearComparisonConfirm = true }
                 )
             } else if isRawContinuationMode {
                 // RAW 模板:整页大输入框 + 续写区,不用 ChatInputBar。
@@ -102,6 +103,16 @@ struct ChatPanel: View {
             Button("取消", role: .cancel) {}
         } message: {
             Text("将清空所有对话消息并开始新一轮。此操作无法撤销。")
+        }
+        .confirmationDialog(
+            "清除本次比较？",
+            isPresented: $showClearComparisonConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("清除", role: .destructive) { store.clearComparison() }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("将清空问题和两侧生成结果。此操作无法撤销。")
         }
         .sheet(isPresented: $isShowingStartupLog) {
             StartupLogSheet(
@@ -205,10 +216,22 @@ struct ChatPanel: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if let message = store.comparisonSaveMessage {
-                Text(message)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.bottom, 6)
+                HStack(spacing: 8) {
+                    Text(message)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(message)
+                    if let url = store.comparisonSaveURL {
+                        Button("在 Finder 中显示") {
+                            NSWorkspace.shared.activateFileViewerSelecting([url])
+                        }
+                        .buttonStyle(.link)
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 6)
             }
         }
     }

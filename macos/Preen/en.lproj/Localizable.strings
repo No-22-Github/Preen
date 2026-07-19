@@ -743,6 +743,9 @@
 "查看完整曲线" = "View Full Curves";
 "复制诊断" = "Copy Diagnostics";
 "训练 %lld · 验证 %lld · 截断 %lld · 丢弃 %lld" = "Training %lld · Validation %lld · Truncated %lld · Dropped %lld";
+"清除本次比较？" = "Clear This Comparison?";
+"将清空问题和两侧生成结果。此操作无法撤销。" = "This clears the prompt and both generated results. This action cannot be undone.";
+"已保存到 %@" = "Saved to %@";
 
 /* About screen descriptions. */
 "核心训练/推理引擎，提供 rwkv7.py 前向与自动微分" = "Core training and inference engine providing the rwkv7.py forward pass and automatic differentiation.";

@@ -75,7 +75,8 @@ actor RunRepository {
         return (try? String(contentsOf: url, encoding: .utf8)) ?? ""
     }
 
-    func appendComparison(runID: UUID, record: SavedComparison) throws {
+    @discardableResult
+    func appendComparison(runID: UUID, record: SavedComparison) throws -> URL {
         _ = try load(id: runID)  // 只允许写入真实存在的 run。
         let url = directoryURL(for: runID).appendingPathComponent(Self.comparisonsFilename)
         let lineEncoder = JSONEncoder()
@@ -85,12 +86,13 @@ actor RunRepository {
         line.append(0x0A)
         if !fileManager.fileExists(atPath: url.path) {
             try line.write(to: url, options: .atomic)
-            return
+            return url
         }
         let handle = try FileHandle(forWritingTo: url)
         defer { try? handle.close() }
         try handle.seekToEnd()
         try handle.write(contentsOf: line)
+        return url
     }
 
     func loadComparisons(runID: UUID) -> [SavedComparison] {

@@ -142,6 +142,7 @@ final class ChatStore {
     private(set) var stateComparison = ComparisonSideOutput()
     private(set) var comparisonSuggestions: [String] = []
     private(set) var comparisonSaveMessage: String?
+    private(set) var comparisonSaveURL: URL?
     private(set) var associatedRunID: UUID?
     private var comparisonInFlight = false
 
@@ -282,6 +283,7 @@ final class ChatStore {
         baselineComparison = ComparisonSideOutput(status: .generating)
         stateComparison = ComparisonSideOutput(status: .waiting)
         comparisonSaveMessage = nil
+        comparisonSaveURL = nil
         comparisonInFlight = true
         isGenerating = true
         lastError = nil
@@ -313,6 +315,7 @@ final class ChatStore {
         baselineComparison = ComparisonSideOutput()
         stateComparison = ComparisonSideOutput()
         comparisonSaveMessage = nil
+        comparisonSaveURL = nil
     }
 
     func configureComparisonContext(dataPath: String?, runID: UUID?) {
@@ -339,9 +342,11 @@ final class ChatStore {
         )
         Task { [weak self] in
             do {
-                try await runRepository.appendComparison(runID: runID, record: record)
-                self?.comparisonSaveMessage = L10n.string("比较结果已保存")
+                let url = try await runRepository.appendComparison(runID: runID, record: record)
+                self?.comparisonSaveURL = url
+                self?.comparisonSaveMessage = L10n.format("已保存到 %@", url.path)
             } catch {
+                self?.comparisonSaveURL = nil
                 self?.comparisonSaveMessage = error.localizedDescription
             }
         }
@@ -511,8 +516,8 @@ final class ChatStore {
             } else {
                 handleTurnEnd(id: id, result: result, thinking: thinking, answer: answer)
             }
-        case .sideError(let id, let side, _, let message):
-            handleComparisonSideError(id: id, side: side, message: message)
+        case .sideError(let id, let side, let code, let message):
+            handleComparisonSideError(id: id, side: side, code: code, message: message)
         case .ok(let id, _):
             // 终结事件(非 send 的指令,如 set_config/set_state)。标记生成结束。
             if id == inFlightId {
@@ -692,12 +697,22 @@ final class ChatStore {
         }
     }
 
-    private func handleComparisonSideError(id: String, side: ServeSide?, message: String) {
+    private func handleComparisonSideError(
+        id: String,
+        side: ServeSide?,
+        code: ServeErrorCode,
+        message: String
+    ) {
         inFlightId = id
         guard let side else { return }
         var output = comparisonOutput(for: side)
-        output.status = .failed
-        output.errorText = L10n.backendMessage(message, fallback: "这一侧生成失败")
+        if code == .aborted {
+            output.status = .aborted
+            output.errorText = nil
+        } else {
+            output.status = .failed
+            output.errorText = L10n.backendMessage(message, fallback: "这一侧生成失败")
+        }
         setComparisonOutput(output, for: side)
         if side == .baseline, stateComparison.status == .waiting {
             stateComparison.status = .generating
