@@ -2,13 +2,10 @@ import XCTest
 @testable import Preen
 
 final class BuiltinDatasetTests: XCTestCase {
-    private var resourceDirectory: URL {
-        let root = PythonResolver.repoRoot ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        return root.appendingPathComponent("macos/Preen/Resources/Datasets/NekoQA200")
-    }
-
     func testManifestDataLicenseAndNoticeValidateTogether() throws {
-        let dataset = try BuiltinDataset.load(directory: resourceDirectory)
+        // 从内置 bundle 解析目录,不依赖 repo 源码相对路径或 cwd(CI 上 cwd 不在 repo 根)。
+        let directory = try BuiltinDataset.nekoQA200().directoryURL
+        let dataset = try BuiltinDataset.load(directory: directory)
         XCTAssertEqual(dataset.manifest.id, "builtin:nekoqa_200")
         XCTAssertEqual(dataset.manifest.subsetVersion, "1.1.0-1")
         XCTAssertEqual(dataset.manifest.sampleCount, 200)

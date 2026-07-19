@@ -30,10 +30,11 @@ final class SessionReplacementPolicyTests: XCTestCase {
 
     func testGeneratingPresentationNamesAbortAndConcreteTarget() {
         let intent = SessionReplacementIntent.selectModel("/models/rwkv7-g1d")
-        XCTAssertTrue(intent.title(isGenerating: true).contains("停止"))
+        // 期望值从同一本地化表派生,locale 中立(en runner 与 zh-Hans 开发机下都稳定)。
+        XCTAssertTrue(intent.title(isGenerating: true).contains(L10n.string("并停止当前生成？")))
         let message = intent.consequence(currentModelPath: "/models/old", isGenerating: true)
         XCTAssertTrue(message.contains("rwkv7-g1d"))
-        XCTAssertTrue(message.contains("当前生成"))
+        XCTAssertTrue(message.contains(L10n.string("当前生成也会停止。")))
         XCTAssertEqual(intent.destructiveButtonTitle, L10n.string("切换模型"))
     }
 }
