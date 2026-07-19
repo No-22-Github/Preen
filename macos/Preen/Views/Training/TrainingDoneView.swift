@@ -10,8 +10,9 @@ struct TrainingDoneView: View {
     @State private var exportError: String?
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 0) {
+        GeometryReader { geometry in
+            ScrollView {
+                VStack(spacing: 0) {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 48))
                     .foregroundStyle(.green)
@@ -40,9 +41,11 @@ struct TrainingDoneView: View {
                     .foregroundStyle(.secondary)
                     .padding(.top, 14)
             }
-            .padding(.horizontal, 32)
-            .padding(.vertical, 32)
-            .frame(maxWidth: .infinity)
+                .padding(.horizontal, 32)
+                .padding(.vertical, 32)
+                .frame(maxWidth: .infinity)
+                .frame(minHeight: geometry.size.height, alignment: .center)
+            }
         }
         .alert("导出失败", isPresented: Binding(
             get: { exportError != nil },

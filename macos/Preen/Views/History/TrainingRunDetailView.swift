@@ -12,6 +12,7 @@ struct TrainingRunDetailView: View {
     @State private var exportMessage: String?
     @State private var exportError: String?
     @State private var metadata: StateMetadata?
+    @State private var isLogExpanded = false
 
     var body: some View {
         ScrollView {
@@ -111,7 +112,31 @@ struct TrainingRunDetailView: View {
     }
 
     private var logSection: some View {
-        DisclosureGroup("stderr.log") {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    isLogExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(isLogExpanded ? 90 : 0))
+                    Text("运行日志").font(.headline)
+                    Spacer()
+                    Text("训练进程的标准错误输出")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(L10n.string(isLogExpanded ? "已展开" : "已折叠"))
+
+            if isLogExpanded {
+                GroupBox {
             ScrollView {
                 Text(stderrLog)
                     .font(.caption.monospaced())
@@ -120,7 +145,9 @@ struct TrainingRunDetailView: View {
             }
             .frame(height: 180)
             .padding(8)
-            .background(.quaternary, in: .rect)
+                }
+                .transition(.opacity)
+            }
         }
     }
 

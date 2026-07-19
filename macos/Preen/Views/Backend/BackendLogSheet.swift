@@ -30,13 +30,16 @@ struct BackendLogSheet: View {
                         Text(emptyDescription)
                     }
                 } else {
-                    ScrollView {
-                        Text(logText)
-                            .font(.body.monospaced())
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .topLeading)
-                            .padding(18)
+                    GroupBox {
+                        ScrollView {
+                            Text(logText)
+                                .font(.body.monospaced())
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .topLeading)
+                                .padding(12)
+                        }
                     }
+                    .padding(18)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

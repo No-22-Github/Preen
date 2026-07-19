@@ -312,35 +312,21 @@ struct ToolboxView: View {
     }
 
     private var modelConversionFooter: some View {
-        HStack {
-            if store.isRunning {
-                Button("取消") { store.cancel() }
-                    .buttonStyle(.bordered)
-            }
-            Spacer()
-            Button {
+        toolFooter(title: "开始转换", systemImage: "arrow.right.circle.fill",
+                   canStart: store.canConvertModel) {
                 if store.modelOutputRequiresConfirmation {
                     showingOverwriteConfirmation = true
                 } else {
                     store.convertModel()
                 }
-            } label: {
-                Label("开始转换", systemImage: "arrow.right.circle.fill")
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(!store.canConvertModel)
         }
-        .frame(maxWidth: Self.contentWidth)
-        .padding(.horizontal, Self.groupedFormInset)
-        .padding(.bottom, 24)
-        .frame(maxWidth: .infinity)
     }
 
     // MARK: - 模型量化
 
     private var modelQuantizationView: some View {
-        toolScroll {
+        VStack(spacing: 0) {
+            toolScroll {
             surface {
                 toolPathRow("源模型", detail: "BF16 目录", path: store.quantizeSourcePath,
                             acceptsDrop: true,
@@ -366,26 +352,6 @@ struct ToolboxView: View {
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            HStack {
-                if store.isRunning {
-                    Button("取消") { store.cancel() }
-                        .buttonStyle(.bordered)
-                }
-                Spacer()
-                Button {
-                    if store.quantizeOutputRequiresConfirmation {
-                        showingQuantizeOverwriteConfirmation = true
-                    } else {
-                        store.quantizeModel()
-                    }
-                } label: {
-                    Label("开始量化", systemImage: "speedometer")
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .disabled(!store.canQuantize)
-            }
-
             jobStatus(for: "quantize")
 
             if let result = store.quantizeResult {
@@ -410,13 +376,24 @@ struct ToolboxView: View {
                     .padding(.top, 4)
                 }
             }
+            }
+
+            toolFooter(title: "开始量化", systemImage: "speedometer",
+                       canStart: store.canQuantize) {
+                if store.quantizeOutputRequiresConfirmation {
+                    showingQuantizeOverwriteConfirmation = true
+                } else {
+                    store.quantizeModel()
+                }
+            }
         }
     }
 
     // MARK: - 数据集预览
 
     private var datasetPreviewView: some View {
-        toolScroll {
+        VStack(spacing: 0) {
+            toolScroll {
             surface {
                 datasetSourceRow
                 Divider()
@@ -451,29 +428,10 @@ struct ToolboxView: View {
                 }
             }
 
-            HStack {
-                if store.isRunning && store.presentationTool == "dataset" {
-                    Button("取消检查") { store.cancel() }
-                        .buttonStyle(.bordered)
-                }
-                if store.datasetNeedsRefresh {
-                    Label("设置已更改，需要重新检查", systemImage: "arrow.clockwise")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button {
-                    store.previewDataset(modelPath: modelPath)
-                } label: {
-                    Label(
-                        store.datasetAnalysis == nil && !store.datasetNeedsRefresh
-                            ? "检查数据集" : "重新检查",
-                        systemImage: "doc.text.magnifyingglass"
-                    )
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .disabled(!store.canPreviewDataset || modelPath.isEmpty)
+            if store.datasetNeedsRefresh {
+                Label("设置已更改，需要重新检查", systemImage: "arrow.clockwise")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             jobStatus(for: "dataset")
@@ -491,6 +449,17 @@ struct ToolboxView: View {
                     }
                     .buttonStyle(.borderedProminent)
                 }
+            }
+            }
+
+            toolFooter(
+                title: store.datasetAnalysis == nil && !store.datasetNeedsRefresh
+                    ? "检查数据集" : "重新检查",
+                systemImage: "doc.text.magnifyingglass",
+                canStart: store.canPreviewDataset && !modelPath.isEmpty,
+                cancelTitle: "取消检查"
+            ) {
+                store.previewDataset(modelPath: modelPath)
             }
         }
     }
@@ -722,7 +691,8 @@ struct ToolboxView: View {
     // MARK: - 数据集转换
 
     private var datasetConversionView: some View {
-        toolScroll {
+        VStack(spacing: 0) {
+            toolScroll {
             surface {
                 datasetSourceRow
                 Divider()
@@ -754,22 +724,6 @@ struct ToolboxView: View {
                 }
             }
 
-            HStack {
-                if store.isRunning {
-                    Button("取消") { store.cancel() }
-                        .buttonStyle(.bordered)
-                }
-                Spacer()
-                Button {
-                    store.importDataset()
-                } label: {
-                    Label("转换并保存", systemImage: "square.and.arrow.down")
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .disabled(!store.canImportDataset)
-            }
-
             jobStatus(for: "dataset")
 
             if let path = store.importedDatasetPath {
@@ -782,10 +736,45 @@ struct ToolboxView: View {
                         .padding(.top, 4)
                 }
             }
+            }
+
+            toolFooter(title: "转换并保存", systemImage: "square.and.arrow.down",
+                       canStart: store.canImportDataset) {
+                store.importDataset()
+            }
         }
     }
 
     // MARK: - 共用组件
+
+    private func toolFooter(
+        title: String,
+        systemImage: String,
+        canStart: Bool,
+        cancelTitle: String = "取消",
+        action: @escaping () -> Void
+    ) -> some View {
+        VStack(spacing: 0) {
+            Divider()
+            HStack {
+                if store.isRunning {
+                    Button(L10n.string(cancelTitle)) { store.cancel() }
+                        .buttonStyle(.bordered)
+                }
+                Spacer()
+                Button(action: action) {
+                    Label(L10n.string(title), systemImage: systemImage)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!canStart)
+            }
+            .frame(maxWidth: Self.contentWidth)
+            .padding(.horizontal, Self.groupedFormInset)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity)
+            .background(.bar)
+        }
+    }
 
     private func toolScroll<Content: View>(
         @ViewBuilder content: @escaping () -> Content

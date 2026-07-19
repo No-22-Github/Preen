@@ -4,20 +4,10 @@ struct TrainingResultSummaryView: View {
     let facts: TrainingResultExplanation
 
     var body: some View {
-        // HIG materials §macOS:内容层使用语义目的的 GroupBox,不自定义背景块。
-        // 仅展示训练结果的叙事性结论(结束原因、loss 变化、最佳轮次、State std、耗时);
-        // 数据来源、训练参数、模板、模型、SHA-256 等结构化字段已在右侧 inspector,
-        // 不在中间重复展示(避免 inspector 与主区重复)。
-        GroupBox {
-            outcomeSection
-                .padding(.vertical, 4)
-        }
-    }
-
-    private var outcomeSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("训练结果").font(.headline)
-            Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 9) {
+            Divider()
+            Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 9) {
                 factRow("结束原因", terminationText)
                 factRow("实际轮数 / 配置上限", epochText)
                 if facts.completedAtLeastOneEpoch {
@@ -40,7 +30,9 @@ struct TrainingResultSummaryView: View {
                     factRow("总耗时", TrainStore.formatDuration(elapsed))
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var epochText: String {
@@ -98,10 +90,10 @@ struct TrainingResultSummaryView: View {
 
     @ViewBuilder
     private func factRow(_ label: String, _ value: String, help: String? = nil) -> some View {
-        GridRow {
+        GridRow(alignment: .firstTextBaseline) {
             Text(L10n.string(label))
                 .foregroundStyle(.secondary)
-                .frame(width: 170, alignment: .leading)
+                .frame(width: 220, alignment: .leading)
             if let help {
                 Text(value).font(.body.monospacedDigit()).textSelection(.enabled).help(help)
             } else {

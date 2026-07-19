@@ -82,17 +82,17 @@ struct TrainingEmptyView: View {
                 .multilineTextAlignment(.center)
 
             HStack(spacing: 10) {
+                Button("选择自己的数据…") { pickOwnData() }
+                    .buttonStyle(.borderedProminent)
+
                 Button(action: onUseBuiltin) {
                     Label("使用内置示例", systemImage: "sparkles")
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.bordered)
                 .help("NekoQA 200 · 角色风格 QA · 推荐首次体验")
-
-                Button("选择自己的数据…") { pickOwnData() }
-                    .buttonStyle(.bordered)
             }
 
-            Text("内置 NekoQA 200 用于体验角色与表达风格迁移，不用于学习新知识。")
+            Text("内置示例用于体验角色风格迁移，不用于学习新知识。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

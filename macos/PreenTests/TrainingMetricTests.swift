@@ -4,6 +4,17 @@ import UserNotifications
 
 @MainActor
 final class TrainingMetricTests: XCTestCase {
+    func testHoverSelectionDomainStopsAtLatestCompletedStep() {
+        XCTAssertEqual(
+            TrainingMetricMath.hoverSelectionDomain(latestDisplayedStep: 427),
+            1...427
+        )
+        XCTAssertEqual(
+            TrainingMetricMath.hoverSelectionDomain(latestDisplayedStep: nil),
+            1...1
+        )
+    }
+
     func testEMAAndZeroSmoothing() {
         let metrics = [
             TrainingMetric(step: 0, loss: 10, learningRate: 0.01, epoch: 0, timestamp: 100),

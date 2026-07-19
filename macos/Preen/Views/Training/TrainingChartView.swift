@@ -53,6 +53,20 @@ struct TrainingChartView: View {
         1...max(store.totalSteps, 2)
     }
 
+    /// 图仍按计划总步数展示，但悬停只允许落在已经产生的数据上。
+    /// 鼠标越过实时进度时固定到最新点，避免竖线指向尚未运行的未来步骤。
+    private var lossSelectionDomain: ClosedRange<Int> {
+        TrainingMetricMath.hoverSelectionDomain(
+            latestDisplayedStep: store.lossPoints.last?.displayedStep
+        )
+    }
+
+    private var memorySelectionDomain: ClosedRange<Int> {
+        TrainingMetricMath.hoverSelectionDomain(
+            latestDisplayedStep: store.processMetrics.last.map { $0.step + 1 }
+        )
+    }
+
     private var memoryCapacityGiB: Double {
         max(store.memoryCapacityGiB, 1)
     }
@@ -257,7 +271,7 @@ struct TrainingChartView: View {
                     ChartHoverOverlay(
                         proxy: proxy,
                         selection: selection,
-                        domain: displayedStepDomain,
+                        domain: lossSelectionDomain,
                         yValue: selectedPoint?.smoothedLoss,
                         yDomain: yDomain,
                         label: selectedPoint.map {
@@ -303,7 +317,7 @@ struct TrainingChartView: View {
                     ChartHoverOverlay(
                         proxy: proxy,
                         selection: selection,
-                        domain: displayedStepDomain,
+                        domain: lossSelectionDomain,
                         yValue: selectedPoint?.learningRate,
                         yDomain: learningRateDomain,
                         label: selectedPoint.map { formatLearningRate($0.learningRate) },
@@ -356,7 +370,7 @@ struct TrainingChartView: View {
                     ChartHoverOverlay(
                         proxy: proxy,
                         selection: selection,
-                        domain: displayedStepDomain,
+                        domain: memorySelectionDomain,
                         yValue: selectedPoint?.physicalFootprintGiB,
                         yDomain: 0...memoryCapacityGiB,
                         label: selectedPoint.map {

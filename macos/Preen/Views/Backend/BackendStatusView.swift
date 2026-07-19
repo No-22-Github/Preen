@@ -140,8 +140,13 @@ struct BackendStatusView: View {
     private func statusRow(_ label: String, status: String, phase: WorkerPhase) -> some View {
         LabeledContent(L10n.string(label)) {
             HStack(spacing: 7) {
-                Image(systemName: phase.statusSymbol)
-                    .foregroundStyle(phase.statusColor)
+                if phase == .starting || phase == .running || phase == .stopping {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: phase.statusSymbol)
+                        .foregroundStyle(phase.statusColor)
+                }
                 Text(status)
                     .lineLimit(1)
                     .help(status)

@@ -30,6 +30,11 @@ struct EpochLossPoint: Identifiable, Equatable {
 }
 
 enum TrainingMetricMath {
+    /// Hover 只能落在已经完成的步数内；计划总步数不参与该范围。
+    static func hoverSelectionDomain(latestDisplayedStep: Int?) -> ClosedRange<Int> {
+        1...max(latestDisplayedStep ?? 1, 1)
+    }
+
     static func ema(_ metrics: [TrainingMetric], smoothing: Double) -> [SmoothedLossPoint] {
         let amount = min(max(smoothing, 0), 0.95)
         var previous: Double?

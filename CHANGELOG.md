@@ -22,6 +22,7 @@
 
 ### 变更
 
+- **macOS 27 界面与交互适配**：训练首页降低内置示例的视觉权重，训练预检压缩为三行摘要，模板预览与记录日志改为整行可展开；统一整数 Stepper 与数值框对齐、工具箱四个工具的固定底部操作区，并将“开始训练”恢复到配置页右下角；训练结果详情改为左对齐且移除卡片背景，完成页垂直居中。运行状态使用进度指示，诊断/训练日志增加原生容器并将误导性的“错误日志”更名为“运行日志”；训练图悬停越过实际进度时固定到最新点，训练期间禁止切换模型；模型加载完成反馈改为整块淡绿气泡，避免系统裁切外扩描边。
 - **State metadata 升级为向后兼容的 v2 契约**：新文件新增 `model_name`、`model_path`、`state_format=npz` 与 `state_dtype=float32`，保留 v1 `model` 别名供旧 App 读取；Swift 可解码字段不完整的旧 v1 与最小 v2 文件，不会因缺少非必需训练摘要而拒绝登记。
 
 - **模型转换改为 mmap 流式读写,并以完整目录为单位安全提交**:`model_converter.convert` 此前通过 `read_pth` 全量加载源 storage,再构建完整目标权重 dict,转换 1.5B 模型峰值约 6GB。现改为:
@@ -58,7 +59,6 @@
 - **Toolbox 成功态的「设为当前模型」降级为 `.bordered`**:`modelConversionView` 与 `modelQuantizationView` 在结果区出现该按钮时与底部 footer 主操作同时为 `.borderedProminent`,违反"1-2 prominent/视图"。改为 `.bordered`,让 footer 主操作保持唯一 prominent。
 - **两处主操作不再叠 `.tint(.orange)`**:`SessionReplacementConfirmationSheet` 的确认按钮已是 `role: .destructive`,再叠橙色覆盖了系统红;`ChatRawContinuationView` 的「停止」按钮用 prominent + orange 而非语义 destructive。前者删 tint、后者改 `Button(role: .destructive)` + `.borderedProminent`,均回归系统语义色。
 - **错误 banner × 关闭按钮扩展到 44pt 命中区**:可视区保持 28pt,通过 `.padding(8)` + `.contentShape(Rectangle())` 把命中区扩到 44pt(macOS 最小命中尺寸)。
-- **「开始训练」从底部 ActionBar 上移到 detail toolbar**:macOS 用户常把窗口拖到屏幕底部之下,底部按钮会被遮挡。主操作移入 `ToolbarItem(.primaryAction)`,底部 ActionBar 保留 `statusArea`(阻断原因/数据摘要),`validateAndStart` 输出路径校验逻辑不变。
 
 ## [1.0.0] - 2026-07-16
 

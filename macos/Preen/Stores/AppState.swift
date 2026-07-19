@@ -109,6 +109,7 @@ final class AppState {
     // MARK: - 模型与进程协调
 
     func selectModel(path: String) {
+        guard !trainStore.hasActiveProcess else { return }
         guard path != modelCatalog.selectedPath else { return }
         requestSessionReplacement(.selectModel(path))
     }

@@ -227,14 +227,15 @@ struct ContentView: View {
                         .truncationMode(.middle)
                 }
             }
-            // Menu 的 label 会被系统样式化覆盖,自定义颜色/背景塞在 label 内不生效;
-            // 把就绪反馈做成独立 overlay 叠在 Menu 外,绕开 Menu 的样式化。
-            .overlay {
-                Capsule()
-                    .strokeBorder(Color.green.opacity(isModelChipAcknowledged ? 0.9 : 0), lineWidth: 1.5)
-                    .padding(-5)
-            }
+            // macOS 27 会裁切 Menu 外扩描边。改用控件边界内的整块淡绿底色，
+            // 不依赖 Menu 的内部 shape，也不会只剩右侧一小段描边。
+            .overlay(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Color.green.opacity(isModelChipAcknowledged ? 0.20 : 0))
+                    .allowsHitTesting(false)
+            )
             .animation(.easeInOut(duration: 0.2), value: isModelChipAcknowledged)
+            .disabled(appState.trainStore.hasActiveProcess)
             .help(modelPickerHelp)
 
             // 精度胶囊:独立于 Menu label,避免 Menu 对多视图渲染的限制。
@@ -297,6 +298,9 @@ struct ContentView: View {
 
     /// 模型 chip 的辅助提示:不占页面空间,但能核对实际模型与 State 路径。
     private var modelPickerHelp: String {
+        if appState.trainStore.hasActiveProcess {
+            return L10n.string("训练期间不能切换模型")
+        }
         guard appState.chatStore.isConnected else {
             return appState.modelPath.isEmpty
                 ? L10n.string("选择 RWKV-7 模型")

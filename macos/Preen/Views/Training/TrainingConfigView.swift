@@ -103,23 +103,6 @@ struct TrainingConfigView: View {
                 .background(.regularMaterial)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // Mo1:开始训练上移到 detail toolbar primaryAction,
-        // 避免被窗口底部遮挡(macOS 用户常把窗口拖到屏幕底部之下)。
-        // 底部 ActionBar 保留 statusArea(阻断原因/数据摘要)。
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button(action: validateAndStart) {
-                    Label("开始训练", systemImage: "play.fill")
-                }
-                .preenGlassButton(prominent: true)
-                .disabled(blockingReason != nil || !preflightReady || isInspecting)
-                .help(blockingReason ?? (preflightReady
-                    ? L10n.string("开始训练")
-                    : L10n.string("必须先完成与当前配置同口径的数据检查")))
-                .keyboardShortcut(.return, modifiers: .command)
-                .accessibilityLabel("开始训练")
-            }
-        }
         .onAppear {
             config.refreshAutomaticOutputPath()
             onDataChanged()
@@ -254,6 +237,17 @@ struct TrainingConfigView: View {
         HStack(spacing: 10) {
             statusArea
             Spacer(minLength: 8)
+            Button(action: validateAndStart) {
+                Label("开始训练", systemImage: "play.fill")
+                    .frame(minWidth: 140)
+            }
+            .preenGlassButton(prominent: true)
+            .disabled(blockingReason != nil || !preflightReady || isInspecting)
+            .help(blockingReason ?? (preflightReady
+                ? L10n.string("开始训练")
+                : L10n.string("必须先完成与当前配置同口径的数据检查")))
+            .keyboardShortcut(.return, modifiers: .command)
+            .accessibilityLabel("开始训练")
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 12)
@@ -621,22 +615,17 @@ struct TrainingConfigView: View {
                 Spacer()
             }
             Divider()
-            // 指标行:用原生 LabeledContent(右对齐),保持 macOS Form 风格。
-            // 截断数 > 0 时在值后追加文字标记,不靠颜色区分(HIG color)。
+            // 高频结论压缩成三行；截断细节只在确实发生时追加说明。
             VStack(spacing: 6) {
-                preflightRow("有效样本", "\(inspection.valid) / \(inspection.total)")
-                preflightRow("平均 / P95 / 最大 token",
-                             "\(inspection.meanTokens.formatted(.number.precision(.fractionLength(1)))) · \(inspection.p95Tokens.formatted(.number.precision(.fractionLength(1)))) · \(inspection.maxTokens)")
                 preflightRow(
-                    "部分前缀截断",
-                    partial > 0 ? "\(partial) 条" : "无"
+                    "样本",
+                    "\(inspection.valid) / \(inspection.total) 有效 · \(projection.train) / \(projection.heldOut) 训练/验证"
                 )
                 preflightRow(
-                    "Target 完全截断",
-                    inspection.targetFullyTruncated > 0 ? "\(inspection.targetFullyTruncated) 条" : "无"
+                    "Token（平均 / P95 / 最大）",
+                    "\(inspection.meanTokens.formatted(.number.precision(.fractionLength(1)))) · \(inspection.p95Tokens.formatted(.number.precision(.fractionLength(1)))) · \(inspection.maxTokens)"
                 )
-                preflightRow("训练 / 验证", "\(projection.train) / \(projection.heldOut)")
-                preflightRow("预计步数", "~\(projection.steps)")
+                preflightRow("预计训练", "~\(projection.steps) 步")
             }
             // 单一状态说明行(无背景填充,只用 SF Symbol + 文字)。
             if config.dropTruncated, inspection.truncated > 0 {
@@ -677,20 +666,34 @@ struct TrainingConfigView: View {
 
     private func renderedPreview(_ samples: [DatasetRenderedSample]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            DisclosureGroup(isExpanded: $dataExpanded) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    dataExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(dataExpanded ? 90 : 0))
+                    Text(L10n.format("最终模板预览（%lld 条）", min(3, samples.count)))
+                        .font(.callout)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("最终模板预览")
+            .accessibilityValue(L10n.string(dataExpanded ? "已展开" : "已折叠"))
+
+            if dataExpanded {
                 VStack(spacing: 10) {
                     ForEach(Array(samples.prefix(3).enumerated()), id: \.offset) { index, sample in
                         renderedSample(sample, index: index + 1)
                     }
                 }
-                .padding(.top, 8)
-            } label: {
-                Text(L10n.format("最终模板预览（%lld 条）", min(3, samples.count)))
-                    .font(.callout)
-            }
-
-            if !dataExpanded {
-                EmptyView()
+                .transition(.opacity)
             }
         }
     }
@@ -989,19 +992,22 @@ private struct TrainingIntParameterRow: View {
     var body: some View {
         LabeledContent {
             HStack(spacing: RowLayout.spacing) {
-                TextField(L10n.string(title), value: $value, format: .number)
-                    .labelsHidden()
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 88)
-                if range != nil {
-                    Stepper(
-                        L10n.string(title),
-                        value: $value,
-                        in: range ?? (0...Int.max)
-                    )
-                    .labelsHidden()
+                HStack(spacing: 8) {
+                    TextField(L10n.string(title), value: $value, format: .number)
+                        .labelsHidden()
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: range == nil ? RowLayout.controlWidth : 168)
+                    if range != nil {
+                        Stepper(
+                            L10n.string(title),
+                            value: $value,
+                            in: range ?? (0...Int.max)
+                        )
+                        .labelsHidden()
+                        .frame(width: 24)
+                    }
                 }
-                Spacer(minLength: 0)
+                .frame(width: RowLayout.controlWidth, alignment: .leading)
                 ResetSlot(show: value != `default`, help: L10n.format("恢复默认 %lld", `default`)) {
                     value = `default`
                 }
