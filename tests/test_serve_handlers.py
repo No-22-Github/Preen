@@ -523,6 +523,22 @@ def test_preview_ab_side_failure_is_nonterminal_and_other_side_continues():
     assert term["type"] == "ok"
 
 
+def test_preview_ab_abort_only_stops_current_side_and_continues():
+    """协议 v3：A/B abort 作为当前侧的非终结事件，另一侧继续，最终仍为 ok。"""
+    cap = CaptureProtocol(abort_at_step=0)
+    events, term = _send_and_collect(cap, {
+        "id": "p6", "cmd": "preview", "prompt": "你好", "template": "qa",
+        "ab": True, "state_path": "fake.npz",
+    })
+    side_errors = [event for event in events if event["type"] == "side_error"]
+    turn_ends = [event for event in events if event["type"] == "turn_end"]
+    assert [(event["side"], event["code"]) for event in side_errors] == [
+        ("baseline", "aborted")
+    ]
+    assert [event["side"] for event in turn_ends] == ["with_state"]
+    assert term["type"] == "ok"
+
+
 # ── 错误语义 / fuzz 垃圾行(§3.5 不变式)─────────────────────
 
 def test_non_json_line_returns_bad_request_without_id():

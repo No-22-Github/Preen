@@ -53,8 +53,9 @@ CAPABILITIES = {
 # 主版本号:turn_end / text_chunk / hello 的字段结构有破坏性变更时 +1。
 # v2:preview A/B 新增 side-tagged text_chunk / turn_end / side_error，并固定
 # baseline → with_state 顺序流式生成。
+# v3:A/B abort 只中断当前 side，以 side_error{code=aborted} 报告后继续另一侧。
 # 此后改协议字段结构必须先 bump 此号,UI 据此拒绝不兼容的 serve。
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 
 
 # ── 事件构造助手(§3.4)──────────────────────────────────────
@@ -244,6 +245,7 @@ class ServeSessionManager:
         *,
         on_event=None,
         should_abort=None,
+        clear_abort=None,
     ) -> Tuple[List[dict], bool]:
         """单轮预览/A-B，不建 session。
 
@@ -332,7 +334,17 @@ class ServeSessionManager:
                     should_abort=should_abort,
                 )
             except GenerationAborted:
-                raise
+                # A/B 的停止语义是“只停当前侧”。报告非终结 side_error，
+                # 清掉本侧 abort 标志后继续另一侧；单路 preview 仍保持整请求 aborted。
+                if not ab:
+                    raise
+                fields = {"code": "aborted", "message": "Generation aborted"}
+                if side is not None:
+                    fields["side"] = side
+                emit(_event("side_error", **fields))
+                if clear_abort is not None:
+                    clear_abort()
+                continue
             except Exception as exc:
                 fields = {"code": "internal", "message": str(exc)}
                 if side is not None:
@@ -764,6 +776,7 @@ class ServeProtocol:
                 params,
                 on_event=emit_preview_event,
                 should_abort=self._abort_event.is_set,
+                clear_abort=self._abort_event.clear,
             )
             self._emit(_ok(id_))
         except GenerationAborted:
