@@ -294,8 +294,10 @@ struct ToolboxView: View {
                             )
                         }
                         HStack {
+                            // 成功态的后续动作,降级 bordered —— 页面主操作仍是底部"开始转换",
+                            // 避免 success 段与 footer CTA 同时 prominent 违反"1-2 prominent/视图"。
                             Button("设为当前模型") { onSelectModel(result.outputPath) }
-                                .buttonStyle(.borderedProminent)
+                                .buttonStyle(.bordered)
                             Button("在 Finder 中显示") {
                                 reveal(path: result.outputPath)
                             }
@@ -400,7 +402,7 @@ struct ToolboxView: View {
                     }
                     HStack {
                         Button("设为当前模型") { onSelectModel(result.out) }
-                            .buttonStyle(.borderedProminent)
+                            .buttonStyle(.bordered)
                         Button("在 Finder 中显示") {
                             reveal(path: result.out)
                         }

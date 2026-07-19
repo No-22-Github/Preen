@@ -64,7 +64,6 @@ struct SessionReplacementConfirmationSheet: View {
                     .keyboardShortcut(.cancelAction)
                 Button(buttonTitle, role: .destructive) { onConfirm() }
                     .buttonStyle(.borderedProminent)
-                    .tint(.orange)
                     .keyboardShortcut(.defaultAction)
             }
             .padding(16)

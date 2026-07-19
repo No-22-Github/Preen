@@ -533,6 +533,8 @@ final class ChatStore {
 
     /// serve 进程退出(stream 自然结束)时调用。
     /// 若此时仍未 connected,说明没收到 ready = 启动失败,保留启动日志供排查。
+    /// 已 connected 会话期间进程退出(崩溃/被外部 kill)时,在聊天界面提示原因,
+    /// 不清 messages,让用户能看到之前的对话上下文。
     private func handleServeExit() {
         let wasConnected = isConnected
         isConnected = false
@@ -540,7 +542,13 @@ final class ChatStore {
             phase: wasConnected ? .idle : .failed,
             message: L10n.string(wasConnected ? "推理进程已退出" : "推理启动失败")
         )
-        guard !wasConnected else { return }
+        if wasConnected {
+            // 已连接会话中进程意外退出:用户被踢出但 UI 上需要看到原因,
+            // 否则会凭空回到空状态(HIG: "Explain when a command fails")。
+            // messages 由 disconnect()/newSession() 显式清理,这里保留供用户参考。
+            lastError = L10n.string("推理进程意外退出，请重新连接")
+            return
+        }
         if startupError == nil {
             startupError = L10n.string("serve 进程已退出，未发出 ready 事件（请查看日志排查）")
         }

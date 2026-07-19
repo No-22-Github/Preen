@@ -103,6 +103,23 @@ struct TrainingConfigView: View {
                 .background(.regularMaterial)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Mo1:开始训练上移到 detail toolbar primaryAction,
+        // 避免被窗口底部遮挡(macOS 用户常把窗口拖到屏幕底部之下)。
+        // 底部 ActionBar 保留 statusArea(阻断原因/数据摘要)。
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button(action: validateAndStart) {
+                    Label("开始训练", systemImage: "play.fill")
+                }
+                .preenGlassButton(prominent: true)
+                .disabled(blockingReason != nil || !preflightReady || isInspecting)
+                .help(blockingReason ?? (preflightReady
+                    ? L10n.string("开始训练")
+                    : L10n.string("必须先完成与当前配置同口径的数据检查")))
+                .keyboardShortcut(.return, modifiers: .command)
+                .accessibilityLabel("开始训练")
+            }
+        }
         .onAppear {
             config.refreshAutomaticOutputPath()
             onDataChanged()
@@ -237,17 +254,6 @@ struct TrainingConfigView: View {
         HStack(spacing: 10) {
             statusArea
             Spacer(minLength: 8)
-            Button(action: validateAndStart) {
-                Label("开始训练", systemImage: "play.fill")
-                    .frame(minWidth: 140)
-            }
-            .preenGlassButton(prominent: true)
-            .controlSize(.large)
-            .disabled(blockingReason != nil || !preflightReady || isInspecting)
-            .help(blockingReason ?? (preflightReady
-                ? L10n.string("开始训练")
-                : L10n.string("必须先完成与当前配置同口径的数据检查")))
-            .keyboardShortcut(.return, modifiers: .command)
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 12)
@@ -796,22 +802,22 @@ struct TrainingConfigView: View {
                 )
                 TrainingIntParameterRow(
                     title: "预热步数", key: "warmup", detail: "前 N 步从 0 线性升到峰值",
-                    value: $config.warmup, default: 50
+                    value: $config.warmup, default: 50, range: 0...10000
                 )
             }
 
             Section("训练长度") {
                 TrainingIntParameterRow(
                     title: "训练轮数", key: "epochs", detail: "启用早停时为上限",
-                    value: $config.epochs, default: 5
+                    value: $config.epochs, default: 5, range: 1...10000
                 )
                 TrainingIntParameterRow(
                     title: "上下文长度", key: "ctx_len", detail: "单条样本最长 token",
-                    value: $config.ctxLen, default: 512
+                    value: $config.ctxLen, default: 512, range: 64...32768
                 )
                 TrainingIntParameterRow(
                     title: "日志间隔", key: "log_every", detail: "每 N 步记录一次指标",
-                    value: $config.logEvery, default: 1
+                    value: $config.logEvery, default: 1, range: 1...1000
                 )
                 TrainingToggleParameterRow(
                     title: "丢弃超长样本", key: "drop_truncated",
@@ -828,7 +834,7 @@ struct TrainingConfigView: View {
                 if config.earlyStop {
                     TrainingIntParameterRow(
                         title: "耐心轮数", key: "patience", detail: "允许连续无改善的轮数",
-                        value: $config.earlyStopPatience, default: 3
+                        value: $config.earlyStopPatience, default: 3, range: 1...100
                     )
                     TrainingDoubleParameterRow(
                         title: "验证集比例", key: "test_ratio", detail: "无 test_data 时从训练集划分",
@@ -844,7 +850,7 @@ struct TrainingConfigView: View {
                 )
                 TrainingIntParameterRow(
                     title: "Checkpoint 间隔", key: "checkpoint_every", detail: "每 N 轮保存一次",
-                    value: $config.checkpointEvery, default: 2
+                    value: $config.checkpointEvery, default: 2, range: 1...1000
                 )
                 TrainingTextParameterRow(
                     title: "Checkpoint 目录", key: "checkpoint_dir", detail: "留空则不保存",
@@ -976,6 +982,9 @@ private struct TrainingIntParameterRow: View {
     let detail: String
     @Binding var value: Int
     let `default`: Int
+    /// 可选范围:提供时同时显示 Stepper(macOS 数值输入惯例:HIG "Stepper for
+    /// bounded numerics");nil 时仅 TextField(用于 seed 这种范围不固定的字段)。
+    var range: ClosedRange<Int>? = nil
 
     var body: some View {
         LabeledContent {
@@ -983,7 +992,16 @@ private struct TrainingIntParameterRow: View {
                 TextField(L10n.string(title), value: $value, format: .number)
                     .labelsHidden()
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: RowLayout.controlWidth)
+                    .frame(width: 88)
+                if range != nil {
+                    Stepper(
+                        L10n.string(title),
+                        value: $value,
+                        in: range ?? (0...Int.max)
+                    )
+                    .labelsHidden()
+                }
+                Spacer(minLength: 0)
                 ResetSlot(show: value != `default`, help: L10n.format("恢复默认 %lld", `default`)) {
                     value = `default`
                 }

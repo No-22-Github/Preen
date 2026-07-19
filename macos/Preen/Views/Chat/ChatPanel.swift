@@ -485,8 +485,13 @@ struct ChatPanel: View {
             ZStack(alignment: .bottomTrailing) {
                 ScrollView {
                     LazyVStack(spacing: 4) {
-                        ForEach(store.messages) { msg in
-                            ChatMessageView(message: msg)
+                        ForEach(Array(store.messages.enumerated()), id: \.element.id) { index, msg in
+                            // 仅最后一条 assistant 消息在生成中时,显示思考中占位(M7)。
+                            let isLast = index == store.messages.count - 1
+                            let isActive = isLast
+                                && msg.role == .assistant
+                                && store.isGenerating
+                            ChatMessageView(message: msg, isActivelyGenerating: isActive)
                                 .id(msg.id)
                         }
                         Color.clear
@@ -532,6 +537,7 @@ struct ChatPanel: View {
                     .buttonStyle(.bordered)
                     .padding(14)
                     .help("恢复跟随流式输出")
+                    .accessibilityLabel("回到最新消息")
                 }
             }
         }
@@ -591,15 +597,21 @@ struct ChatPanel: View {
             Button {
                 store.clearLastError()
             } label: {
+                // 可视区 28pt,但扩展到 44pt 命中区(macOS 最小命中尺寸)。
                 Image(systemName: "xmark")
                     .frame(width: 28, height: 28)
+                    .padding(8)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help("关闭错误提示")
+            .accessibilityLabel("关闭错误提示")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(Color.red.opacity(0.08))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("错误：\(error)")
     }
 
     // MARK: - 内部

@@ -6,6 +6,7 @@
 //  跨面板 state 传递(训练完成 → 跳对话自动加载产物 state)。
 //
 
+import AppKit
 import Foundation
 import Observation
 
@@ -175,6 +176,18 @@ final class AppState {
 
     func disconnectInference() {
         requestSessionReplacement(.disconnect)
+    }
+
+    /// 菜单/快捷键触发的"加载 State":弹文件选择器,选中后走标准 state 激活流程。
+    /// ContentView.performLoadState 的等价入口,供对话菜单复用。
+    func requestLoadStateFromFilePicker() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.data]  // .npz 走 UTI data
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url {
+            requestStateActivation(stateURL: url)
+        }
     }
 
     // MARK: - 会话替换事务

@@ -1,5 +1,10 @@
 import SwiftUI
 
+/// 诊断日志视图。
+///
+/// 同时用于「诊断日志」窗口(Mo9 改造)和未来其它承载场景。窗口化让用户可以
+/// 在训练/推理过程中持续 tail 日志(HIG: "repeated input-and-observe workflows
+/// should use a panel, not a sheet")。窗口标题统一为「诊断日志」。
 struct BackendLogSheet: View {
     @Bindable var store: BackendStore
     @Environment(\.dismiss) private var dismiss
@@ -47,6 +52,9 @@ struct BackendLogSheet: View {
             .background(.bar)
         }
         .frame(width: 700, height: 460)
+        // 窗口化场景(由 PreenApp 的 Window 场景承载)下,dismiss() 关闭窗口;
+        // 作为 sheet 呈现时(向后兼容),dismiss() 收起 sheet。
+        .navigationTitle("诊断日志")
     }
 
     private var logText: String {

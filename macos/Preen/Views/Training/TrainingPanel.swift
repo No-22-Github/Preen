@@ -72,6 +72,7 @@ struct TrainingPanel: View {
                                 Image(systemName: "chevron.backward")
                             }
                             .help("返回")
+                            .accessibilityLabel("返回")
                         }
                     }
                 }

@@ -123,12 +123,12 @@ struct ChatRawContinuationView: View {
     private var actionBar: some View {
         HStack(spacing: 10) {
             if store.isGenerating {
-                Button(action: onAbort) {
+                Button(role: .destructive, action: onAbort) {
                     Label("停止", systemImage: "stop.fill")
                         .frame(minWidth: 120)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(.orange)
+                .keyboardShortcut(.escape, modifiers: [])
             } else {
                 Button(action: continueGeneration) {
                     Label("续写", systemImage: "play.fill")

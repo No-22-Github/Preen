@@ -44,6 +44,22 @@
 - **高步数训练图表性能优化**:`TrainingChartView` 原本每次 `body` 都全量重算 loss EMA、内存 EMA 与两个压力梯度(每次刷新 O(N)),训练每个 step 追加一个点会触发一次刷新,万步训练累计成本约 O(N²)=1 亿次操作,且 hover 期间每帧重算导致明显卡顿。改为按指纹(`lossPoints.count + smoothing + 末尾 step`、`processMetrics.count + totalSteps + capacity`)缓存派生量,`.onChange` 指纹变化时才重算,缓存命中时 `body` 内 O(1) 返回;hover 期间的频繁重绘不再触发任何 O(N) 计算。`chartHoverTracking` 同步去掉每次 `body` 都重建的 `selectableSteps: [Int]` 数组,选中步直接 clamp 到 X 轴 domain(每步都有数据,clamp 与二分等价),避免随数据增长分配数组。
 - **训练图表 hover 卡顿根治**:前一轮 EMA 缓存解决了训练事件时的重算,但 hover 拖动仍掉帧 —— 真热点是 `Chart { }` builder 闭包依赖了 `selectedPoint`,hover 时 `IndependentChartSelection.selection` 变化触发子树重建 → `Chart { ForEach(900+) { LineMark… } }` 重新构造所有 mark(每个 mark 构造有固定开销,900 点 × 3 条线 × 每帧 = 数千次构造/帧)。重构为 Swift Charts 官方推荐的"静态 Chart + chartOverlay 选中可视化"模式:三张 Chart(loss / learning rate / memory)的 builder 闭包完全不引用 `selection`,选中竖线、圆点与 annotation label 改由新的 `ChartHoverOverlay` 用 `ChartProxy.position(forX:forY:)` 转屏幕坐标后在 `.chartOverlay` 里画原生 SwiftUI 视图。hover 时只有轻量 overlay 重建,Chart 本体保持稳定;删除已无人使用的 `chartHoverTracking` ViewModifier。
 
+### 修复(2026-07-19,HIG 一致性整改)
+
+本轮为对照 Apple Human Interface Guidelines 的全方位审查后的整改,聚焦 Mac 原生交互可达性与可访问性。
+
+- **新增「前往 / 训练 / 对话 / 模型 / 工具」五个 app 菜单**:之前 `.commands` 只注册了「关于」与「欢迎」两项,引用了仓内不存在的 `InspectorCommands()`,工具栏动作也没有菜单等价物。现在面板切换支持 ⌘1–4,开始/停止训练支持 ⇧⌘N / ⌘.,连接/断开、A/B、加载/卸下 State、停止生成等都有菜单入口;工具菜单的「诊断日志…」与后端状态页一致。同时新增标准 ⌘, `Settings` 场景,当前承载「启动时显示欢迎窗口」一项。
+- **诊断日志从 sheet 改为独立窗口**:HIG 指出"repeated input-and-observe workflows 应使用 panel/window 而非 sheet"。日志是训练/推理过程中需要持续 tail 的视图,原 `.sheet` 阻挡父窗口且无法并排观察。新增 `Window("诊断日志", id: "backend-logs")`,后端状态页的「诊断日志…」按钮改用 `openWindow`。
+- **会话中后端进程退出不再静默退场**:`ChatStore.handleServeExit` 原本在已连接会话期间进程崩溃时 `guard !wasConnected else { return }` 早退,既不设 `lastError` 也不留消息,用户看到对话凭空消失回空状态。现在 mid-session 死亡会写入「推理进程意外退出,请重新连接」并保留 `messages` 供用户参考上下文(HIG Feedback: "Explain when a command fails")。
+- **对话面板补全 VoiceOver 标注**:`ChatInputBar` 的清除/发送/停止按钮、`ChatMessageView` 的每个气泡(区分「你的消息」/「助手消息」/「(已中断)」/「(出错)」并携带完整文本作为 `accessibilityValue`)、「回到最新消息」按钮、错误 banner 全部加上 `accessibilityLabel`,生成中的助手气泡追加 `accessibilityHint("正在生成")`。此前 `Views/Chat/` 目录零 accessibility 标注,其它面板共有 27 处。
+- **单 Pane 对话显示「思考中…」占位**:助手占位气泡在收到第一个 token 前是空的(只靠发送按钮变形为停止按钮暗示),A/B 与 RAW 模式却都有 `ProgressView`。现在最后一条 assistant 消息生成中且文本为空时,在气泡内渲染 `ProgressView().controlSize(.small) + "思考中…"`,与 A/B、RAW 一致。
+- **会话输入栏回到 macOS 多行编辑惯例**:原 `onKeyPress(.return)` 在纯 Return(无 modifiers)时直接发送,Shift+Return 才换行 —— 这是 iOS 惯例,macOS 多行 TextEditor 的惯例是 Return 换行、⌘⏎ 发送(后者本就存在)。删除纯 Return 拦截,同时为空文本加 `输入消息…` 占位符 overlay。
+- **训练参数行加 Stepper**:`TrainingIntParameterRow` 原本对 epochs / ctx_len / warmup / log_every / patience / checkpoint_every 这些有界整数全部用自由 `TextField`。现新增可选 `range` 参数并附 `Stepper`(seed 范围不固定保持纯 TextField),HIG macOS: "Stepper for bounded numerics"。
+- **Toolbox 成功态的「设为当前模型」降级为 `.bordered`**:`modelConversionView` 与 `modelQuantizationView` 在结果区出现该按钮时与底部 footer 主操作同时为 `.borderedProminent`,违反"1-2 prominent/视图"。改为 `.bordered`,让 footer 主操作保持唯一 prominent。
+- **两处主操作不再叠 `.tint(.orange)`**:`SessionReplacementConfirmationSheet` 的确认按钮已是 `role: .destructive`,再叠橙色覆盖了系统红;`ChatRawContinuationView` 的「停止」按钮用 prominent + orange 而非语义 destructive。前者删 tint、后者改 `Button(role: .destructive)` + `.borderedProminent`,均回归系统语义色。
+- **错误 banner × 关闭按钮扩展到 44pt 命中区**:可视区保持 28pt,通过 `.padding(8)` + `.contentShape(Rectangle())` 把命中区扩到 44pt(macOS 最小命中尺寸)。
+- **「开始训练」从底部 ActionBar 上移到 detail toolbar**:macOS 用户常把窗口拖到屏幕底部之下,底部按钮会被遮挡。主操作移入 `ToolbarItem(.primaryAction)`,底部 ActionBar 保留 `statusArea`(阻断原因/数据摘要),`validateAndStart` 输出路径校验逻辑不变。
+
 ## [1.0.0] - 2026-07-16
 
 首个正式版。以下为 [v0.1.0-beta.1](https://github.com/No-22-Github/Preen/releases/tag/v0.1.0-beta.1) 之后的全部变更。

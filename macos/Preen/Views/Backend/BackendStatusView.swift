@@ -4,7 +4,7 @@ import SwiftUI
 struct BackendStatusView: View {
     @Bindable var store: BackendStore
     @Environment(\.dismiss) private var dismiss
-    @State private var showLogs = false
+    @Environment(\.openWindow) private var openWindow
     @State private var showComponents = false
     @State private var didCopy = false
     @State private var copyResetTask: Task<Void, Never>?
@@ -91,7 +91,6 @@ struct BackendStatusView: View {
                 .background(.bar)
         }
         .frame(width: 600, height: 500)
-        .sheet(isPresented: $showLogs) { BackendLogSheet(store: store) }
         .onDisappear { copyResetTask?.cancel() }
     }
 
@@ -213,7 +212,7 @@ struct BackendStatusView: View {
             Button(L10n.string(didCopy ? "已复制" : "复制诊断信息"), action: copyDiagnostics)
             .help("复制适合粘贴到 Issue 的 Markdown，不包含序列号、日志和本地路径")
 
-            Button("诊断日志…") { showLogs = true }
+            Button("诊断日志…") { openWindow(id: "backend-logs") }
 
             Spacer()
 

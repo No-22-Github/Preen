@@ -14,6 +14,8 @@ import MarkdownUI
 
 struct ChatMessageView: View {
     let message: ChatMessage
+    /// 仅最后一条 assistant 消息在生成中时为 true:用于显示思考中占位(M7)。
+    var isActivelyGenerating: Bool = false
 
     var body: some View {
         HStack {
@@ -27,6 +29,26 @@ struct ChatMessageView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 4)
+        // VoiceOver:把气泡聚合成单元素,标明角色 + 完整文本(M6)。
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilityRoleLabel)
+        .accessibilityValue(message.fullText)
+        .accessibilityHint(accessibilityHint)
+    }
+
+    private var accessibilityRoleLabel: String {
+        switch message.role {
+        case .user: return L10n.string("你的消息")
+        case .assistant:
+            if message.isAborted { return L10n.string("助手消息（已中断）") }
+            if message.errorText != nil { return L10n.string("助手消息（出错）") }
+            return L10n.string("助手消息")
+        }
+    }
+
+    private var accessibilityHint: String {
+        guard message.role == .assistant, isActivelyGenerating else { return "" }
+        return L10n.string("正在生成")
     }
 
     // MARK: - user
@@ -47,6 +69,19 @@ struct ChatMessageView: View {
             // 各段。
             ForEach(message.segments) { seg in
                 segmentView(seg)
+            }
+
+            // 思考中占位:最后一条 assistant 消息正在生成但还没收到第一个 token
+            // 时,显示一个紧凑的思考指示,避免空气泡(M7)。
+            if isActivelyGenerating && message.fullText.isEmpty {
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("思考中…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 2)
             }
 
             // 中断标记。
