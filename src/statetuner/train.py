@@ -116,8 +116,13 @@ def _to_mx_batch(sample: Sample):
 
     TR1:删 bsz 参数。旧实现的 bsz>1 是"把同一条样本复制 N 份"(非真 batch),
     且训练循环从没传过 cfg.bsz、CLI 也没暴露,却进了 events.start 的 config
-    快照和 metadata.json —— 在产物元数据里写假话。state tuning 对 16G 是负收益,
-    直接删字段(整个 batch 维恒为 1)。
+    快照和 metadata.json —— 在产物元数据里写假话,直接删字段。
+
+    batch 维恒为 1 的决策仍成立,但理由在 2026-07-19 性能插桩后被更新:
+    旧注释写「state tuning 对 16G 是负收益」,实测推翻——batch=2 端到端是 +10%
+    正收益(单样本 478→435ms),峰值内存 5.5→7.3GB(16G 机器放得下)。但 +10%
+    不值得动 Trainer:wkv7 kernel 是瓶颈(占 step 35.6%),而 wkv 从 batch 维的
+    收益有限(1.82×);GEMM 虽受益大但不是瓶颈。详见 AGENTS.md「训练性能画像」。
     """
     inp = sample.input_ids
     lab = sample.labels
